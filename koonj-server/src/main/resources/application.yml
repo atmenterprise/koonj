@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: koonj-server
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: "${KOONJ_DB_URL:jdbc:postgresql://localhost:5432/koonj?reWriteBatchedInserts=true}"
+    username: ${KOONJ_DB_USERNAME:koonj}
+    password: ${KOONJ_DB_PASSWORD:koonj_password}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: "${KOONJ_AUTH_ISSUER_URI:http://localhost:8180/realms/koonj}"
+          jwk-set-uri: "${KOONJ_AUTH_JWK_SET_URI:http://localhost:8180/realms/koonj/protocol/openid-connect/certs}"
+          audiences: koonj-server
+  jpa:
+    open-in-view: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: ${KOONJ_DDL_AUTO:update}
+
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/start
+
+koonj:
+  security:
+    allowed-origins: "${KOONJ_CORS_ALLOWED_ORIGINS:http://localhost:5173}"
+    basic-auth:
+      enabled: ${KOONJ_BASIC_AUTH_ENABLED:false}
+      username: "${KOONJ_BASIC_AUTH_USERNAME:}"
+      password: "${KOONJ_BASIC_AUTH_PASSWORD:}"
+      role: "${KOONJ_BASIC_AUTH_ROLE:KOONJ_VIEWER}"

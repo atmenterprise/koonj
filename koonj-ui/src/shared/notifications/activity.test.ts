@@ -1,0 +1,34 @@
+import { describe, expect, it } from 'vitest'
+import type { TransferJobDTO } from '../../api/types'
+import { reconcileJobs, type ActivityNotice } from './activity'
+
+const notice: ActivityNotice = { id: 1, tone: 'info', title: 'Archive started', jobId: 'current-job', pending: true }
+const job: TransferJobDTO = {
+  id: 'current-job', operation: 'ARCHIVE', status: 'RUNNING',
+  sourceConnectionId: 'source', targetConnectionId: 'target', requestedPaths: ['docs/'],
+  totalFiles: 2, processedFiles: 1, failedFiles: 0, totalBytes: 100, transferredBytes: 50,
+  createdAt: '2026-11-20T00:00:00Z', completedAt: null, details: null, triggeredBy: null,
+}
+
+describe('activity notifications', () => {
+  it('updates the same pop-up from in progress to success when the job completes', () => {
+    const active = reconcileJobs([notice], [job])
+    expect(active).toMatchObject([{ id: 1, tone: 'info', title: 'Archive in progress', pending: true }])
+    const completed = reconcileJobs(active, [{ ...job, status: 'COMPLETED', processedFiles: 2 }])
+    expect(completed).toMatchObject([{ id: 1, tone: 'success', title: 'Archive completed',
+      detail: '2 files processed.', pending: false }])
+    expect(reconcileJobs(completed, [{ ...job, status: 'COMPLETED' }])).toBe(completed)
+  })
+
+  it('reports partial failures as errors and shows the result after dismissing the progress notice', () => {
+    const active = [{ ...notice, dismissed: true }]
+    const failed = reconcileJobs(active, [{ ...job, status: 'PARTIAL_FAILURE', details: 'Could not copy report.txt' }])
+    expect(failed).toMatchObject([{ tone: 'error', title: 'Archive completed with errors',
+      detail: 'Could not copy report.txt', pending: false, dismissed: false }])
+  })
+
+  it('ignores jobs the user did not start in this session', () => {
+    const active = [notice]
+    expect(reconcileJobs(active, [{ ...job, id: 'another-job', status: 'FAILED' }])).toBe(active)
+  })
+})

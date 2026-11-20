@@ -1,0 +1,142 @@
+{
+  "realm": "koonj",
+  "displayName": "Koonj",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "loginWithEmailAllowed": true,
+  "resetPasswordAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "KOONJ_ADMIN",
+        "description": "Manage connections and credentials, view server telemetry and jobs, and run operations including local purge."
+      },
+      {
+        "name": "KOONJ_OPERATOR",
+        "description": "Read the catalog and jobs, scan storage, and archive or recall files."
+      },
+      {
+        "name": "KOONJ_VIEWER",
+        "description": "Read-only access to the Home dashboard and Explorer catalog."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "koonj-server",
+      "name": "Koonj Server",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    },
+    {
+      "clientId": "koonj-ui",
+      "name": "Koonj Console",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "Koonj API audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "koonj-server",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ],
+      "fullScopeAllowed": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@appsthatmatter.uk",
+      "email": "admin@appsthatmatter.uk",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Koonj",
+      "lastName": "Admin",
+      "realmRoles": [
+        "KOONJ_ADMIN"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "KoonjDev-Admin-26!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "operator@appsthatmatter.uk",
+      "email": "operator@appsthatmatter.uk",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Koonj",
+      "lastName": "Operator",
+      "realmRoles": [
+        "KOONJ_OPERATOR"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "KoonjDev-Operator-26!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "viewer@appsthatmatter.uk",
+      "email": "viewer@appsthatmatter.uk",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Koonj",
+      "lastName": "Viewer",
+      "realmRoles": [
+        "KOONJ_VIEWER"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "KoonjDev-Viewer-26!",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "koonj-ui",
+      "roles": [
+        "KOONJ_ADMIN",
+        "KOONJ_OPERATOR",
+        "KOONJ_VIEWER"
+      ]
+    }
+  ]
+}

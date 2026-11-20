@@ -13,6 +13,7 @@
     <description>Faithful messenger carrying things across vast distances and reliably returning home</description>
     <url>https://github.com/atmenterprise/koonj</url>
     <modules>
+        <module>koonj-ui</module>
         <module>koonj-server</module>
     </modules>
 
