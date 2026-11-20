@@ -16,13 +16,17 @@ Deliver a distinct Koonj interface for Apps That Matter with a fixture-driven de
 - Keep navigation and text hierarchy compact. Define slate/zinc surfaces, subtle borders, indigo focus and selection, and teal accents derived from the crane palette. Use color plus text for status, an accessible splitter, keyboard-operable virtual rows, stable focus on redraw, and labelled dialogs that restore trigger focus. Use drawer layouts at compact widths.
 - Provide an opt-in fixture adapter for development. Seed realistic states and synthetic large directories, use the same client surface, and simulate cursors, transitions, retries, and reconnect without touching live resources.
 
+### Live authentication
+
+Use OIDC authorization code with PKCE for the browser client. Send the bearer access token on same-origin API calls and the live event stream. Use a fetch-based SSE client so the token travels in the Authorization header. Keep tokens out of URLs and fixture data.
+
 ### Backend integration
 
 | Capability | Baseline and proposed extension |
 | --- | --- |
 | Explorer navigation | Reuse tree and item endpoints. Add registered-location discovery, child counts, item detail with ETag, reverse cursors, and multi-state filtering for In Progress. Add scoped global search across authorized locations. |
 | Dashboard / SSE | Extend summary with tier bytes and actionable alert targets; include active worker execution count and freshness in throughput samples. Extend activity feed with running filters. |
-| Archive and recall | Extend archive with authorized target location and verified purge flag, and recall with authorized destination location and relative path. Baseline uses a configured bucket and original destination. Backend validates scope, destination conflicts, generation, tier and eligibility. |
+| Archive and recall | Extend archive with authorized target location and verified purge flag, and recall with authorized destination location and relative path. Administrators register existing buckets and AWS regions from the console. Archive requires a selected authorized target. Recall defaults to the original destination. Backend validates scope, destination conflicts, generation, tier and eligibility. |
 | Transfer and storage actions | Add capability discovery, scan, checksum verification, activity pause/resume/cancel, and failed-file retry. Cancel stops eligible remaining work; verified completed effects remain in history. Pause/resume is cooperative at worker boundaries. Retry creates a linked activity and revalidates the failed generations. |
 | History | Extend activity and job results with actor, target, duration, rate, object version/ETag and action eligibility. Add explicit paused/cancelled lifecycle states and control request acknowledgements. |
 

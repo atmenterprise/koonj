@@ -45,3 +45,22 @@ Each entry SHALL record a UUID, location, parent path, full path, name, director
 #### Scenario: A cursor is reused for another query
 - **WHEN** a client changes the location, parent, filter, or sort associated with a cursor
 - **THEN** the API rejects the cursor with a client error
+
+### Requirement: Administrator-managed S3 archive targets
+
+The API SHALL let administrators register a bucket name and AWS region, using a configurable OIDC role claim. Each new archive command SHALL identify an authorized registered target. The resulting job SHALL retain the selected bucket location through execution and retries.
+
+#### Scenario: An administrator registers a regional bucket
+
+- **WHEN** an authenticated administrator registers a valid bucket and region
+- **THEN** the API returns a stable location ID that can be granted to operators
+
+#### Scenario: An operator attempts bucket registration
+
+- **WHEN** a caller lacks the configured administrator role
+- **THEN** registration returns HTTP 403 and creates no location
+
+#### Scenario: Upgrade contains key-only archive records
+
+- **WHEN** an administrator explicitly confirms one registered bucket and region for the upgraded database
+- **THEN** the API binds unmapped legacy archives to that location, records the administrator and timestamp, and rejects a conflicting confirmation

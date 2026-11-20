@@ -1,5 +1,5 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>uk.appsthatmatter</groupId>
@@ -7,6 +7,48 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
     <artifactId>koonj-server</artifactId>
-    <name>Archetype - koonj-server</name>
-    <url>http://maven.apache.org</url>
+    <packaging>pom</packaging>
+    <name>Koonj Server</name>
+
+    <modules>
+        <module>koonj-core</module>
+        <module>koonj-api</module>
+        <module>koonj-worker</module>
+        <module>koonj-migrations</module>
+    </modules>
+
+    <properties>
+        <spring-boot.version>3.5.5</spring-boot.version>
+        <flyway.version>11.20.0</flyway.version>
+        <aws-sdk.version>2.32.16</aws-sdk.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-postgresql</artifactId>
+                <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 </project>

@@ -6,7 +6,7 @@ The monorepo initialization change defines bounded scans, durable worker claims,
 
 ## Goals / Non-Goals
 
-Deliver the catalog, durable queue, and versioned backend contracts. Location registration, UI changes, and new public purge and scan routes are outside this change. Existing scan and tier controls use the same activity accounting.
+Deliver the catalog, durable queue, and versioned backend contracts. Administrators can register S3 archive targets. Filesystem registration, UI changes, and new public purge and scan routes are outside this change. Existing scan and tier controls use the same activity accounting.
 
 ## Decisions
 
@@ -23,13 +23,18 @@ Constrain file states to `LOCAL_ONLY`, `QUEUED_ARCHIVE`, `ARCHIVING`, `ARCHIVED`
 
 Uniqueness is scoped by location, path identity and directory discriminator. Preserve exact S3 object keys, even when key segments resemble filesystem traversal. Treat filesystem paths and S3 prefix identities according to their respective location rules. Record S3 metadata in bounded listing pages and model navigable prefixes independently from objects. Link managed archive objects to their originating generation so index refreshes and metrics remain consistent.
 
+### Identity and location access
+
+The live API is an OIDC resource server. Validate bearer access tokens against the configured issuer and API audience. Read the actor identifier and authorized location IDs from configurable claims. Scope catalog reads, action submission, status, history and event delivery to the authenticated actor and authorized locations. Workers use the durable authorized job scope. Only administrators with a configurable OIDC role can register an S3 bucket and its region. Accept all AWS regions without a fixed list. Pin the selected target to each archive job and retain the verified bucket, key and region for recall.
+
 ### REST contracts
 
 | Endpoint | Contract |
 | --- | --- |
+| `GET /api/v1/storage/buckets`, `POST /api/v1/storage/buckets` | List permitted bucket registrations. Administrators can list and register bucket names and regions. Return the stable location ID. |
 | `GET /api/v1/explorer/tree` | Requires `locationId` and `parentPath` (empty for root). Returns direct child directories in name order. |
 | `GET /api/v1/explorer/items` | Same scope, plus optional case-insensitive name search `q`, `storageState`, `sort` (`name`, `sizeBytes`, `lastModifiedAt`), and `direction`. Defaults to ascending name. |
-| `POST /api/v1/actions/archive` | JSON `{ids, storageClass}`. Uses the configured archive bucket and defaults class to `STANDARD`. |
+| `POST /api/v1/actions/archive` | JSON `{ids, targetLocationId, storageClass}`. Requires an authorized `targetLocationId` for a registered bucket and defaults class to `STANDARD`. |
 | `POST /api/v1/actions/recall` | JSON `{ids, restoreTier}`. Uses the registered original destination and defaults tier to `STANDARD`. An entry with no eligible destination fails per file. |
 | `GET /api/v1/activities` | Newest first by creation time and ID, with activity type, timestamps, status, counts and links. |
 | `GET /api/v1/activities/{activityId}/jobs` | Per-file state, attempts, last error code/message and links to paginated `/{jobId}/attempts` beneath the jobs collection. |
@@ -60,4 +65,4 @@ Track archive totals from distinct verified archive identities and reclaimed byt
 
 ## Migration Plan
 
-Add forward Flyway migrations after the foundation. Reuse and backfill existing root, inventory, and operation rows, preserving IDs and timestamps. Validate both fresh installs and upgrades on PostgreSQL 16 and 18. Deploy schema first, then compatible API and workers. Preserve queue and catalog data if application rollout is reversed.
+Add forward Flyway migrations after the foundation. Reuse and backfill existing root, inventory, and operation rows, preserving IDs and timestamps. For key-only legacy archives, require a single administrator-confirmed bucket and region for the upgraded database. Persist the mapping and confirmation actor atomically with the backfill. Use the mapped identity for recall and purge. Validate both fresh installs and upgrades on PostgreSQL 16 and 18. Deploy schema first, then compatible API and workers. Preserve queue and catalog data if application rollout is reversed.

@@ -58,3 +58,17 @@ The audit view SHALL list newest activities first with ID, action, target, actor
 #### Scenario: Retry failed files
 - **WHEN** an authorized operator retries eligible failed files from a settled activity
 - **THEN** the UI links to the accepted retry activity and preserves the original audit record
+
+### Requirement: S3 bucket settings
+
+The console SHALL expose bucket and region registration to OIDC administrators. It SHALL accept regions without a fixed region allowlist and let operators select their authorized registered targets for archival. During an upgrade it SHALL let an administrator explicitly confirm the database-wide original archive bucket and region for key-only legacy records.
+
+#### Scenario: An operator selects an archive target
+
+- **WHEN** the operator chooses an authorized registered bucket in the archive dialog
+- **THEN** the command includes that bucket's location ID
+
+#### Scenario: An administrator configures a bucket
+
+- **WHEN** an administrator submits a bucket name and AWS region
+- **THEN** the console displays the acknowledged registration and its location ID

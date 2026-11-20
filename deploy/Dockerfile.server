@@ -1,0 +1,11 @@
+FROM maven:3.9-eclipse-temurin-21 AS build
+ARG MODULE
+WORKDIR /src
+COPY pom.xml .
+COPY koonj-server koonj-server
+RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -pl koonj-server/${MODULE} -am package -DskipTests && cp koonj-server/${MODULE}/target/${MODULE}-*.jar /app.jar
+
+FROM eclipse-temurin:21-jre
+RUN apt-get update && apt-get install -y --no-install-recommends openssl curl && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app.jar /opt/koonj/app.jar
+ENTRYPOINT ["java","-jar","/opt/koonj/app.jar"]
