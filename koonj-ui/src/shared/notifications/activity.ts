@@ -13,6 +13,7 @@ export interface ActivityNotice extends ActivityMessage {
   id: number
   pending: boolean
   dismissed?: boolean
+  read?: boolean
 }
 
 export function jobMessage(job: TransferJobDTO): ActivityMessage {
@@ -46,7 +47,8 @@ export function reconcileJobs(notices: ActivityNotice[], jobs: TransferJobDTO[])
     if (update.tone === 'info' && update.title === notice.title) return notice
     changed = true
     return { ...notice, ...update, pending: update.tone === 'info',
-      dismissed: update.tone === 'info' ? notice.dismissed : false }
+      dismissed: update.tone === 'info' ? notice.dismissed : false,
+      read: update.tone === 'info' ? notice.read : false }
   })
   return changed ? next : notices
 }

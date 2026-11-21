@@ -27,6 +27,12 @@ describe('activity notifications', () => {
       detail: 'Could not copy report.txt', pending: false, dismissed: false }])
   })
 
+  it('makes completion unread even when the progress notification was read and timed out', () => {
+    const active = [{ ...notice, read: true, dismissed: true }]
+    const completed = reconcileJobs(active, [{ ...job, status: 'COMPLETED' }])
+    expect(completed).toMatchObject([{ tone: 'success', read: false, dismissed: false }])
+  })
+
   it('ignores jobs the user did not start in this session', () => {
     const active = [notice]
     expect(reconcileJobs(active, [{ ...job, id: 'another-job', status: 'FAILED' }])).toBe(active)

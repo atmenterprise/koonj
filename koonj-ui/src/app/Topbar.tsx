@@ -3,12 +3,20 @@ import { useCatalogFiles, useCatalogLocations, useTransferJobs } from '../api/ho
 import { jobLabels, operationLabels } from '../api/mappers'
 import type { TransferJobDTO } from '../api/types'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
+import { notificationPresentation } from '../shared/notifications/NotificationPopup'
 import { useAuth } from '../auth/AuthProvider'
+import type { KoonjRole } from '../auth/keycloak'
 import type { Navigate } from '../shared/ui/feedback'
 import { Badge, Button, Icon, type IconName } from '../shared/ui/primitives'
 
 type SearchPage = { path: string; title: string; icon: IconName }
 type Result = { title: string; detail: string; icon: IconName; href: string }
+
+const roleLabels: Record<KoonjRole, string> = {
+  KOONJ_ADMIN: 'Admin',
+  KOONJ_OPERATOR: 'Operator',
+  KOONJ_VIEWER: 'Viewer',
+}
 
 export const themes = [
   { id: 'classic', label: 'Classic', background: '#fcfcfc', accent: '#ffde59' },
@@ -191,18 +199,21 @@ function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (theme: Them
 }
 
 function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
-  const { user, logout, hasRole } = useAuth()
+  const { user, logout } = useAuth()
   const [pending, setPending] = useState(false)
   const [failed, setFailed] = useState(false)
   if (!user) return null
-  const role = hasRole('KOONJ_ADMIN') ? 'Admin' : hasRole('KOONJ_OPERATOR') ? 'Operator' : 'Viewer'
   return <ToolbarPopover label="User profile" triggerClass="profile-trigger" panelClass="profile-popover"
     triggerContent={<><span className="profile-avatar"><Icon name="user" size={18} /></span>
       <span className="profile-name">{user.name}</span><Icon name="down" size={13} /></>}>
     {() => <>
       <strong>{user.name}</strong>
       {user.email && <p>{user.email}</p>}
-      <div className="profile-roles"><span className="popover-label">Workspace role</span><div><Badge tone="yellow">{role}</Badge></div></div>
+      <div className="profile-roles">
+        <span className="popover-label">Workspace roles</span>
+        {user.roles.length ? <div>{user.roles.map(role => <Badge key={role} tone="yellow">{roleLabels[role]}</Badge>)}</div>
+          : <p>No roles assigned</p>}
+      </div>
       <ThemePicker theme={theme} onChange={onThemeChange} />
       <Button variant="quiet" icon="logout" disabled={pending} onClick={() => {
         setPending(true)
@@ -218,27 +229,37 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperat
   title: string; pages: SearchPage[]; navigate: Navigate; theme: Theme; onThemeChange: (theme: Theme) => void; canOperate: boolean
 }) {
   const jobHistory = useTransferJobs(canOperate)
-  const { syncJobs } = useActivityNotifications()
+  const { notices, markRead, syncJobs } = useActivityNotifications()
   useEffect(() => {
     if (canOperate && jobHistory.data) syncJobs(jobHistory.data)
   }, [canOperate, jobHistory.data, syncJobs])
   const jobs = canOperate ? jobHistory.data ?? [] : []
-  const alerts = jobs.filter(job => job.status === 'FAILED' || job.status === 'PARTIAL_FAILURE').slice(0, 6)
+  const alerts = notices.filter(notice => !notice.read).reverse()
   return <header className="topbar">
     <div className="topbar-path"><span>Workspace</span><Icon name="chevron" size={14} /><strong>{title}</strong></div>
     <GlobalSearch pages={pages} navigate={navigate} jobs={jobs} />
     <div className="topbar-actions">
-      {canOperate && <ToolbarPopover label={`Notifications (${alerts.length})`} triggerClass="alerts-trigger" panelClass="alerts-popover"
+      <ToolbarPopover label={`Notifications (${alerts.length})`} triggerClass="alerts-trigger" panelClass="alerts-popover"
         triggerContent={<><Icon name="bell" size={19} />{alerts.length > 0 && <span className="alerts-badge" aria-hidden="true">{alerts.length}</span>}</>}>
         {close => <><h2>Notifications</h2><div className="notifications">
-          {alerts.length ? alerts.map(job => <button type="button" className="notification" key={job.id}
-            onClick={() => { close(); navigate('/activities?' + new URLSearchParams({ job: job.id })) }}>
-            <span className="icon-tile yellow"><Icon name="warning" size={16} /></span>
-            <span className="notification-text"><strong>{operationLabels[job.operation]} · {jobLabels[job.status]}</strong>
-              {job.details && <small>{job.details.split('\n')[0]}</small>}</span><Icon name="chevron" size={14} />
-          </button>) : <p className="empty compact">No notifications.</p>}
+          {alerts.length ? alerts.map(notice => {
+            const { icon, tile, label } = notificationPresentation[notice.tone]
+            const jobId = canOperate ? notice.jobId : undefined
+            return <button type="button" className="notification" key={notice.id}
+              aria-label={`${label}: ${notice.title}${notice.detail ? '. ' + notice.detail : ''}. ${jobId ? 'View activity' : 'Mark as read'}`}
+              onClick={() => {
+                markRead(notice.id)
+                close()
+                if (jobId) navigate('/activities?' + new URLSearchParams({ job: jobId }))
+              }}>
+              <span className={`icon-tile ${tile}`}><Icon name={icon} size={16} /></span>
+              <span className="notification-text"><strong>{notice.title}</strong>
+                {notice.detail && <small>{notice.detail}</small>}</span>
+              <Icon name={jobId ? 'chevron' : 'check'} size={14} />
+            </button>
+          }) : <p className="empty compact">No unread notifications.</p>}
         </div></>}
-      </ToolbarPopover>}
+      </ToolbarPopover>
       <ProfileMenu theme={theme} onThemeChange={onThemeChange} />
     </div>
   </header>

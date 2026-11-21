@@ -12,6 +12,7 @@ interface NotificationContextValue {
   notices: ActivityNotice[]
   dialog: HTMLDialogElement | undefined
   dismiss: (id: number) => void
+  markRead: (id: number) => void
   registerDialog: (dialog: HTMLDialogElement) => () => void
   syncJobs: (jobs: TransferJobDTO[]) => void
   run: <T>(options: ActivityOptions<T>, action: () => Promise<T>) => Promise<T>
@@ -32,7 +33,12 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback((id: number) => {
     setNotices(previous => previous.flatMap(notice => notice.id !== id ? [notice]
-      : notice.pending ? [{ ...notice, dismissed: true }] : []))
+      : notice.pending || !notice.read ? [{ ...notice, dismissed: true }] : []))
+  }, [])
+
+  const markRead = useCallback((id: number) => {
+    setNotices(previous => previous.flatMap(notice => notice.id !== id ? [notice]
+      : notice.pending || !notice.dismissed ? [{ ...notice, read: true }] : []))
   }, [])
 
   const syncJobs = useCallback((jobs: TransferJobDTO[]) => {
@@ -46,7 +52,7 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
     function publish(message: ActivityMessage) {
       const pending = message.tone === 'info' && !!message.jobId
       setNotices(previous => previous.map(notice => notice.id === id
-        ? { id, ...message, pending, dismissed: pending && notice.dismissed } : notice))
+        ? { id, ...message, pending, dismissed: pending && notice.dismissed, read: pending && notice.read } : notice))
     }
 
     try {
@@ -62,8 +68,8 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
   const runJob = useCallback((name: string, action: () => Promise<TransferJobDTO>) =>
     run({ started: name + ' started', failed: name + ' could not start', complete: jobMessage }, action), [run])
 
-  const value = useMemo(() => ({ notices, dialog: dialogs.at(-1), dismiss, registerDialog, syncJobs, run, runJob }),
-    [notices, dialogs, dismiss, registerDialog, syncJobs, run, runJob])
+  const value = useMemo(() => ({ notices, dialog: dialogs.at(-1), dismiss, markRead, registerDialog, syncJobs, run, runJob }),
+    [notices, dialogs, dismiss, markRead, registerDialog, syncJobs, run, runJob])
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>
 }
