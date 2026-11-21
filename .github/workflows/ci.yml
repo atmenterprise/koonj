@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend Validation (koonj-server)
+  # ---------------------------------------------------------------------------
+  server-ci:
+    name: Build & Test Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verify & Compile Server
+        run: |
+          mvn -B -ntp clean test-compile -pl koonj-server -am
+
+      - name: Run Unit Tests
+        run: |
+          mvn -B -ntp test -pl koonj-server
+
+      - name: Package Server JAR
+        run: |
+          mvn -B -ntp package -DskipTests -pl koonj-server
+
+      - name: Upload Server JAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: koonj-server-jar
+          path: koonj-server/target/koonj-server-*.jar
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Frontend Validation (koonj-ui)
+  # ---------------------------------------------------------------------------
+  ui-ci:
+    name: Build & Test UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: koonj-ui/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: koonj-ui
+        run: npm ci --no-audit --no-fund
+
+      - name: Type Check & Build
+        working-directory: koonj-ui
+        run: npm run build
+
+      - name: Run UI Tests
+        working-directory: koonj-ui
+        run: npm test
+
+      - name: Upload UI Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: koonj-ui-dist
+          path: koonj-ui/dist/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Package & Docker Validation
+  # ---------------------------------------------------------------------------
+  package-validation:
+    name: Test Packaging & Docker Build
+    needs: [server-ci, ui-ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: koonj-ui/package-lock.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test Master Build Script (On-Premise & Docker bundles)
+        run: |
+          chmod +x deploy/production/build.sh deploy/production/on-premise/install.sh
+          ./deploy/production/build.sh --skip-tests
+
+      - name: Verify Distribution Archives Exist
+        run: |
+          test -f dist/koonj-*-on-premise.tar.gz || { echo "Missing on-premise tar.gz"; exit 1; }
+          test -f dist/koonj-*-docker.tar.gz || { echo "Missing docker tar.gz"; exit 1; }
+          echo "All distribution bundles created successfully."
+
+      - name: Test Building Production Docker Images
+        run: |
+          # Test build using the artifacts generated in dist
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          cd "dist/koonj-${VERSION}-docker"
+          docker build -t koonj-server:test -f server/Dockerfile.server server/
+          docker build -t koonj-ui:test -f ui/Dockerfile.ui ui/

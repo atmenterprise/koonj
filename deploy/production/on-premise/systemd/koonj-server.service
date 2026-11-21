@@ -1,0 +1,48 @@
+[Unit]
+Description=Koonj Data Catalog API Server
+Documentation=https://github.com/atmenterprise/koonj
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=koonj
+Group=koonj
+WorkingDirectory=/opt/koonj
+
+EnvironmentFile=/opt/koonj/config/koonj.env
+
+ExecStart=/usr/bin/java \
+  -XX:+UseG1GC \
+  -XX:MaxRAMPercentage=75.0 \
+  -Djava.security.egd=file:/dev/./urandom \
+  -Dspring.profiles.active=production \
+  -Dspring.config.additional-location=file:/opt/koonj/config/application-production.yml \
+  -jar /opt/koonj/lib/koonj-server.jar
+
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=30
+KillMode=mixed
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/koonj/logs /mnt/koonj
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=append:/opt/koonj/logs/koonj-server.log
+StandardError=append:/opt/koonj/logs/koonj-server.log
+SyslogIdentifier=koonj-server
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,76 @@
+# =============================================================================
+# Koonj UI — Nginx Configuration Template
+# =============================================================================
+# Variables are substituted at container startup by the Nginx Docker image's
+# built-in envsubst mechanism (/etc/nginx/templates/*.template).
+#
+# Environment variables used:
+#   KOONJ_API_UPSTREAM  — backend server address (default: koonj-server:8080)
+# =============================================================================
+
+upstream koonj_api {
+    server ${KOONJ_API_UPSTREAM};
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ── Security headers ─────────────────────────────────────────────────────
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # ── Gzip compression ────────────────────────────────────────────────────
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript
+               text/xml application/xml application/xml+rss text/javascript
+               image/svg+xml;
+
+    # ── API reverse proxy ────────────────────────────────────────────────────
+    location /api/ {
+        proxy_pass http://koonj_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+
+        # SSE / streaming support for event endpoints
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+
+        # Large file upload support
+        client_max_body_size 1G;
+    }
+
+    # ── Actuator health (optional — for monitoring integrations) ─────────────
+    location /actuator/health {
+        proxy_pass http://koonj_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+    }
+
+    # ── Static assets with long cache ────────────────────────────────────────
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # ── SPA fallback ─────────────────────────────────────────────────────────
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
