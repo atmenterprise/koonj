@@ -148,6 +148,9 @@ copy /Y "%SCRIPT_DIR%docker\Dockerfile.ui"               "%DK_DIR%\ui\"       >n
 copy /Y "%SCRIPT_DIR%docker\nginx\default.conf.template" "%DK_DIR%\ui\"       >nul
 copy /Y "%SCRIPT_DIR%docker\nginx\default.conf.template" "%DK_DIR%\nginx\"    >nul
 copy /Y "%SCRIPT_DIR%docker\docker-compose.yml"          "%DK_DIR%\"          >nul
+copy /Y "%SCRIPT_DIR%docker\docker-compose.otel.yml"     "%DK_DIR%\"          >nul 2>&1
+copy /Y "%SCRIPT_DIR%docker\otel-collector-config.yaml"  "%DK_DIR%\"          >nul 2>&1
+xcopy /E /Q /Y "%SCRIPT_DIR%docker\config\*"             "%DK_DIR%\config\"   >nul 2>&1
 copy /Y "%SCRIPT_DIR%docker\.env.example"                "%DK_DIR%\.env"      >nul
 copy /Y "%PROJECT_ROOT%\deploy\keycloak\koonj-realm.json" "%DK_DIR%\keycloak\" >nul
 copy /Y "%PROJECT_ROOT%\deploy\keycloak\init-db.sql"     "%DK_DIR%\keycloak\" >nul

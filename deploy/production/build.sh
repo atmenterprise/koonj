@@ -162,6 +162,9 @@ assemble_docker() {
   cp "${SCRIPT_DIR}/docker/nginx/default.conf.template"    "${DK_DIR}/ui/"
   cp "${SCRIPT_DIR}/docker/nginx/default.conf.template"    "${DK_DIR}/nginx/"
   cp "${SCRIPT_DIR}/docker/docker-compose.yml"             "${DK_DIR}/"
+  cp "${SCRIPT_DIR}/docker/docker-compose.otel.yml"        "${DK_DIR}/" 2>/dev/null || true
+  cp "${SCRIPT_DIR}/docker/otel-collector-config.yaml"     "${DK_DIR}/" 2>/dev/null || true
+  cp -r "${SCRIPT_DIR}/docker/config"                      "${DK_DIR}/" 2>/dev/null || true
   cp "${SCRIPT_DIR}/docker/.env.example"                   "${DK_DIR}/.env"
 
   # Keycloak realm
