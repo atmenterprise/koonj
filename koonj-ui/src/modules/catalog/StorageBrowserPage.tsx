@@ -3,9 +3,8 @@ import { useMemo, useRef, useState } from 'react'
 import { useScanMutation } from '../../api/hooks/mutations'
 import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { folderTree, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
-import type { CatalogMetadataTarget, CatalogMetadataValues } from '../../api/types'
+import type { CatalogMetadataTarget, ProviderType } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
-import { RequestError } from '../../shared/ui/feedback'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { Badge, Button, Icon, bytes, count, date, storageName, temperatureTone } from '../../shared/ui/primitives'
 import { FileInspector } from './FileInspector'
@@ -52,21 +51,19 @@ function temperatureOf(modified: string | null) {
   return age < 15 ? 'HOT' : age < 30 ? 'WARM' : 'COLD'
 }
 
-function MetadataCell({ values, failed }: { values?: CatalogMetadataValues; failed: boolean }) {
-  if (!values?.tags.length && !values?.properties.length) {
-    return <span role="cell" className="catalog-metadata-empty">{failed ? 'Unavailable' : values ? '—' : 'Loading…'}</span>
+function storageLocationIcon(provider: ProviderType) {
+  return isObjectStorage(provider) ? 'cloud' : 'drive'
+}
+
+function TagsCell({ tags, failed }: { tags?: string[]; failed: boolean }) {
+  if (!tags?.length) {
+    return <span role="cell" className="catalog-tags-empty">{failed ? 'Unavailable' : tags ? '—' : 'Loading…'}</span>
   }
 
-  return <div role="cell" className="catalog-metadata-cell">
-    <div className="catalog-metadata-scroll" tabIndex={0} role="group" aria-label="Tags and custom properties"
-      onClick={event => event.stopPropagation()}>
-      {values.tags.length > 0 && <ul className="catalog-tags" aria-label="Tags">
-        {values.tags.map(tag => <li key={tag}><Badge tone="blue">{tag}</Badge></li>)}
-      </ul>}
-      {values.properties.length > 0 && <dl className="catalog-properties" aria-label="Custom properties">
-        {values.properties.map(property => <div key={property.name}><dt>{property.name}</dt><dd>{property.value}</dd></div>)}
-      </dl>}
-    </div>
+  return <div role="cell" className="catalog-tags-cell" onClick={event => event.stopPropagation()}>
+    <ul className="catalog-tags" tabIndex={0} aria-label="Custom tags">
+      {tags.map(tag => <li key={tag}><Badge tone="blue">{tag}</Badge></li>)}
+    </ul>
   </div>
 }
 
@@ -122,12 +119,11 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
           return temperature ? { COLD: 0, WARM: 1, HOT: 2 }[temperature] : undefined
         }
         case 'modified': return file?.lastModifiedAt ? Date.parse(file.lastModifiedAt) : undefined
-        case 'checksum': return file ? Number(!!file.checksumSha256) : undefined
-        case 'metadata': {
+        case 'integrity': return file ? Number(!!file.checksumSha256) : undefined
+        case 'tags': {
           const target: CatalogMetadataTarget = entry.kind === 'folder' ? { scope: 'FOLDER', path: entry.node.prefix }
             : { scope: 'FILE', path: entry.file.relativePath }
-          const direct = directMetadataFor(index, target)
-          return [...direct.tags, ...direct.properties.map(property => property.name + ' ' + property.value)].join(' ') || undefined
+          return directMetadataFor(index, target).tags.join(' ') || undefined
         }
       }
     }
@@ -225,7 +221,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
             {endpoints.filter(item => isObjectStorage(item.providerType) === cloud).map(item => <div key={item.id}>
               <div className={item.id === selectedEndpoint.id && !folder ? 'tree-item selected' : 'tree-item'}>
                 <button className="tree-name" onClick={() => { setEndpointId(item.id); openFolder('') }}>
-                  <Icon name={cloud ? 'cloud' : 'drive'} size={15} /><span>{item.name}</span><small>{item.providerType}</small>
+                  <Icon name={storageLocationIcon(item.providerType)} size={15} /><span>{item.name}</span><small>{item.providerType}</small>
                 </button>
               </div>
               {item.id === selectedEndpoint.id && <>
@@ -249,7 +245,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
           <div className="catalog-heading">
             <nav className="breadcrumbs" aria-label="Catalog path">
               <button type="button" onClick={() => openFolder('')}>
-                <Icon name={isObjectStorage(selectedEndpoint.providerType) ? 'cloud' : 'server'} size={16} />{selectedEndpoint.name}
+                <Icon name={storageLocationIcon(selectedEndpoint.providerType)} size={15} />{selectedEndpoint.name}
               </button>
               {segments.map((segment, index) => {
                 const prefix = segments.slice(0, index + 1).join('/') + '/'
@@ -262,20 +258,19 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
             </nav>
             <div className="catalog-location-bar">
               <div className="catalog-title"><h2>{segments.at(-1) ?? selectedEndpoint.name}</h2><Badge>{selectedEndpoint.providerType}</Badge></div>
-              {locationTotals && <dl className="catalog-location-totals" aria-label="Catalog totals including subfolders">
-                <div><dt>Size</dt><dd>{bytes(locationTotals.sizeBytes)}</dd></div>
-                <div><dt>Total files</dt><dd>{count(locationTotals.files)}</dd></div>
-                <div><dt>Total folders</dt><dd>{count(locationTotals.folders)}</dd></div>
-              </dl>}
+              <div className="catalog-location-tools">
+                {locationTotals && <dl className="catalog-location-totals" aria-label="Catalog totals including subfolders">
+                  <div><dt>Size</dt><dd>{bytes(locationTotals.sizeBytes)}</dd></div>
+                  <div><dt>Total files</dt><dd>{count(locationTotals.files)}</dd></div>
+                  <div><dt>Total folders</dt><dd>{count(locationTotals.folders)}</dd></div>
+                </dl>}
+                {canTransfer && <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || scanning}
+                  onClick={() => scan.mutate(selectedEndpoint.id)}>{scanning ? 'Scanning…' : 'Scan'}</Button>}
+              </div>
             </div>
-            {canTransfer && <div className="row-actions">
-              <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || scanning}
-                onClick={() => scan.mutate(selectedEndpoint.id)}>{scanning ? 'Scanning…' : 'Scan'}</Button>
-              <RequestError error={scan.error} />
-            </div>}
           </div>
           <div className="catalog-viewport" ref={viewport}>
-            <div className="catalog-table catalog-table-metadata" role="table" aria-label="Catalog files">
+            <div className="catalog-table catalog-table-tags" role="table" aria-label="Catalog files">
               <div className="catalog-row catalog-table-header" role="row">
                 <span role="columnheader"><input type="checkbox" aria-label="Select all items on this page"
                   disabled={!canTransfer || !itemKeys.length} checked={itemKeys.length > 0 && selectedTargets.length === itemKeys.length}
@@ -294,7 +289,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   const entry = visible[item.index]
                   const target: CatalogMetadataTarget = entry.kind === 'folder' ? { scope: 'FOLDER', path: entry.node.prefix }
                     : { scope: 'FILE', path: entry.file.relativePath }
-                  const metadata = <MetadataCell values={annotations.data ? directMetadataFor(index, target) : undefined}
+                  const tags = <TagsCell tags={annotations.data ? directMetadataFor(index, target).tags : undefined}
                     failed={annotations.isError} />
                   const position = { transform: `translateY(${item.start}px)`, height: item.size }
                   if (entry.kind === 'folder') {
@@ -313,7 +308,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                       </span>
                       <span role="cell">{bytes(totalsByFolder.get(node.prefix)?.sizeBytes ?? 0)}</span>
                       {Array.from({ length: 4 }, (_, index) => <span role="cell" key={index}>—</span>)}
-                      {metadata}
+                      {tags}
                     </div>
                   }
                   const { file } = entry
@@ -340,7 +335,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                     <span role="cell">{temperature ? <Badge tone={temperatureTone[temperature]}>{temperature}</Badge> : '—'}</span>
                     <span role="cell">{file.lastModifiedAt ? date(file.lastModifiedAt) : '—'}</span>
                     <span role="cell">{file.checksumSha256 ? <Badge tone="green">Recorded</Badge> : '—'}</span>
-                    {metadata}
+                    {tags}
                   </div>
                 })}
               </div>

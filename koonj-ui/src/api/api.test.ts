@@ -42,7 +42,7 @@ describe('catalog API', () => {
       return [200, response]
     })
     const mapped = catalogTablePage(await catalogService.getFiles(params, abort.signal))
-    expect(mapped).toEqual({ ...response, content: [{ file, sizeLabel: '1.2 KB', stateLabel: 'Local only' }] })
+    expect(mapped).toEqual({ ...response, content: [{ file, sizeLabel: '1.2 KB', stateLabel: 'Local' }] })
   })
 
   it('preserves cancellation instead of returning an API error', async () => {

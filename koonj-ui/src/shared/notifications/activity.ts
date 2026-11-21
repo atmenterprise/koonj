@@ -1,3 +1,4 @@
+import { ApiError } from '../../api/client'
 import type { TransferJobDTO } from '../../api/types'
 
 export type NotificationTone = 'info' | 'success' | 'error'
@@ -14,6 +15,12 @@ export interface ActivityNotice extends ActivityMessage {
   pending: boolean
   dismissed?: boolean
   read?: boolean
+}
+
+export function errorDetail(error: unknown) {
+  if (!(error instanceof Error)) return undefined
+  const fields = error instanceof ApiError ? Object.entries(error.validationErrors) : []
+  return [error.message, ...fields.map(([field, message]) => `${field}: ${message}`)].filter(Boolean).join('\n') || undefined
 }
 
 export function jobMessage(job: TransferJobDTO): ActivityMessage {

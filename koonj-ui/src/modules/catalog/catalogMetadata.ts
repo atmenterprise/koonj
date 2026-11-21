@@ -11,6 +11,7 @@ const targetKey = ({ scope, path }: CatalogMetadataTarget) => scope + ':' + path
 export function catalogMetadataOptions(connectionId?: string) {
   return queryOptions({
     queryKey: metadataKey(connectionId),
+    meta: { errorTitle: 'Could not load custom metadata' },
     enabled: !!connectionId,
     queryFn: ({ signal }) => catalogService.getMetadata(connectionId!, signal),
   })

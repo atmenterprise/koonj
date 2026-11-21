@@ -47,21 +47,22 @@ export function NotificationPopup({ navigate }: { navigate?: (path: string) => v
   const { notices, dialog, dismiss } = useActivityNotifications()
   const visible = notices.filter(notice => !notice.dismissed)
   const show = visible.length > 0
+  const container = dialog?.open ? dialog : document.body
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const popup = ref.current
-    if (show && popup?.showPopover && !popup.matches(':popover-open')) popup.showPopover()
+    if (show && popup?.isConnected && popup.showPopover && !popup.matches(':popover-open')) popup.showPopover()
     return () => {
       if (popup?.isConnected && popup.hidePopover && popup.matches(':popover-open')) popup.hidePopover()
     }
-  }, [show, dialog])
+  }, [show, container])
 
   return <>
     {visible.map(notice => <PopupTimeout key={notice.id} notice={notice} dismiss={dismiss} />)}
     {createPortal(<div className="activity-notifications" ref={ref} popover="manual"
       role="region" aria-label="Activity notifications" hidden={!show}>
       {visible.map(notice => <Notice key={notice.id} notice={notice} dismiss={dismiss} navigate={navigate} />)}
-    </div>, dialog ?? document.body)}
+    </div>, container)}
   </>
 }

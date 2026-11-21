@@ -35,7 +35,7 @@ const traces = [
 ]
 
 function useServerTelemetry() {
-  return useQuery({ queryKey: ['admin', 'telemetry'],
+  return useQuery({ queryKey: ['admin', 'telemetry'], meta: { errorTitle: 'Could not load server telemetry' },
     queryFn: ({ signal }) => adminService.getTelemetry(signal), refetchInterval: 10_000 })
 }
 

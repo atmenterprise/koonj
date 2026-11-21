@@ -1,6 +1,8 @@
 import { Fragment, useState } from 'react'
 import { useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { isActiveJob, jobLabels, operationLabels } from '../../api/mappers'
+import { useActivityNotifications } from '../../shared/notifications/ActivityNotifications'
+import { jobMessage } from '../../shared/notifications/activity'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { JobStatusBadge } from '../../shared/ui/feedback'
 import { Button, Progress, bytes, count, date, percent, time } from '../../shared/ui/primitives'
@@ -9,6 +11,7 @@ const pageSize = 25
 const filters = ['All activity', 'Active', 'Completed', 'Needs attention'] as const
 
 export default function AuditLogPage({ initialJob }: { initialJob: string | null }) {
+  const { notify } = useActivityNotifications()
   const jobs = useTransferJobs()
   const connections = useCatalogLocations()
   const [filter, setFilter] = useState<typeof filters[number]>('All activity')
@@ -47,6 +50,7 @@ export default function AuditLogPage({ initialJob }: { initialJob: string | null
           <th>Job</th><th>Operation</th><th>Source</th><th>Destination</th><th>Progress</th><th>Status</th><th>Created</th>
         </tr></thead><tbody>{visible.map(job => {
           const open = expanded === job.id
+          const detail = job.details
           return <Fragment key={job.id}>
             <tr>
               <td><Button className="icon-button" icon={open ? 'down' : 'chevron'} aria-label={'Details for job ' + job.id}
@@ -66,7 +70,7 @@ export default function AuditLogPage({ initialJob }: { initialJob: string | null
                 {job.completedAt && <div><dt>Finished</dt><dd>{date(job.completedAt)} · {time(job.completedAt)}</dd></div>}
                 {job.requestedPaths.length > 0 && <div><dt>Requested paths</dt><dd>{job.requestedPaths.join(', ')}</dd></div>}
               </dl>
-              {job.details && <pre className="job-details">{job.details}</pre>}
+              {detail && <Button onClick={() => notify({ ...jobMessage(job), detail })}>View job message</Button>}
             </div></td></tr>}
           </Fragment>
         })}</tbody></table></div> : <p className="empty">No matching jobs.</p>}

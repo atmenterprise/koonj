@@ -13,15 +13,18 @@ export const queryKeys = {
 }
 
 export function useConnections() {
-  return useQuery({ queryKey: queryKeys.connections, queryFn: ({ signal }) => connectionService.getConnections(signal) })
+  return useQuery({ queryKey: queryKeys.connections, meta: { errorTitle: 'Could not load storage connections' },
+    queryFn: ({ signal }) => connectionService.getConnections(signal) })
 }
 
 export function useCatalogLocations() {
-  return useQuery({ queryKey: queryKeys.catalogLocations, queryFn: ({ signal }) => catalogService.getLocations(signal) })
+  return useQuery({ queryKey: queryKeys.catalogLocations, meta: { errorTitle: 'Could not load catalog locations' },
+    queryFn: ({ signal }) => catalogService.getLocations(signal) })
 }
 
 export function useCatalogFiles(params: CatalogParams, enabled = true) {
   return useQuery({ queryKey: [...queryKeys.files, params], enabled,
+    meta: { errorTitle: 'Could not load catalog files' },
     queryFn: ({ signal }) => catalogService.getFiles(params, signal), select: catalogTablePage })
 }
 
@@ -34,6 +37,7 @@ async function collectPages<T extends { id: string }>(read: (page: number) => Pr
 
 export function useCatalogSnapshot(connectionId?: string, enabled = true) {
   return useQuery({ queryKey: [...queryKeys.files, 'snapshot', connectionId], enabled, staleTime: 30_000,
+    meta: { errorTitle: 'Could not load catalog files' },
     queryFn: ({ signal }) => collectPages(page => catalogService.getFiles({ connectionId, page, size: 200 }, signal)) })
 }
 
@@ -45,6 +49,7 @@ export const jobHistoryKey = [...queryKeys.jobs, 'history'] as const
 
 export const transferJobsOptions = queryOptions({
   queryKey: jobHistoryKey,
+  meta: { errorTitle: 'Could not load activity' },
   queryFn: async ({ signal, client, queryKey }) => {
     const jobs = await collectPages(page => transferService.getJobs({ page, size: 200 }, signal))
     const previous = client.getQueryData<TransferJobDTO[]>(queryKey)

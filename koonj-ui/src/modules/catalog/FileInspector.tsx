@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { isObjectStorage, stateLabels } from '../../api/mappers'
 import type { FileMetadataDTO, CatalogLocationDTO, CatalogMetadataTarget } from '../../api/types'
-import { Dialog, LoadingRows, RequestError } from '../../shared/ui/feedback'
+import { Dialog, LoadingRows } from '../../shared/ui/feedback'
+import { useActivityNotifications } from '../../shared/notifications/ActivityNotifications'
 import { Badge, Button, Icon, bytes, date } from '../../shared/ui/primitives'
 
 import { SymlinkTarget } from './SymlinkTarget'
@@ -14,6 +15,8 @@ export function FileInspector({ file, target, location, connections, metadata, w
   metadata?: ReturnType<typeof metadataFor>; writable: boolean; metadataError: Error | null
   navigate: (path: string) => void; onRetry: () => void; onClose: () => void; onOpen?: () => void; onArchive?: () => void; onRecall?: () => void
 }) {
+  const { notify } = useActivityNotifications()
+  const failure = file?.errorMessage
   const [tab, setTab] = useState<'metadata' | 'lineage'>('metadata')
   const source = connections.find(connection => connection.id === file?.connectionId) ?? location
   const archive = connections.find(connection => connection.id === file?.targetConnectionId)
@@ -45,9 +48,9 @@ export function FileInspector({ file, target, location, connections, metadata, w
       {tab === 'metadata'
         ? <>
           {!file && <p className="metadata-scope">Folder metadata is inherited by files and subfolders.</p>}
-          <RequestError error={metadataError} retry={onRetry} />
           {metadata ? <MetadataForm connectionId={location.id} targets={[target]} direct={metadata.direct}
-            inherited={metadata.inherited} writable={writable} /> : !metadataError && <LoadingRows label="Loading custom metadata" />}
+            inherited={metadata.inherited} writable={writable} /> : metadataError ? <Button icon="retry" onClick={onRetry}>Retry metadata</Button>
+              : <LoadingRows label="Loading custom metadata" />}
           {fields.length > 0 && <dl className="live-metadata">
             {file?.entryType === 'SYMLINK' && <div><dt>Symlink target</dt><dd><SymlinkTarget file={file} locations={connections} navigate={navigate} /></dd></div>}
             {fields.map(([label, value]) =>
@@ -60,9 +63,11 @@ export function FileInspector({ file, target, location, connections, metadata, w
           <dl className="lineage-paths"><div><dt>From</dt><dd>{source?.name ?? file.relativePath}</dd></div>
             <div><dt>To</dt><dd>{archive?.name ?? file.s3Key ?? '—'}</dd></div></dl>
         </li></ol> : <p className="empty compact">No archive timestamp is recorded for this file.</p>}
-      {file?.errorMessage && <p className="error-text" role="alert">{file.errorMessage}</p>}
     </div>
-    {(onOpen || onArchive || onRecall) && <div className="dialog-footer">
+    {(onOpen || onArchive || onRecall || failure) && <div className="dialog-footer">
+      {file && failure && <Button icon="warning" onClick={() => notify({
+        tone: 'error', title: `Transfer failed for ${file.fileName}`, detail: failure,
+      })}>View failure details</Button>}
       {onOpen && <Button icon="folder" onClick={onOpen}>Open folder</Button>}
       {onArchive && <Button icon="upload" onClick={onArchive}>Archive to S3</Button>}
       {onRecall && <Button icon="download" onClick={onRecall}>Recall to Source</Button>}

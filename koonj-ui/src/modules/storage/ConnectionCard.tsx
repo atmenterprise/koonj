@@ -2,7 +2,7 @@ import { useScanMutation, useTestConnection } from '../../api/hooks/mutations'
 import { isObjectStorage } from '../../api/mappers'
 import type { CatalogLocationDTO, StorageConnectionDTO } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
-import { RequestError, type Navigate } from '../../shared/ui/feedback'
+import type { Navigate } from '../../shared/ui/feedback'
 import { Badge, Button, Icon } from '../../shared/ui/primitives'
 
 export function ConnectionCard({ connection, navigate, onEdit, onDelete }: {
@@ -37,7 +37,5 @@ export function ConnectionCard({ connection, navigate, onEdit, onDelete }: {
       {canAdminister && onEdit && <Button onClick={onEdit}>Edit</Button>}
       {canAdminister && onDelete && <Button onClick={onDelete}>Delete</Button>}
     </div>
-    <RequestError error={scan.error ?? test.error} />
-    {test.data && <p className={test.data.healthy ? 'endpoint-detail' : 'error-text'} role="status">{test.data.message}</p>}
   </article>
 }

@@ -3,13 +3,12 @@ import { useSaveConnection, useTestConnection } from '../../api/hooks/mutations'
 import { isObjectStorage } from '../../api/mappers'
 import { providerTypes, storageRoles, type CreateConnectionRequest, type ProviderType, type StorageConnectionDTO,
   type StorageRole } from '../../api/types'
-import { Dialog, RequestError } from '../../shared/ui/feedback'
+import { Dialog } from '../../shared/ui/feedback'
 import { Button } from '../../shared/ui/primitives'
 
 export function ConnectionSettings({ connection, onClose }: { connection?: StorageConnectionDTO; onClose: () => void }) {
   const [provider, setProvider] = useState<ProviderType>(connection?.providerType ?? 'LOCAL')
   const [savedId, setSavedId] = useState(connection?.id)
-  const [saved, setSaved] = useState(false)
   const save = useSaveConnection()
   const test = useTestConnection()
   const objectStorage = isObjectStorage(provider)
@@ -25,15 +24,11 @@ export function ConnectionSettings({ connection, onClose }: { connection?: Stora
       pathStyleAccessEnabled: objectStorage ? form.has('pathStyle') : undefined,
       accessKeyOrUsername: value('access').trim() || undefined, secretKeyOrPassword: value('secret') || undefined,
     }
-    test.reset()
-    save.mutate({ id: savedId, payload }, { onSuccess: result => {
-      setSavedId(result.id)
-      setSaved(true)
-    } })
+    save.mutate({ id: savedId, payload }, { onSuccess: result => setSavedId(result.id) })
   }
 
   return <Dialog title={connection ? 'Edit storage connection' : 'Add storage connection'} onClose={onClose} drawer>
-    <form onSubmit={submit} onChange={() => { setSaved(false); test.reset() }}>
+    <form onSubmit={submit}>
       <fieldset className="dialog-body" disabled={save.isPending}>
         <label>Name<input name="name" required maxLength={255} defaultValue={connection?.name} /></label>
         <label>Provider<select value={provider} onChange={event => setProvider(event.target.value as ProviderType)}>
@@ -56,9 +51,6 @@ export function ConnectionSettings({ connection, onClose }: { connection?: Stora
             required={objectStorage && provider !== 'AWS_S3' && !savedId} /></label>
         </>}
         <label className="check-label"><input name="active" type="checkbox" defaultChecked={connection?.active ?? true} />Active</label>
-        <RequestError error={save.error ?? test.error} />
-        {saved && <p role="status">Connection saved.</p>}
-        {test.data && <p role="status" className={test.data.healthy ? '' : 'error-text'}>{test.data.message}</p>}
       </fieldset>
       <div className="dialog-footer">
         <Button type="button" onClick={onClose}>Close</Button>

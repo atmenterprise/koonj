@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { ApiError } from '../../api/client'
 import type { TransferJobDTO } from '../../api/types'
-import { reconcileJobs, type ActivityNotice } from './activity'
+import { errorDetail, reconcileJobs, type ActivityNotice } from './activity'
 
 const notice: ActivityNotice = { id: 1, tone: 'info', title: 'Archive started', jobId: 'current-job', pending: true }
 const job: TransferJobDTO = {
@@ -11,6 +12,11 @@ const job: TransferJobDTO = {
 }
 
 describe('activity notifications', () => {
+  it('includes server-supplied field validation in the notification message', () => {
+    const error = new ApiError(400, 'Validation failed', '', { name: 'Must not be blank', role: 'Choose a role' })
+    expect(errorDetail(error)).toBe('Validation failed\nname: Must not be blank\nrole: Choose a role')
+  })
+
   it('updates the same pop-up from in progress to success when the job completes', () => {
     const active = reconcileJobs([notice], [job])
     expect(active).toMatchObject([{ id: 1, tone: 'info', title: 'Archive in progress', pending: true }])

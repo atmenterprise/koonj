@@ -38,8 +38,8 @@ export function catalogSearchResults(files: FileMetadataDTO[], locations: Catalo
     const metadataValue = metadataMatch(endpoint.id, { scope: 'FILE', path: file.relativePath })
     const fileValue = [file.fileName, file.relativePath, stateLabels[file.storageState], file.storageState,
       file.sizeBytes.toString(), file.checksumSha256, file.s3Key, file.s3StorageClass, file.lastModifiedAt,
-      file.archivedAt, file.errorMessage, file.symlinkTarget].find(value => value && matches(value))
-    if (!metadataValue && !fileValue) return []
+      file.archivedAt, file.symlinkTarget].find(value => value && matches(value))
+    if (!metadataValue && !fileValue && !(file.errorMessage && matches(file.errorMessage))) return []
     const detail = [endpoint.name, file.relativePath, metadataValue ?? (fileValue === file.fileName || fileValue === file.relativePath ? undefined : fileValue)]
     return [{ title: file.fileName, detail: detail.filter(Boolean).join(' · '), icon: file.entryType === 'SYMLINK' ? 'link' as const : 'file' as const,
       href: '/explorer?' + new URLSearchParams({ endpoint: endpoint.id, entry: file.id, path: file.relativePath }) }]

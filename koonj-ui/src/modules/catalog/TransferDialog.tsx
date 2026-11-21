@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useArchiveMutation, useRecallMutation } from '../../api/hooks/mutations'
 import type { ArchiveMode, CatalogLocationDTO } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
-import { Dialog, RequestError } from '../../shared/ui/feedback'
+import { Dialog } from '../../shared/ui/feedback'
 import { Button, count } from '../../shared/ui/primitives'
 
 export type CatalogTransferAction = 'archive' | 'recall'
@@ -55,7 +55,6 @@ export function TransferDialog({ action, fileIds, paths, selectionCount, source,
           </select></label>
         </> : <label className="check-label"><input type="checkbox" name="deleteFromTarget" />
           Remove the S3 copy after restoring</label>}
-        <RequestError error={mutation.error} />
       </div>
       <div className="dialog-footer"><Button type="button" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
         <Button type="submit" variant="primary" disabled={mutation.isPending || !targets.length}>

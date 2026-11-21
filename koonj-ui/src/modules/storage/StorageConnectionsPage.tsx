@@ -5,7 +5,7 @@ import { isObjectStorage } from '../../api/mappers'
 import type { StorageConnectionDTO } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
-import { Dialog, RequestError, type Navigate } from '../../shared/ui/feedback'
+import { Dialog, type Navigate } from '../../shared/ui/feedback'
 import { Button } from '../../shared/ui/primitives'
 import { ConnectionCard } from './ConnectionCard'
 import { ConnectionSettings } from './ConnectionSettings'
@@ -47,7 +47,6 @@ export function StorageConnectionsPage({ navigate, embedded = false, grouped = f
     {canManage && pendingDelete && <Dialog title="Delete connection" onClose={() => { if (!remove.isPending) setPendingDelete(null) }}>
       <div className="dialog-body">
         <p>Delete {pendingDelete.name}?</p>
-        <RequestError error={remove.error} />
       </div>
       <div className="dialog-footer">
         <Button disabled={remove.isPending} onClick={() => setPendingDelete(null)}>Cancel</Button>

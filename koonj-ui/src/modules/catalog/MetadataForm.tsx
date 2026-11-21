@@ -18,7 +18,7 @@ export function MetadataForm({ connectionId, targets, direct, inherited, writabl
       <p>No custom metadata.</p>}
   </section>
 
-  return <MetadataEditor initial={direct} inherited={inherited} bulk={bulk} pending={save.isPending} requestError={save.error}
+  return <MetadataEditor initial={direct} inherited={inherited} bulk={bulk} pending={save.isPending}
     onSave={async values => {
       await save.mutateAsync({ targets, values, mode: bulk ? 'MERGE' : 'REPLACE' })
       onSaved?.()

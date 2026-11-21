@@ -11,7 +11,7 @@ export function isActiveJob(job: TransferJobDTO) {
 }
 
 export const stateLabels: Record<StorageState, string> = {
-  LOCAL_ONLY: 'Local only', QUEUED_ARCHIVE: 'Queued for archive', ARCHIVING: 'Archiving',
+  LOCAL_ONLY: 'Local', QUEUED_ARCHIVE: 'Queued for archive', ARCHIVING: 'Archiving',
   ARCHIVED: 'Archived', ARCHIVED_COPY: 'Archived · Copy', ARCHIVED_SYMLINK: 'Archived', QUEUED_RECALL: 'Queued for recall',
   RECALLING: 'Recalling', FAILED: 'Failed',
 }

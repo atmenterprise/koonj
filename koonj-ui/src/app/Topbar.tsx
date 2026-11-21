@@ -151,7 +151,6 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
         </div>)}
       </div>
       {loading && <p className="search-no-results" role="status">Searching the catalog…</p>}
-      {incomplete && <p className="search-no-results" role="status">Some catalog results are unavailable.</p>}
       {!loading && !incomplete && !results.length && <p className="search-no-results" role="status">No matches found.</p>}
       {groups.some(group => group.results.length > resultLimit) &&
         <p className="search-no-results">Showing the first {resultLimit} matches per category. Refine your search to narrow the results.</p>}
@@ -228,8 +227,8 @@ function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (theme: Them
 
 function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
   const { user, logout } = useAuth()
+  const { notify } = useActivityNotifications()
   const [pending, setPending] = useState(false)
-  const [failed, setFailed] = useState(false)
   if (!user) return null
   return <ToolbarPopover label="User profile" triggerClass="profile-trigger" panelClass="profile-popover"
     triggerContent={<><span className="profile-avatar"><Icon name="user" size={18} /></span>
@@ -245,10 +244,9 @@ function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t
       <ThemePicker theme={theme} onChange={onThemeChange} />
       <Button variant="quiet" icon="logout" disabled={pending} onClick={() => {
         setPending(true)
-        setFailed(false)
-        void logout().catch(() => { setPending(false); setFailed(true) })
+        void logout().catch(() => notify({ tone: 'error', title: 'Logout failed', detail: 'Try again.' }))
+          .finally(() => setPending(false))
       }}>Logout</Button>
-      {failed && <p role="alert">Logout failed. Try again.</p>}
     </>}
   </ToolbarPopover>
 }
@@ -262,30 +260,33 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperat
     if (canOperate && jobHistory.data) syncJobs(jobHistory.data)
   }, [canOperate, jobHistory.data, syncJobs])
   const jobs = canOperate ? jobHistory.data ?? [] : []
-  const alerts = notices.filter(notice => !notice.read).reverse()
+  const unread = notices.filter(notice => !notice.read).length
+  const alerts = notices.slice().reverse()
   return <header className="topbar">
     <div className="topbar-path"><span>Workspace</span><Icon name="chevron" size={14} /><strong>{title}</strong></div>
     <GlobalSearch pages={pages} navigate={navigate} jobs={jobs} />
     <div className="topbar-actions">
-      <ToolbarPopover label={`Notifications (${alerts.length})`} triggerClass="alerts-trigger" panelClass="alerts-popover"
-        triggerContent={<><Icon name="bell" size={19} />{alerts.length > 0 && <span className="alerts-badge" aria-hidden="true">{alerts.length}</span>}</>}>
+      <ToolbarPopover label={`Notifications (${unread} unread)`} triggerClass="alerts-trigger" panelClass="alerts-popover"
+        triggerContent={<><Icon name="bell" size={19} />{unread > 0 && <span className="alerts-badge" aria-hidden="true">{unread}</span>}</>}>
         {close => <><h2>Notifications</h2><div className="notifications">
           {alerts.length ? alerts.map(notice => {
             const { icon, tile, label } = notificationPresentation[notice.tone]
             const jobId = canOperate ? notice.jobId : undefined
-            return <button type="button" className="notification" key={notice.id}
-              aria-label={`${label}: ${notice.title}${notice.detail ? '. ' + notice.detail : ''}. ${jobId ? 'View activity' : 'Mark as read'}`}
+            const detailId = notice.detail ? `notification-detail-${notice.id}` : undefined
+            return <button type="button" className={notice.read ? 'notification' : 'notification notification-unread'} key={notice.id}
+              aria-label={`${notice.read ? '' : 'Unread. '}${label}: ${notice.title}. ${jobId ? 'View activity' : 'View notification'}`}
+              aria-describedby={detailId}
               onClick={() => {
-                markRead(notice.id)
+                markRead(notice.id, !jobId)
                 close()
                 if (jobId) navigate('/activities?' + new URLSearchParams({ job: jobId }))
               }}>
               <span className={`icon-tile ${tile}`}><Icon name={icon} size={16} /></span>
               <span className="notification-text"><strong>{notice.title}</strong>
-                {notice.detail && <small>{notice.detail}</small>}</span>
-              <Icon name={jobId ? 'chevron' : 'check'} size={14} />
+                {notice.detail && <small id={detailId}>{notice.detail}</small>}</span>
+              <Icon name={jobId ? 'chevron' : 'external'} size={14} />
             </button>
-          }) : <p className="empty compact">No unread notifications.</p>}
+          }) : <p className="empty compact">No notifications yet.</p>}
         </div></>}
       </ToolbarPopover>
       <ProfileMenu theme={theme} onThemeChange={onThemeChange} />

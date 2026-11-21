@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { emptyMetadata, mergeMetadata } from './catalogMetadata'
 import type { CatalogMetadataValues as CustomMetadata } from '../../api/types'
-import { RequestError } from '../../shared/ui/feedback'
+import { useActivityNotifications } from '../../shared/notifications/ActivityNotifications'
 import { Badge, Button } from '../../shared/ui/primitives'
 
 const tagTones = ['blue', 'purple', 'green', 'yellow', 'red']
@@ -24,8 +24,8 @@ export function MetadataValues({ values }: { values: CustomMetadata }) {
 
 type PropertyRow = CustomMetadata['properties'][number] & { id: number }
 
-export default function MetadataEditor({ initial = emptyMetadata, inherited = emptyMetadata, bulk = false, formId, pending, requestError, onSave }: {
-  initial?: CustomMetadata; inherited?: CustomMetadata; bulk?: boolean; formId?: string; pending?: boolean; requestError?: Error | null; onSave: (metadata: CustomMetadata) => Promise<void>
+export default function MetadataEditor({ initial = emptyMetadata, inherited = emptyMetadata, bulk = false, formId, pending, onSave }: {
+  initial?: CustomMetadata; inherited?: CustomMetadata; bulk?: boolean; formId?: string; pending?: boolean; onSave: (metadata: CustomMetadata) => Promise<void>
 }) {
   const [tags, setTags] = useState(initial.tags)
   const [tagDraft, setTagDraft] = useState('')
@@ -33,12 +33,10 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
     ? initial.properties.map((property, id) => ({ ...property, id }))
     : [{ id: 0, name: '', value: '' }])
   const [nextId, setNextId] = useState(properties.length)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const { notify } = useActivityNotifications()
 
   function changeProperty(id: number, field: 'name' | 'value', value: string) {
     setProperties(rows => rows.map(row => row.id === id ? { ...row, [field]: value } : row))
-    setMessage('')
   }
 
   function updatedTags() {
@@ -50,17 +48,14 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
   function addTags() {
     setTags(updatedTags())
     setTagDraft('')
-    setMessage('')
-    setError('')
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    setMessage('')
-    setError('')
     const pairs = properties.map(({ name, value }) => ({ name: name.trim(), value: value.trim() }))
     if (pairs.some(({ name, value }) => (!name && value) || (name && !value))) {
-      setError('Enter both a name and a value for each property, or remove the row.')
+      notify({ tone: 'error', title: 'Check custom properties',
+        detail: 'Enter both a name and a value for each property, or remove the row.' })
       return
     }
     const values = mergeMetadata(emptyMetadata, {
@@ -68,13 +63,12 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
       properties: pairs.filter(pair => pair.name),
     })
     if (bulk && !values.tags.length && !values.properties.length) {
-      setError('Add at least one tag or property.')
+      notify({ tone: 'error', title: 'Add at least one tag or property' })
       return
     }
     try { await onSave(values) } catch { return }
     setTags(values.tags)
     setTagDraft('')
-    setMessage('Metadata saved.')
   }
 
   return <form id={formId} className="metadata-editor" onSubmit={event => void submit(event)}>
@@ -88,13 +82,12 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
         {tags.map(tag => <li key={tag}><Badge tone={tagTone(tag)}>{tag}
           <button type="button" aria-label={'Remove tag ' + tag} onClick={() => {
             setTags(previous => previous.filter(item => item !== tag))
-            setMessage('')
           }}>×</button>
         </Badge></li>)}
       </ul>}
       <div className="tag-entry">
         <input aria-label="Add custom tags" placeholder="Add a tag or separate with commas" value={tagDraft}
-          onChange={event => { setTagDraft(event.target.value); setMessage('') }}
+          onChange={event => setTagDraft(event.target.value)}
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); addTags() }
           }} />
@@ -110,7 +103,6 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
           onChange={event => changeProperty(property.id, 'value', event.target.value)} />
         <Button icon="close" className="icon-button" aria-label={'Remove property ' + (index + 1)} onClick={() => {
           setProperties(rows => rows.filter(row => row.id !== property.id))
-          setMessage('')
         }} />
       </div>)}
       <Button onClick={() => {
@@ -118,9 +110,6 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
         setNextId(nextId + 1)
       }}>Add property</Button>
     </fieldset>
-    <RequestError error={requestError ?? null} />
-    {error && <p className="error-text" role="alert">{error}</p>}
-    {message && <p className="admin-notice" role="status">{message}</p>}
     {!formId && <div className="row-actions"><Button variant="primary" type="submit" disabled={pending}>{pending ? 'Saving…' : bulk ? 'Apply metadata' : 'Save metadata'}</Button></div>}
   </form>
 }

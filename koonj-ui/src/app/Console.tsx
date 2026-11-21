@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import AdminPage from '../modules/admin/AdminPage'
 import AuditLogPage from '../modules/activity/AuditLogPage'
 import DashboardPage from '../modules/home/DashboardPage'
@@ -6,6 +6,7 @@ import StorageBrowserPage from '../modules/catalog/StorageBrowserPage'
 import StorageStatusPage from '../modules/storage/StorageStatusPage'
 import { Topbar, themes, type Theme } from './Topbar'
 import { NotificationPopup } from '../shared/notifications/NotificationPopup'
+import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { useAuth } from '../auth/AuthProvider'
 import { Button, Icon } from '../shared/ui/primitives'
 
@@ -26,6 +27,8 @@ export default function Console() {
     return themes.find(option => option.id === preference)?.id ?? 'classic'
   })
   const { hasRole } = useAuth()
+  const { notify } = useActivityNotifications()
+  const deniedLocation = useRef<string | undefined>(undefined)
   const canAdminister = hasRole('KOONJ_ADMIN')
   const canOperate = canAdminister || hasRole('KOONJ_OPERATOR')
   const canView = (item: typeof pages[number]) =>
@@ -33,6 +36,19 @@ export default function Console() {
   const [path, query] = location.split('?')
   const params = new URLSearchParams(query)
   const page = pages.find(item => item.path.toLowerCase() === path.toLowerCase().replace(/\/+$/, '')) ?? pages[0]
+  const pageAllowed = canView(page)
+
+  useEffect(() => {
+    if (pageAllowed) {
+      deniedLocation.current = undefined
+      return
+    }
+    if (deniedLocation.current === location) return
+    deniedLocation.current = location
+    notify({ tone: 'error', title: 'Access denied', detail: 'Insufficient permissions for this action' })
+    window.history.replaceState(null, '', '/Home')
+    setLocation('/Home')
+  }, [location, notify, pageAllowed])
 
   useEffect(() => {
     const changed = () => setLocation(currentLocation())
@@ -85,16 +101,7 @@ export default function Console() {
       <Topbar title={page.title} pages={pages.filter(canView)} navigate={navigate} theme={theme}
         onThemeChange={setTheme} canOperate={canOperate} />
       <main id="main-content" className="main-content" tabIndex={-1}>
-        {!canView(page) ? <section className="api-page-state" aria-labelledby="access-denied-title">
-          <div className="panel api-page-card">
-            <span className="icon-tile yellow"><Icon name="warning" size={24} /></span>
-            <h1 id="access-denied-title">Access denied</h1>
-            <p>Your role does not have permission to open this page.</p>
-            <div className="row-actions api-page-actions">
-              <Button variant="primary" icon="home" onClick={() => navigate('/Home')}>Go to Home</Button>
-            </div>
-          </div>
-        </section> : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
+        {!pageAllowed ? null : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
             initialPath={params.get('path')} navigate={navigate} />
           : page.path === '/activities' ? <AuditLogPage key={location} initialJob={params.get('job')} />
           : page.path === '/admin' ? <AdminPage section={params.get('section')} job={params.get('job')} navigate={navigate} />

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { TransferJobDTO } from '../../api/types'
-import { jobMessage, reconcileJobs, type ActivityMessage, type ActivityNotice } from './activity'
+import { errorDetail, jobMessage, reconcileJobs, type ActivityMessage, type ActivityNotice } from './activity'
 
 interface ActivityOptions<T> {
   started: string
@@ -11,8 +11,9 @@ interface ActivityOptions<T> {
 interface NotificationContextValue {
   notices: ActivityNotice[]
   dialog: HTMLDialogElement | undefined
+  notify: (message: ActivityMessage) => void
   dismiss: (id: number) => void
-  markRead: (id: number) => void
+  markRead: (id: number, showPopup?: boolean) => void
   registerDialog: (dialog: HTMLDialogElement) => () => void
   syncJobs: (jobs: TransferJobDTO[]) => void
   run: <T>(options: ActivityOptions<T>, action: () => Promise<T>) => Promise<T>
@@ -32,13 +33,17 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
   }, [])
 
   const dismiss = useCallback((id: number) => {
-    setNotices(previous => previous.flatMap(notice => notice.id !== id ? [notice]
-      : notice.pending || !notice.read ? [{ ...notice, dismissed: true }] : []))
+    setNotices(previous => previous.map(notice => notice.id === id ? { ...notice, dismissed: true } : notice))
   }, [])
 
-  const markRead = useCallback((id: number) => {
-    setNotices(previous => previous.flatMap(notice => notice.id !== id ? [notice]
-      : notice.pending || !notice.dismissed ? [{ ...notice, read: true }] : []))
+  const markRead = useCallback((id: number, showPopup = false) => {
+    setNotices(previous => previous.map(notice => notice.id === id
+      ? { ...notice, read: true, dismissed: showPopup ? false : notice.dismissed } : notice))
+  }, [])
+
+  const notify = useCallback((message: ActivityMessage) => {
+    const id = ++nextId.current
+    setNotices(previous => [...previous, { id, ...message, pending: false }])
   }, [])
 
   const syncJobs = useCallback((jobs: TransferJobDTO[]) => {
@@ -60,7 +65,7 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
       publish(options.complete(result))
       return result
     } catch (failure) {
-      publish({ tone: 'error', title: options.failed, detail: failure instanceof Error ? failure.message : undefined })
+      publish({ tone: 'error', title: options.failed, detail: errorDetail(failure) })
       throw failure
     }
   }, [])
@@ -68,8 +73,8 @@ export function ActivityNotifications({ children }: { children: ReactNode }) {
   const runJob = useCallback((name: string, action: () => Promise<TransferJobDTO>) =>
     run({ started: name + ' started', failed: name + ' could not start', complete: jobMessage }, action), [run])
 
-  const value = useMemo(() => ({ notices, dialog: dialogs.at(-1), dismiss, markRead, registerDialog, syncJobs, run, runJob }),
-    [notices, dialogs, dismiss, markRead, registerDialog, syncJobs, run, runJob])
+  const value = useMemo(() => ({ notices, dialog: dialogs.at(-1), notify, dismiss, markRead, registerDialog, syncJobs, run, runJob }),
+    [notices, dialogs, notify, dismiss, markRead, registerDialog, syncJobs, run, runJob])
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>
 }

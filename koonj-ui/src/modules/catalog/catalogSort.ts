@@ -4,8 +4,8 @@ export const catalogColumns = {
   state: 'Storage state',
   temperature: 'Temperature',
   modified: 'Last modified date',
-  checksum: 'Checksum',
-  metadata: 'Tags and custom properties',
+  integrity: 'Integrity',
+  tags: 'Custom Tags',
 } as const
 
 export type CatalogColumn = keyof typeof catalogColumns
