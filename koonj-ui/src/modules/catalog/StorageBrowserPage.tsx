@@ -1,17 +1,20 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useMemo, useRef, useState } from 'react'
-import { useCatalogSnapshot, useCatalogLocations } from '../../api/hooks/queries'
+import { useScanMutation } from '../../api/hooks/mutations'
+import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { folderTree, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
-import type { CatalogMetadataTarget } from '../../api/types'
+import type { CatalogMetadataTarget, CatalogMetadataValues } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
+import { RequestError } from '../../shared/ui/feedback'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
-import { LoadingRows } from '../../shared/ui/feedback'
 import { Badge, Button, Icon, bytes, count, date, storageName, temperatureTone } from '../../shared/ui/primitives'
 import { FileInspector } from './FileInspector'
-import { metadataFor, metadataIndex, useCatalogMetadata } from './catalogMetadata'
+import { directMetadataFor, metadataFor, metadataIndex, useCatalogMetadata } from './catalogMetadata'
+import { catalogColumns, compareCatalogValues, type CatalogColumn, type CatalogSort, type SortValue } from './catalogSort'
 import { BulkMetadataDialog } from './MetadataForm'
-import { folderContents } from './folderContents'
+import { folderContents, folderTotals } from './folderContents'
 import { planTransfers, transferTargets } from './transferSelection'
+import { SymlinkTarget } from './SymlinkTarget'
 import { TransferDialog, type CatalogTransferAction } from './TransferDialog'
 
 function Folders({ nodes, prefix, onChoose }: { nodes: FolderNode[]; prefix: string; onChoose: (prefix: string) => void }) {
@@ -37,6 +40,11 @@ function FolderBranch({ node, prefix, onChoose }: { node: FolderNode; prefix: st
   </li>
 }
 
+function visibleFolder(nodes: FolderNode[], requested: string, parent = ''): string {
+  const child = nodes.find(node => requested.startsWith(node.prefix))
+  return child ? visibleFolder(child.children, requested, child.prefix) : parent
+}
+
 function temperatureOf(modified: string | null) {
   if (!modified) return undefined
   const age = (Date.now() - Date.parse(modified)) / 86_400_000
@@ -44,51 +52,104 @@ function temperatureOf(modified: string | null) {
   return age < 15 ? 'HOT' : age < 30 ? 'WARM' : 'COLD'
 }
 
-export default function StorageBrowserPage({ initialConnection, initialEntry, initialPath }: {
-  initialConnection: string | null; initialEntry: string | null; initialPath: string | null
+function MetadataCell({ values, failed }: { values?: CatalogMetadataValues; failed: boolean }) {
+  if (!values?.tags.length && !values?.properties.length) {
+    return <span role="cell" className="catalog-metadata-empty">{failed ? 'Unavailable' : values ? '—' : 'Loading…'}</span>
+  }
+
+  return <div role="cell" className="catalog-metadata-cell">
+    <div className="catalog-metadata-scroll" tabIndex={0} role="group" aria-label="Tags and custom properties"
+      onClick={event => event.stopPropagation()}>
+      {values.tags.length > 0 && <ul className="catalog-tags" aria-label="Tags">
+        {values.tags.map(tag => <li key={tag}><Badge tone="blue">{tag}</Badge></li>)}
+      </ul>}
+      {values.properties.length > 0 && <dl className="catalog-properties" aria-label="Custom properties">
+        {values.properties.map(property => <div key={property.name}><dt>{property.name}</dt><dd>{property.value}</dd></div>)}
+      </dl>}
+    </div>
+  </div>
+}
+
+export default function StorageBrowserPage({ initialConnection, initialEntry, initialPath, navigate }: {
+  initialConnection: string | null; initialEntry: string | null; initialPath: string | null; navigate: (path: string) => void
 }) {
   const { hasRole } = useAuth()
   const canTransfer = hasRole('KOONJ_ADMIN') || hasRole('KOONJ_OPERATOR')
   const connections = useCatalogLocations()
   const endpoints = connections.data ?? []
   const [endpointId, setEndpointId] = useState(initialConnection)
-  const [folder, setFolder] = useState(() => initialPath?.split('/').slice(0, -1).map(part => part + '/').join('') ?? '')
-  const [search, setSearch] = useState(() => initialPath?.split('/').at(-1) ?? '')
-  const [page, setPage] = useState(0)
+  const [requestedFolder, setFolder] = useState(() => initialPath?.split('/').slice(0, -1).map(part => part + '/').join('') ?? '')
+  const [sort, setSort] = useState<CatalogSort>()
+  const [page, setPage] = useState<number>()
   const [pageSize, setPageSize] = useState(50)
   const [width, setWidth] = useState(250)
   const [fullscreen, setFullscreen] = useState(false)
   const drag = useRef<{ x: number; width: number } | null>(null)
   const [selection, setSelection] = useState<Set<string>>(() => new Set())
-  const [inspectedId, setInspectedId] = useState<string | undefined>(initialEntry ?? undefined)
+  const [inspectedId, setInspectedId] = useState<string | undefined>(initialEntry ?? (initialPath?.endsWith('/') ? undefined : initialPath ?? undefined))
   const [editingSelection, setEditingSelection] = useState(false)
   const [action, setAction] = useState<CatalogTransferAction>()
   const selectedEndpoint = endpoints.find(item => item.id === endpointId) ?? endpoints[0]
-  const term = search.trim().toLowerCase().replace(/^\/+/, '')
+  const scan = useScanMutation()
+  const jobs = useTransferJobs(canTransfer)
+  const scanning = jobs.data?.some(job => job.operation === 'SCAN' && job.sourceConnectionId === selectedEndpoint?.id
+    && (job.status === 'PENDING' || job.status === 'RUNNING'))
   const snapshot = useCatalogSnapshot(selectedEndpoint?.id, !!selectedEndpoint)
   const annotations = useCatalogMetadata(selectedEndpoint?.id)
   const index = useMemo(() => metadataIndex(annotations.data ?? []), [annotations.data])
-  const folders = useMemo(() => folderTree(snapshot.data?.map(file => file.relativePath) ?? []), [snapshot.data])
+  const folders = useMemo(() => folderTree(snapshot.data?.map(file => file.entryType === 'DIRECTORY' ? file.relativePath.replace(/\/+$/, '') + '/' : file.relativePath) ?? []), [snapshot.data])
+  const folder = snapshot.data ? visibleFolder(folders, requestedFolder) : requestedFolder
+  const totalsByFolder = useMemo(() => folderTotals(folders, snapshot.data ?? []), [folders, snapshot.data])
+  const locationTotals = totalsByFolder.get(folder)
   const files = snapshot.data ?? []
-  const contents = useMemo(() => folderContents(folders, files, folder, target => {
-    if (!term) return true
-    const metadata = metadataFor(index, target).effective
-    return [target.path, ...metadata.tags, ...metadata.properties.flatMap(item => [item.name, item.value])]
-      .some(value => value.toLowerCase().includes(term))
-  }), [folders, files, folder, index, term])
-  const total = contents.folders.length + contents.files.length
+  const contents = useMemo(() => folderContents(folders, files, folder), [folders, files, folder])
+  const ordered = useMemo(() => {
+    const entries = [
+      ...contents.folders.map(node => ({ kind: 'folder' as const, key: node.prefix, node })),
+      ...contents.files.map(file => ({ kind: 'file' as const, key: file.id, file })),
+    ]
+    if (!sort) return entries
+    const { column, direction } = sort
+
+    function sortValue(entry: typeof entries[number]): SortValue {
+      const file = entry.kind === 'file' ? entry.file : undefined
+      switch (column) {
+        case 'name': return entry.kind === 'folder' ? entry.node.name : entry.file.fileName
+        case 'size': return entry.kind === 'folder' ? totalsByFolder.get(entry.node.prefix)?.sizeBytes : file?.sizeBytes
+        case 'state': return file ? stateLabels[file.storageState] : undefined
+        case 'temperature': {
+          const temperature = temperatureOf(file?.lastModifiedAt ?? null)
+          return temperature ? { COLD: 0, WARM: 1, HOT: 2 }[temperature] : undefined
+        }
+        case 'modified': return file?.lastModifiedAt ? Date.parse(file.lastModifiedAt) : undefined
+        case 'checksum': return file ? Number(!!file.checksumSha256) : undefined
+        case 'metadata': {
+          const target: CatalogMetadataTarget = entry.kind === 'folder' ? { scope: 'FOLDER', path: entry.node.prefix }
+            : { scope: 'FILE', path: entry.file.relativePath }
+          const direct = directMetadataFor(index, target)
+          return [...direct.tags, ...direct.properties.map(property => property.name + ' ' + property.value)].join(' ') || undefined
+        }
+      }
+    }
+
+    return entries.map(entry => ({ entry, value: sortValue(entry) }))
+      .sort((left, right) => compareCatalogValues(left.value, right.value, direction))
+      .map(({ entry }) => entry)
+  }, [contents, index, sort, totalsByFolder])
+  const total = ordered.length
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const currentPage = Math.min(page, totalPages - 1)
-  const start = currentPage * pageSize
-  const stop = start + pageSize
-  const visibleFolders = contents.folders.slice(start, stop)
-  const rows = contents.files.slice(Math.max(0, start - contents.folders.length), Math.max(0, stop - contents.folders.length))
+  const initialIndex = ordered.findIndex(entry => entry.key === initialEntry
+    || (!initialEntry && entry.kind === 'file' && entry.file.relativePath === initialPath))
+  const currentPage = Math.min(page ?? Math.max(0, Math.floor(initialIndex / pageSize)), totalPages - 1)
+  const visible = ordered.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+  const visibleFolders = visible.flatMap(entry => entry.kind === 'folder' ? [entry.node] : [])
+  const rows = visible.flatMap(entry => entry.kind === 'file' ? [entry.file] : [])
   const segments = folder.split('/').filter(Boolean)
   const selected = rows.filter(file => selection.has(file.id))
   const selectedFolders = visibleFolders.filter(node => selection.has(node.prefix))
   const selectedTargets: CatalogMetadataTarget[] = [...selected.map(file => ({ scope: 'FILE' as const, path: file.relativePath })),
     ...selectedFolders.map(node => ({ scope: 'FOLDER' as const, path: node.prefix }))]
-  const inspected = files.find(file => file.id === inspectedId)
+  const inspected = files.find(file => file.id === inspectedId || (inspectedId === initialPath && file.relativePath === initialPath))
   const inspectedFolder = visibleFolders.find(node => node.prefix === inspectedId)
   const inspectedTarget: CatalogMetadataTarget | undefined = inspected ? { scope: 'FILE', path: inspected.relativePath }
     : inspectedFolder ? { scope: 'FOLDER', path: inspectedFolder.prefix } : undefined
@@ -96,8 +157,9 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   const inspectorPlans = inspectedTarget ? planTransfers(selectedEndpoint, endpoints, inspected ? [inspected] : [],
     inspectedFolder ? [inspectedFolder] : [], files) : undefined
   const transfer = action && plans[action]
-  const targets = action && transfer ? transferTargets(action, transfer.source, endpoints) : []
-  const itemKeys = [...visibleFolders.map(node => node.prefix), ...rows.map(file => file.id)]
+  const targets = action && transfer ? transferTargets(action, transfer.source, endpoints)
+    .filter(target => !transfer.destinationId || target.id === transfer.destinationId) : []
+  const itemKeys = visible.map(entry => entry.key)
 
   function toggle(key: string, checked: boolean) {
     setSelection(previous => {
@@ -110,13 +172,13 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
 
   function transferInspected(operation: CatalogTransferAction) {
     if (!inspectedId) return
-    setSelection(new Set([inspectedId]))
+    setSelection(new Set([inspected?.id ?? inspectedId]))
     setInspectedId(undefined)
     setAction(operation)
   }
 
   const viewport = useRef<HTMLDivElement>(null)
-  const virtual = useVirtualizer({ count: rows.length + visibleFolders.length, getScrollElement: () => viewport.current, estimateSize: () => 44, overscan: 8 })
+  const virtual = useVirtualizer({ count: visible.length, getScrollElement: () => viewport.current, estimateSize: () => 58, overscan: 8 })
 
   function goToPage(index: number) {
     setPage(index)
@@ -127,16 +189,20 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
 
   function openFolder(prefix: string) {
     setFolder(prefix)
-    setSearch('')
+    goToPage(0)
+  }
+
+  function sortBy(column: CatalogColumn) {
+    setSort(previous => ({ column, direction: previous?.column === column && previous.direction === 'ascending'
+      ? 'descending' : 'ascending' }))
     goToPage(0)
   }
 
   const resize = (size: number) => setWidth(Math.min(360, Math.max(210, size)))
 
-  const failed = connections.isError ? connections : snapshot.isError ? snapshot : term ? annotations : undefined
+  const failed = connections.isError ? connections : snapshot.isError ? snapshot : undefined
   if (failed?.error && !action) return <ApiPageState loadingLabel="Loading catalog" error={failed.error}
-    retry={() => void failed.refetch()} retrying={failed.isFetching}
-    reset={failed === annotations ? () => { setSearch(''); goToPage(0) } : undefined} />
+    retry={() => void failed.refetch()} retrying={failed.isFetching} />
   if (connections.isPending || (selectedEndpoint && snapshot.isPending && !action)) {
     return <ApiPageState loadingLabel="Loading catalog" />
   }
@@ -144,7 +210,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   return <div className={fullscreen ? 'explorer-fullscreen' : undefined} onKeyDown={event => {
     if (event.key === 'Escape' && fullscreen && !event.currentTarget.querySelector('dialog[open]')) setFullscreen(false)
   }}>
-    <div className="page-heading"><div><h1>Catalog explorer</h1><p>Browse, inspect and move files across source servers and S3.</p></div>
+    <div className="page-heading"><div><h1>Catalog</h1><p>Browse, inspect and move files across servers.</p></div>
       <Button icon={fullscreen ? 'minimize' : 'maximize'} aria-pressed={fullscreen} onClick={() => setFullscreen(!fullscreen)}>
         {fullscreen ? 'Exit full screen' : 'Full screen'}
       </Button>
@@ -194,64 +260,94 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                 </span>
               })}
             </nav>
-            <div className="catalog-title"><h2>{segments.at(-1) ?? selectedEndpoint.name}</h2><Badge>{selectedEndpoint.providerType}</Badge></div>
-          </div>
-          <div className="table-tools catalog-tools">
-            <label className="search catalog-search"><Icon name="search" size={16} />
-              <input type="search" aria-label="Search this location" placeholder="Search names, tags or properties" value={search}
-                onChange={event => { setSearch(event.target.value); goToPage(0) }} /></label>
+            <div className="catalog-location-bar">
+              <div className="catalog-title"><h2>{segments.at(-1) ?? selectedEndpoint.name}</h2><Badge>{selectedEndpoint.providerType}</Badge></div>
+              {locationTotals && <dl className="catalog-location-totals" aria-label="Catalog totals including subfolders">
+                <div><dt>Size</dt><dd>{bytes(locationTotals.sizeBytes)}</dd></div>
+                <div><dt>Total files</dt><dd>{count(locationTotals.files)}</dd></div>
+                <div><dt>Total folders</dt><dd>{count(locationTotals.folders)}</dd></div>
+              </dl>}
+            </div>
+            {canTransfer && <div className="row-actions">
+              <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || scanning}
+                onClick={() => scan.mutate(selectedEndpoint.id)}>{scanning ? 'Scanning…' : 'Scan'}</Button>
+              <RequestError error={scan.error} />
+            </div>}
           </div>
           <div className="catalog-viewport" ref={viewport}>
-            <div className="catalog-table" role="table" aria-label="Catalog files">
+            <div className="catalog-table catalog-table-metadata" role="table" aria-label="Catalog files">
               <div className="catalog-row catalog-table-header" role="row">
                 <span role="columnheader"><input type="checkbox" aria-label="Select all items on this page"
                   disabled={!canTransfer || !itemKeys.length} checked={itemKeys.length > 0 && selectedTargets.length === itemKeys.length}
                   onChange={event => setSelection(event.target.checked ? new Set(itemKeys) : new Set())} /></span>
-                {['Name', 'Size', 'Storage state', 'Temperature', 'Last modified date', 'Checksum'].map(label => <span role="columnheader" key={label}>{label}</span>)}
+                {(Object.keys(catalogColumns) as CatalogColumn[]).map(column => {
+                  const direction = sort?.column === column ? sort.direction : undefined
+                  return <span role="columnheader" key={column} aria-sort={direction}>
+                    <button type="button" className="catalog-sort" onClick={() => sortBy(column)}>
+                      {catalogColumns[column]} <span aria-hidden="true">{direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : '↕'}</span>
+                    </button>
+                  </span>
+                })}
               </div>
               <div className="virtual-items" role="rowgroup" style={{ height: virtual.getTotalSize() }}>
                 {virtual.getVirtualItems().map(item => {
-                  const node = visibleFolders[item.index]
+                  const entry = visible[item.index]
+                  const target: CatalogMetadataTarget = entry.kind === 'folder' ? { scope: 'FOLDER', path: entry.node.prefix }
+                    : { scope: 'FILE', path: entry.file.relativePath }
+                  const metadata = <MetadataCell values={annotations.data ? directMetadataFor(index, target) : undefined}
+                    failed={annotations.isError} />
                   const position = { transform: `translateY(${item.start}px)`, height: item.size }
-                  if (node) return <div className={`catalog-row virtual-row ${selection.has(node.prefix) ? 'checked' : ''}`}
-                    role="row" key={node.prefix} style={position} onClick={() => openFolder(node.prefix)}>
-                    <span role="cell" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={'Select folder ' + node.name}
-                      disabled={!canTransfer} checked={canTransfer && selection.has(node.prefix)}
-                      onChange={event => toggle(node.prefix, event.target.checked)} /></span>
-                    <span role="cell" className="catalog-name">
-                      <button type="button" className="text-button" onClick={event => { event.stopPropagation(); openFolder(node.prefix) }}>
-                        <Icon name="folder" size={17} /><span>{node.name}</span>
-                      </button>
-                      <Button className="icon-button folder-open" variant="quiet" icon="file" aria-label={'Inspect folder ' + node.name}
-                        onClick={event => { event.stopPropagation(); setInspectedId(node.prefix) }} />
-                    </span>
-                    {Array.from({ length: 5 }, (_, index) => <span role="cell" key={index}>—</span>)}
-                  </div>
-                  const file = rows[item.index - visibleFolders.length]
+                  if (entry.kind === 'folder') {
+                    const { node } = entry
+                    return <div className={`catalog-row virtual-row ${selection.has(node.prefix) ? 'checked' : ''}`}
+                      role="row" key={node.prefix} style={position} onClick={() => openFolder(node.prefix)}>
+                      <span role="cell" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={'Select folder ' + node.name}
+                        disabled={!canTransfer} checked={canTransfer && selection.has(node.prefix)}
+                        onChange={event => toggle(node.prefix, event.target.checked)} /></span>
+                      <span role="cell" className="catalog-name">
+                        <button type="button" className="text-button" onClick={event => { event.stopPropagation(); openFolder(node.prefix) }}>
+                          <Icon name="folder" size={17} /><span>{node.name}</span>
+                        </button>
+                        <Button className="icon-button folder-open" variant="quiet" icon="file" aria-label={'Inspect folder ' + node.name}
+                          onClick={event => { event.stopPropagation(); setInspectedId(node.prefix) }} />
+                      </span>
+                      <span role="cell">{bytes(totalsByFolder.get(node.prefix)?.sizeBytes ?? 0)}</span>
+                      {Array.from({ length: 4 }, (_, index) => <span role="cell" key={index}>—</span>)}
+                      {metadata}
+                    </div>
+                  }
+                  const { file } = entry
                   const stateLabel = stateLabels[file.storageState]
                   const temperature = temperatureOf(file.lastModifiedAt)
                   const storageClass = file.s3StorageClass
                   const archived = file.storageState === 'ARCHIVED'
+                  const symlink = file.entryType === 'SYMLINK'
                   return <div className={`catalog-row virtual-row ${selection.has(file.id) ? 'checked' : ''}`} role="row" key={file.id}
                     style={position} onClick={() => setInspectedId(file.id)}>
                     <span role="cell" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={'Select ' + file.fileName} disabled={!canTransfer} checked={canTransfer && selection.has(file.id)}
                       onChange={event => toggle(file.id, event.target.checked)} /></span>
-                    <span className="catalog-name" role="cell"><button className="text-button" title={file.relativePath}
-                      onClick={() => setInspectedId(file.id)}><Icon name="file" size={15} /><span>{file.fileName}</span></button></span>
+                    <div className="catalog-entry-name" role="cell">
+                      <div className="catalog-name"><button className="text-button" title={file.relativePath}
+                        onClick={() => setInspectedId(file.id)}><Icon name={symlink ? 'link' : 'file'} size={15} /><span>{file.fileName}</span></button>
+                        {symlink && <Badge tone="blue">SYMLINK</Badge>}
+                      </div>
+                      {symlink && <SymlinkTarget file={file} locations={endpoints} navigate={navigate} />}
+                    </div>
                     <span role="cell">{bytes(file.sizeBytes)}</span>
-                    <span role="cell"><Badge dot tone={archived ? 'green' : file.storageState === 'FAILED' ? 'red' : 'neutral'}>
+                    <span role="cell"><Badge dot tone={archived || file.storageState === 'ARCHIVED_COPY' ? 'green' : file.storageState === 'FAILED' ? 'red' : 'neutral'}>
                       {archived && storageClass ? stateLabel + ' · ' + (storageName[storageClass] ?? storageClass) : stateLabel}
                     </Badge></span>
                     <span role="cell">{temperature ? <Badge tone={temperatureTone[temperature]}>{temperature}</Badge> : '—'}</span>
                     <span role="cell">{file.lastModifiedAt ? date(file.lastModifiedAt) : '—'}</span>
                     <span role="cell">{file.checksumSha256 ? <Badge tone="green">Recorded</Badge> : '—'}</span>
+                    {metadata}
                   </div>
                 })}
               </div>
             </div>
-            {term && annotations.isPending ? <LoadingRows label="Loading files" /> : total === 0 &&
-              <div className="empty catalog-empty"><Icon name="folder" size={26} /><strong>No matching items</strong>
-                <span>Try a different search or open another folder.</span></div>}
+            {total === 0 && <div className="empty catalog-empty">
+              <Icon name="folder" size={26} /><strong>This folder is empty</strong>
+            </div>}
           </div>
           <div className="catalog-pagination">
             <span>{count(total)} {total === 1 ? 'item' : 'items'}</span>
@@ -270,15 +366,11 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
       <strong>{count(selectedTargets.length)} selected</strong>
       <Button icon="close" aria-label="Clear selection" onClick={() => setSelection(new Set())} />
       <Button variant="primary" icon="layers" onClick={() => setEditingSelection(true)}>Edit metadata</Button>
-      <Button icon="upload" disabled={!plans.archive} onClick={() => setAction('archive')}>
-        {selectedFolders.length ? 'Archive folders' : 'Archive to S3'}
-      </Button>
-      <Button icon="download" disabled={!plans.recall} onClick={() => setAction('recall')}>
-        {selectedFolders.length ? 'Recall folders' : 'Recall to Local/NAS'}
-      </Button>
+      {plans.archive && <Button icon="upload" onClick={() => setAction('archive')}>Archive to S3</Button>}
+      {plans.recall && <Button icon="download" onClick={() => setAction('recall')}>Recall to Source</Button>}
     </div>}
     {selectedEndpoint && inspectedTarget && <FileInspector key={inspectedId} file={inspected} target={inspectedTarget}
-      location={selectedEndpoint} connections={endpoints} metadata={annotations.data ? metadataFor(index, inspectedTarget) : undefined}
+      location={selectedEndpoint} connections={endpoints} navigate={navigate} metadata={annotations.data ? metadataFor(index, inspectedTarget) : undefined}
       metadataError={annotations.error} onRetry={() => void annotations.refetch()} writable={canTransfer}
       onClose={() => setInspectedId(undefined)} onOpen={inspectedFolder ? () => openFolder(inspectedFolder.prefix) : undefined}
       onArchive={canTransfer && inspectorPlans?.archive ? () => transferInspected('archive') : undefined}

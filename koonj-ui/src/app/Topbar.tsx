@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { useCatalogFiles, useCatalogLocations, useTransferJobs } from '../api/hooks/queries'
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../api/hooks/queries'
 import { jobLabels, operationLabels } from '../api/mappers'
 import type { TransferJobDTO } from '../api/types'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
@@ -7,6 +7,9 @@ import { notificationPresentation } from '../shared/notifications/NotificationPo
 import { useAuth } from '../auth/AuthProvider'
 import type { KoonjRole } from '../auth/keycloak'
 import type { Navigate } from '../shared/ui/feedback'
+import { useQueries } from '@tanstack/react-query'
+import { catalogMetadataOptions } from '../modules/catalog/catalogMetadata'
+import { catalogSearchResults } from '../modules/catalog/catalogSearchResults'
 import { Badge, Button, Icon, type IconName } from '../shared/ui/primitives'
 
 type SearchPage = { path: string; title: string; icon: IconName }
@@ -33,29 +36,50 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(-1)
-  const term = query.trim()
+  const term = query.trim().replace(/^\/+/, '').toLowerCase()
+  const searching = open && !!term
   const locations = useCatalogLocations()
-  const searchPrefix = term.replace(/^\/+/, '')
-  const files = useCatalogFiles({ pathPrefix: searchPrefix, size: 6 }, open && searchPrefix.length > 1)
-  const match = (value: string) => value.toLowerCase().includes(term.toLowerCase())
+  const files = useCatalogSnapshot(undefined, searching)
+  const endpoints = locations.data ?? []
+  const metadata = useQueries({
+    queries: searching ? endpoints.map(endpoint => catalogMetadataOptions(endpoint.id)) : [],
+    combine: queries => ({
+      entries: queries.map(result => result.data),
+      loading: queries.some(result => result.isPending),
+      failed: queries.some(result => result.isError),
+    }),
+  })
+  const catalog = useMemo(() => {
+    if (!searching) return { files: [], folders: [] }
+    const entries = new Map(endpoints.flatMap((endpoint, index) => {
+      const values = metadata.entries[index]
+      return values ? [[endpoint.id, values] as const] : []
+    }))
+    return catalogSearchResults(files.data ?? [], endpoints, entries, value => value.toLowerCase().includes(term))
+  }, [searching, endpoints, files.data, metadata.entries, term])
+  const match = (value: string) => value.toLowerCase().includes(term)
   const groups = open ? [
-    { title: 'Pages', results: pages.filter(page => match(page.title)).map(page => ({
+    { title: 'Workspace pages', results: pages.filter(page => match(page.title + ' Workspace Koonj')).map(page => ({
       title: page.title, detail: 'Workspace', icon: page.icon, href: page.path,
     })) },
-    ...(term ? [
-      { title: 'Storage endpoints', results: (locations.data ?? []).filter(location => match(location.name))
-        .slice(0, 6).map(location => ({ title: location.name, detail: location.providerType, icon: 'server' as const,
+    ...(searching ? [
+      { title: 'Storage endpoints', results: endpoints.filter(location => match(
+        [location.name, location.id, location.providerType, location.bucket, location.role].join(' ')))
+        .map(location => ({ title: location.name, detail: location.providerType, icon: 'server' as const,
           href: '/explorer?' + new URLSearchParams({ endpoint: location.id }) })) },
-      { title: 'Files', results: (files.data?.content ?? []).map(({ file }) => ({
-        title: file.fileName, detail: file.relativePath, icon: 'file' as const,
-        href: '/explorer?' + new URLSearchParams({ endpoint: file.sourceConnectionId, entry: file.id, path: file.relativePath }),
-      })) },
-      { title: 'Activities', results: jobs.filter(job => match(job.id + ' ' + operationLabels[job.operation] + ' ' + jobLabels[job.status]))
-        .slice(0, 6).map(job => ({ title: operationLabels[job.operation], detail: job.id, icon: 'activity' as const,
+      { title: 'Folders', results: catalog.folders },
+      { title: 'Files', results: catalog.files },
+      { title: 'Activities', results: jobs.filter(job => [job.id, operationLabels[job.operation], jobLabels[job.status],
+        job.details ?? '', job.triggeredBy ?? '', ...job.requestedPaths].some(match))
+        .map(job => ({ title: operationLabels[job.operation], detail: job.id, icon: 'activity' as const,
           href: '/activities?' + new URLSearchParams({ job: job.id }) })) },
     ] : []),
   ].filter(group => group.results.length) : []
-  const results = groups.flatMap(group => group.results)
+  const resultLimit = 25
+  const visibleGroups = groups.map(group => ({ ...group, results: group.results.slice(0, resultLimit) }))
+  const results = visibleGroups.flatMap(group => group.results)
+  const loading = searching && (locations.isPending || files.isPending || metadata.loading)
+  const incomplete = searching && (locations.isError || files.isError || metadata.failed)
   const active = results[selected]
 
   useEffect(() => {
@@ -107,14 +131,14 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
       <input ref={input} type="search" role="combobox" aria-label="Search workspace" aria-expanded={open}
         aria-controls={open ? id : undefined} aria-autocomplete="list" aria-keyshortcuts="Control+K Meta+K"
         aria-activedescendant={open && active ? id + '-' + selected : undefined}
-        placeholder="Search workspace…" value={query} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}
+        placeholder="Search files, metadata, workspace pages…" value={query} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}
         onBlur={() => { setOpen(false); setSelected(-1) }} onKeyDown={onKeyDown}
         onChange={event => { setQuery(event.target.value); setOpen(true); setSelected(-1) }} />
       {!query && <kbd aria-hidden="true">{/Mac/.test(navigator.platform) ? '⌘ K' : 'Ctrl K'}</kbd>}
     </div>
     {open && <div className="topbar-popover search-popover">
       <div id={id} role="listbox" aria-label="Workspace search results">
-        {groups.map(group => <div key={group.title} role="group" aria-label={group.title}>
+        {visibleGroups.map(group => <div key={group.title} role="group" aria-label={group.title}>
           <div className="popover-label" aria-hidden="true">{group.title}</div>
           {group.results.map(result => {
             const index = results.indexOf(result)
@@ -126,7 +150,11 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
           })}
         </div>)}
       </div>
-      {!results.length && <p className="search-no-results" role="status">No workspace results found.</p>}
+      {loading && <p className="search-no-results" role="status">Searching the catalog…</p>}
+      {incomplete && <p className="search-no-results" role="status">Some catalog results are unavailable.</p>}
+      {!loading && !incomplete && !results.length && <p className="search-no-results" role="status">No matches found.</p>}
+      {groups.some(group => group.results.length > resultLimit) &&
+        <p className="search-no-results">Showing the first {resultLimit} matches per category. Refine your search to narrow the results.</p>}
     </div>}
   </div>
 }

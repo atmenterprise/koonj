@@ -10,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
 import uk.appsthatmatter.koonj.server.dto.PageResponse;
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
+import uk.appsthatmatter.koonj.server.entity.ArchiveMode;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Operation;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Status;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
@@ -33,7 +34,14 @@ public class JobService {
     }
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths) {
+        return create(operation, source, target, paths, ArchiveMode.COPY, false);
+    }
+
+    public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths,
+                              ArchiveMode archiveMode, boolean deleteFromTarget) {
         TransferJob job = new TransferJob();
+        job.setArchiveMode(archiveMode);
+        job.setDeleteFromTarget(deleteFromTarget);
         job.setOperation(operation);
         job.setTriggeredBy(JobActor.current());
         job.setSourceConnectionId(source);
@@ -93,6 +101,11 @@ public class JobService {
     public void totals(TransferJob job, int count, long bytes) {
         job.setTotalFiles(count);
         job.setTotalBytes(bytes);
+        jobs.save(job);
+    }
+
+    public void scanned(TransferJob job, int count) {
+        job.setProcessedFiles(count);
         jobs.save(job);
     }
 

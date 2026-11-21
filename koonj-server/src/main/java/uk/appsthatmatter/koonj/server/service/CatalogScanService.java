@@ -3,14 +3,18 @@ package uk.appsthatmatter.koonj.server.service;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.appsthatmatter.koonj.server.connector.*;
 import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 @Service
 public class CatalogScanService {
@@ -18,13 +22,15 @@ public class CatalogScanService {
     private final StorageConnectorFactory connectors;
     private final FileMetadataRepository files;
     private final JobService jobs;
+    private final TransactionTemplate transaction;
 
     public CatalogScanService(ConnectionService connections, StorageConnectorFactory connectors,
-                              FileMetadataRepository files, JobService jobs) {
+                              FileMetadataRepository files, JobService jobs, TransactionTemplate transaction) {
         this.connections = connections;
         this.connectors = connectors;
         this.files = files;
         this.jobs = jobs;
+        this.transaction = transaction;
     }
 
     public JobResponse submit(UUID id) {
@@ -40,47 +46,89 @@ public class CatalogScanService {
         StorageConnector connector = connectors.resolve(source.getProviderType());
         List<ScannedFileInfo> discovered = connector.listFiles(source, "");
         jobs.totals(job, discovered.size(), discovered.stream().mapToLong(ScannedFileInfo::sizeBytes).sum());
-        for (ScannedFileInfo found : discovered) {
-            String error = null;
-            try {
-                FileMetadata file = entry(source, found);
-                boolean changed = file.getSizeBytes() != found.sizeBytes()
-                        || !Objects.equals(file.getLastModifiedAt(), found.lastModifiedAt());
+        transaction.executeWithoutResult(status -> {
+            var stale = new HashMap<String, FileMetadata>();
+            var objects = new HashSet<String>();
+            files.findByConnectionId(source.getId()).forEach(file -> stale.put(file.getRelativePath(), file));
+            for (ScannedFileInfo found : discovered) {
+                FileMetadata file = stale.remove(found.relativePath());
+                if (file == null) file = newEntry(source, found.relativePath());
+                boolean changed = file.getEntryType() != found.entryType() || file.getSizeBytes() != found.sizeBytes()
+                        || !Objects.equals(file.getLastModifiedAt(), found.lastModifiedAt())
+                        || !Objects.equals(file.getSymlinkTarget(), found.symlinkTarget());
+                if (changed) {
+                    file.setChecksumSha256(null);
+                    file.setErrorMessage(null);
+                    if (found.entryType() != EntryType.SYMLINK
+                            || !Objects.equals(file.getSymlinkTarget(), found.symlinkTarget())) {
+                        file.setArchivedAt(null);
+                        file.setTargetConnection(null);
+                        file.setS3Key(null);
+                        file.setS3StorageClass(null);
+                    }
+                }
                 if (connector.objectStorage()) {
+                    if (found.entryType() == EntryType.FILE) objects.add(found.relativePath());
                     file.setStorageState(StorageState.ARCHIVED);
                     file.setS3Key(found.relativePath());
-                    if (found.storageClass() != null) file.setS3StorageClass(found.storageClass());
-                    if (changed) file.setChecksumSha256(null);
+                    file.setS3StorageClass(found.storageClass());
+                } else if (found.symlinkTarget() != null && found.symlinkTarget().startsWith("s3://")) {
+                    if (changed || file.getStorageState() != StorageState.FAILED) {
+                        file.setStorageState(StorageState.ARCHIVED_SYMLINK);
+                    }
                 } else if (changed || file.getStorageState() == StorageState.PURGED_LOCAL) {
                     file.setStorageState(StorageState.LOCAL_ONLY);
-                    if (file.getTargetConnection() == null) file.setChecksumSha256(null);
-                    file.setErrorMessage(null);
+                } else if (file.getStorageState() == StorageState.ARCHIVED) {
+                    file.setStorageState(StorageState.ARCHIVED_COPY);
                 }
-                file.setSizeBytes(found.sizeBytes());
-                file.setLastModifiedAt(found.lastModifiedAt());
+                updatePhysical(file, found);
                 files.save(file);
-            } catch (RuntimeException failure) {
-                error = found.relativePath() + ": " + StorageErrors.describe(failure);
             }
-            jobs.progress(job, 0, error);
+            files.deleteAll(stale.values());
+            if (connector.objectStorage()) clearMissingArchiveCopies(source.getId(), key -> !objects.contains(key));
+        });
+        jobs.scanned(job, discovered.size());
+    }
+
+    void clearMissingArchiveCopies(UUID bucketId, Predicate<String> missing) {
+        var states = List.of(StorageState.ARCHIVED_COPY, StorageState.ARCHIVED);
+        for (FileMetadata copy : files.findByTargetConnectionIdAndStorageStateIn(bucketId, states)) {
+            if (copy.getEntryType() == EntryType.FILE && missing.test(copy.getS3Key())) {
+                copy.setStorageState(StorageState.LOCAL_ONLY);
+                copy.setTargetConnection(null);
+                copy.setS3Key(null);
+                copy.setS3StorageClass(null);
+                files.save(copy);
+            }
         }
     }
 
-    FileMetadata entry(StorageConnection source, ScannedFileInfo found) {
-        return files.findBySourceConnectionIdAndRelativePath(source.getId(), found.relativePath()).orElseGet(() -> {
-            FileMetadata file = new FileMetadata();
-            file.setSourceConnection(source);
-            file.setRelativePath(found.relativePath());
-            file.setFileName(found.relativePath().substring(found.relativePath().lastIndexOf('/') + 1));
-            return file;
-        });
+    FileMetadata entry(StorageConnection connection, String path) {
+        return files.findByConnectionIdAndRelativePath(connection.getId(), path)
+                .orElseGet(() -> newEntry(connection, path));
+    }
+
+    private static FileMetadata newEntry(StorageConnection connection, String path) {
+        FileMetadata file = new FileMetadata();
+        file.setConnection(connection);
+        file.setRelativePath(path);
+        String name = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+        file.setFileName(name.substring(name.lastIndexOf('/') + 1));
+        return file;
+    }
+
+    static void updatePhysical(FileMetadata file, ScannedFileInfo found) {
+        file.setEntryType(found.entryType());
+        file.setSymlinkTarget(found.symlinkTarget());
+        file.setSizeBytes(found.sizeBytes());
+        file.setLastModifiedAt(found.lastModifiedAt());
     }
 
     public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix, Pageable pageable) {
-        Specification<FileMetadata> filter = Specification.unrestricted();
+        Specification<FileMetadata> filter = (root, query, cb) ->
+                cb.notEqual(root.get("storageState"), StorageState.PURGED_LOCAL);
         if (connectionId != null) {
-            filter = filter.and((root, query, cb) -> cb.or(cb.equal(root.get("sourceConnection").get("id"), connectionId),
-                    cb.equal(root.get("targetConnection").get("id"), connectionId)));
+            filter = filter.and((root, query, cb) -> cb.equal(root.get("connection").get("id"), connectionId));
         }
         if (state != null) filter = filter.and((root, query, cb) -> cb.equal(root.get("storageState"), state));
         if (prefix != null) {

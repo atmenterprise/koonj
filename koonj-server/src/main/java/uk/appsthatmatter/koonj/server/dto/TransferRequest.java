@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonAlias;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.*;
 
+import uk.appsthatmatter.koonj.server.entity.ArchiveMode;
+
 import java.util.List;
 import java.util.UUID;
 
@@ -12,6 +14,10 @@ public record TransferRequest(@NotNull UUID sourceConnectionId, @NotNull UUID ta
         @Schema(example = "[\"docs/report.pdf\", \"photos/\"]") List<@NotBlank String> paths,
         List<@NotNull UUID> fileIds,
         @JsonAlias("s3StorageClass") @Schema(defaultValue = "STANDARD") String storageClass,
-        @JsonAlias("deleteSourceAfterTransfer")
-        @Schema(description = "Delete the source after verified archive. Recall retains the archive.", defaultValue = "false")
-        boolean purgeSource) {}
+        @Schema(defaultValue = "COPY") ArchiveMode archiveMode,
+        @Schema(defaultValue = "false", description = "Remove the S3 object after a verified recall")
+        boolean deleteFromTarget) {
+    public TransferRequest {
+        if (archiveMode == null) archiveMode = ArchiveMode.COPY;
+    }
+}

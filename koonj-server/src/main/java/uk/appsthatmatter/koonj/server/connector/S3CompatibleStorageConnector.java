@@ -9,6 +9,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
+import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
@@ -62,7 +63,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
             }
         }
         if (config.getRole() != StorageRole.SOURCE) {
-            String key = ".koonj-probe/" + UUID.randomUUID();
+            String key = StoragePaths.ARCHIVE_STAGING_PREFIX + UUID.randomUUID();
             byte[] probe = {42};
             writeStream(config, key, new java.io.ByteArrayInputStream(probe), probe.length, "STANDARD");
             try (InputStream stream = openReadStream(config, key)) {
@@ -80,8 +81,10 @@ public class S3CompatibleStorageConnector implements StorageConnector {
             var request = ListObjectsV2Request.builder().bucket(config.getBasePathOrBucket()).prefix(subPath).build();
             for (S3Object item : client.listObjectsV2Paginator(request).contents()) {
                 String key = item.key();
-                if (!key.endsWith("/") && (subPath.isEmpty() || key.equals(subPath) || key.startsWith(subPath + "/"))) {
-                    files.add(new ScannedFileInfo(key, item.size(), item.lastModified(), item.storageClassAsString()));
+                if (StoragePaths.isArchiveStagingKey(key)) continue;
+                if (subPath.isEmpty() || key.equals(subPath) || key.startsWith(subPath + "/")) {
+                    EntryType type = key.endsWith("/") && item.size() == 0 ? EntryType.DIRECTORY : EntryType.FILE;
+                    files.add(new ScannedFileInfo(key, item.size(), item.lastModified(), item.storageClassAsString(), type, null));
                 }
             }
         }

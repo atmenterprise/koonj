@@ -29,6 +29,11 @@ public class TransferJob {
     @Column(nullable = false)
     private UUID sourceConnectionId;
     private UUID targetConnectionId;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(16) default 'COPY'")
+    private ArchiveMode archiveMode = ArchiveMode.COPY;
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean deleteFromTarget;
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private List<String> requestedPaths = new ArrayList<>();

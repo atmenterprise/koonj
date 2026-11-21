@@ -42,17 +42,17 @@ export function ConnectionSettings({ connection, onClose }: { connection?: Stora
         <label>Role<select name="role" defaultValue={connection?.role ?? 'BOTH'}>
           {storageRoles.map(item => <option key={item}>{item}</option>)}
         </select></label>
-        <label>{objectStorage ? 'Bucket' : provider === 'SMB' ? 'Share path' : 'Absolute root path'}
+        <label>{objectStorage ? 'Bucket' : provider === 'SMB' ? 'Absolute mount path or Windows UNC share' : 'Absolute root path'}
           <input name="location" required defaultValue={connection?.basePathOrBucket} /></label>
         {objectStorage && <>
           <label>Endpoint URL<input name="endpoint" type="url" required={provider !== 'AWS_S3'} defaultValue={connection?.endpointUrl ?? ''} /></label>
           <label>Region<input name="region" defaultValue={connection?.region ?? ''} placeholder="us-east-1" /></label>
           <label className="check-label"><input name="pathStyle" type="checkbox" defaultChecked={connection?.pathStyleAccessEnabled ?? true} />Path-style access</label>
         </>}
-        {(objectStorage || provider === 'SMB') && <>
-          <label>{objectStorage ? 'Access key' : 'Username'}<input name="access" autoComplete="off" maxLength={255}
+        {objectStorage && <>
+          <label>Access key<input name="access" autoComplete="off" maxLength={255}
             required={objectStorage && provider !== 'AWS_S3' && !savedId} /></label>
-          <label>{objectStorage ? 'Secret key' : 'Password'}<input name="secret" type="password" autoComplete="new-password"
+          <label>Secret key<input name="secret" type="password" autoComplete="new-password"
             required={objectStorage && provider !== 'AWS_S3' && !savedId} /></label>
         </>}
         <label className="check-label"><input name="active" type="checkbox" defaultChecked={connection?.active ?? true} />Active</label>

@@ -17,7 +17,9 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, UUID
     @Query("update FileMetadata f set f.storageState = :state, f.errorMessage = :error where f.storageState in :active")
     int failInterrupted(StorageState state, String error, Collection<StorageState> active);
 
-    Optional<FileMetadata> findBySourceConnectionIdAndRelativePath(UUID sourceId, String relativePath);
+    Optional<FileMetadata> findByConnectionIdAndRelativePath(UUID connectionId, String relativePath);
     List<FileMetadata> findByTargetConnectionIdAndS3Key(UUID targetId, String key);
-    boolean existsBySourceConnectionIdOrTargetConnectionId(UUID sourceId, UUID targetId);
+    List<FileMetadata> findByConnectionId(UUID connectionId);
+    List<FileMetadata> findByTargetConnectionIdAndStorageStateIn(UUID targetId, Collection<StorageState> states);
+    boolean existsByConnectionIdOrTargetConnectionId(UUID connectionId, UUID targetId);
 }

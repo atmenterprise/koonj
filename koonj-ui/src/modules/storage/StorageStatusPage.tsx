@@ -25,28 +25,24 @@ export default function StorageStatusPage({ navigate }: { navigate: Navigate }) 
   ]
   const cloudIds = new Set(locations.data?.filter(item => isObjectStorage(item.providerType)).map(item => item.id))
   const key = (id: string, path: string) => JSON.stringify([id, path])
-  const knownArchiveBindings = new Set<string>()
-  const archived = new Map<string, FileMetadataDTO>()
-  for (const file of catalog.data ?? []) {
-    if (cloudIds.has(file.sourceConnectionId)) continue
-    const isArchived = !!file.targetConnectionId && !!file.s3Key && ['ARCHIVED', 'PURGED_LOCAL'].includes(file.storageState)
-    const tier = file.storageState === 'PURGED_LOCAL' ? tiers[2] : isArchived ? tiers[1] : tiers[0]
+  const entries = catalog.data ?? []
+  const archived = new Map<string, FileMetadataDTO>(entries
+    .filter(file => file.entryType === 'FILE' && cloudIds.has(file.connectionId))
+    .map(file => [key(file.connectionId, file.relativePath), file]))
+  const synced = new Set<string>()
+  for (const file of entries) {
+    if (file.entryType !== 'FILE' || cloudIds.has(file.connectionId)) continue
+    const object = file.targetConnectionId && file.s3Key ? key(file.targetConnectionId, file.s3Key) : undefined
+    const hasCopy = object && file.storageState === 'ARCHIVED_COPY' && archived.has(object)
+    const tier = hasCopy ? tiers[1] : tiers[0]
+    if (hasCopy) synced.add(object)
     tier.volume += file.sizeBytes
     tier.files++
-    if (isArchived && file.targetConnectionId && file.s3Key) {
-      const object = key(file.targetConnectionId, file.s3Key)
-      knownArchiveBindings.add(object)
-      archived.set(object, file)
-    }
   }
-  for (const file of catalog.data ?? []) {
-    if (!cloudIds.has(file.sourceConnectionId)) continue
-    const object = key(file.sourceConnectionId, file.s3Key ?? file.relativePath)
-    archived.set(object, file)
-    if (!knownArchiveBindings.has(object)) {
-      tiers[2].volume += file.sizeBytes
-      tiers[2].files++
-    }
+  for (const [object, file] of archived) {
+    if (synced.has(object)) continue
+    tiers[2].volume += file.sizeBytes
+    tiers[2].files++
   }
   const classes = new Map<string, { name: string; files: number; volume: number }>()
   for (const file of archived.values()) {
@@ -61,8 +57,15 @@ export default function StorageStatusPage({ navigate }: { navigate: Navigate }) 
   const catalogedFiles = tiers.reduce((total, tier) => total + tier.files, 0)
   const archivedFiles = archived.size
   const archivedVolume = archiveClasses.reduce((total, tier) => total + tier.volume, 0)
-  const purged = (catalog.data ?? []).filter(file => file.storageState === 'PURGED_LOCAL' && !cloudIds.has(file.sourceConnectionId))
-  const optimized = { files: purged.length, volume: purged.reduce((total, file) => total + file.sizeBytes, 0) }
+  const optimized = { files: 0, volume: 0 }
+  for (const file of entries) {
+    if (file.entryType !== 'SYMLINK' || !file.targetConnectionId || !file.s3Key) continue
+    const object = archived.get(key(file.targetConnectionId, file.s3Key))
+    if (object) {
+      optimized.files++
+      optimized.volume += object.sizeBytes
+    }
+  }
   const monthlySavings = optimized.volume / 1e9 * 0.02
   const transfers = (jobs.data ?? []).filter(job => job.operation !== 'SCAN' && isActiveJob(job))
   const throughput = transfers.reduce((sum, job) => sum + job.transferredBytes / Math.max(1, (Date.now() - Date.parse(job.createdAt)) / 1000), 0)

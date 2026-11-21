@@ -31,7 +31,7 @@ public class TransferController {
 
     @PostMapping("/archive")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "Queue an archive", description = "Copy files from mounted storage into an S3 bucket. An optional purge verifies the uploaded bytes before removing the source.")
+    @Operation(summary = "Queue an archive", description = "Verify an S3 archive and keep the original file in COPY mode or replace it with a symbolic link in PURGE mode.")
     @PreAuthorize(KoonjRoles.ARCHIVE)
     public JobResponse archive(@P("request") @Valid @RequestBody TransferRequest request) {
         return transfers.submit(TransferJob.Operation.ARCHIVE, request);
@@ -39,7 +39,7 @@ public class TransferController {
 
     @PostMapping("/recall")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "Queue a recall", description = "Restore objects from an S3 bucket to mounted storage, retaining their relative paths and the S3 copies.")
+    @Operation(summary = "Queue a recall", description = "Restore verified objects from an S3 bucket to mounted storage and optionally remove the S3 copies.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse recall(@Valid @RequestBody TransferRequest request) {
         return transfers.submit(TransferJob.Operation.RECALL, request);

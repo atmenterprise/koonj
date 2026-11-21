@@ -12,7 +12,7 @@ export function isActiveJob(job: TransferJobDTO) {
 
 export const stateLabels: Record<StorageState, string> = {
   LOCAL_ONLY: 'Local only', QUEUED_ARCHIVE: 'Queued for archive', ARCHIVING: 'Archiving',
-  ARCHIVED: 'Archived', PURGED_LOCAL: 'Purged locally', QUEUED_RECALL: 'Queued for recall',
+  ARCHIVED: 'Archived', ARCHIVED_COPY: 'Archived · Copy', ARCHIVED_SYMLINK: 'Archived', QUEUED_RECALL: 'Queued for recall',
   RECALLING: 'Recalling', FAILED: 'Failed',
 }
 
@@ -52,18 +52,11 @@ export function folderTree(paths: string[]): FolderNode[] {
 }
 
 export function dashboardSummary(files: FileMetadataDTO[], jobs: TransferJobDTO[]): DashboardSummaryDTO {
-  const archives = new Map<string, number>()
-  let reclaimedLocalBytes = 0
-  for (const file of files) {
-    if (file.storageState === 'PURGED_LOCAL') reclaimedLocalBytes += file.sizeBytes
-    if (!file.s3Key) continue
-    const key = JSON.stringify([file.targetConnectionId ?? file.sourceConnectionId, file.s3Key])
-    // An S3 scan reports the object size directly. Local entries can retain an
-    // archive binding after the local file has changed.
-    if (!file.targetConnectionId || (!archives.has(key) && ['ARCHIVED', 'PURGED_LOCAL'].includes(file.storageState))) {
-      archives.set(key, file.sizeBytes)
-    }
-  }
-  return { reclaimedLocalBytes, s3ArchivedBytes: [...archives.values()].reduce((sum, size) => sum + size, 0),
-    totalCatalogedFiles: files.length, activeTransferCount: jobs.filter(job => job.operation !== 'SCAN' && isActiveJob(job)).length }
+  const objects = files.filter(file => file.entryType === 'FILE' && file.storageState === 'ARCHIVED' && !file.targetConnectionId)
+  const archiveSizes = new Map(objects.map(file => [JSON.stringify([file.connectionId, file.relativePath]), file.sizeBytes]))
+  const reclaimedLocalBytes = files.reduce((sum, file) => file.entryType === 'SYMLINK' && file.targetConnectionId && file.s3Key
+    ? sum + (archiveSizes.get(JSON.stringify([file.targetConnectionId, file.s3Key])) ?? 0) : sum, 0)
+  return { reclaimedLocalBytes, s3ArchivedBytes: objects.reduce((sum, file) => sum + file.sizeBytes, 0),
+    totalCatalogedFiles: files.filter(file => file.entryType !== 'DIRECTORY').length,
+    activeTransferCount: jobs.filter(job => job.operation !== 'SCAN' && isActiveJob(job)).length }
 }

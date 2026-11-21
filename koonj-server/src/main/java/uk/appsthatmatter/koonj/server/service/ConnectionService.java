@@ -88,7 +88,7 @@ public class ConnectionService {
     }
 
     private boolean referenced(UUID id) {
-        return files.existsBySourceConnectionIdOrTargetConnectionId(id, id);
+        return files.existsByConnectionIdOrTargetConnectionId(id, id);
     }
 
     private void requireIdle(UUID id) {

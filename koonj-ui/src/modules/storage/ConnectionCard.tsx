@@ -29,7 +29,7 @@ export function ConnectionCard({ connection, navigate, onEdit, onDelete }: {
     </dl>}
     <div className="row-actions">
       <Button onClick={() => navigate('/explorer?' + new URLSearchParams({ endpoint: connection.id }))}>Browse</Button>
-      {canScan && <Button icon="scan" disabled={scan.isPending || !connection.active || connection.providerType === 'SMB'}
+      {canScan && <Button icon="scan" disabled={scan.isPending || !connection.active}
         onClick={() => scan.mutate(connection.id)}>
         {scan.isPending ? 'Submitting…' : 'Scan Now'}</Button>}
       {canAdminister && configuration && <Button disabled={test.isPending} onClick={() => test.mutate(connection.id)}>

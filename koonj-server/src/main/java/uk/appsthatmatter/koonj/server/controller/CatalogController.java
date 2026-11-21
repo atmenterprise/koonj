@@ -36,12 +36,12 @@ public class CatalogController {
 
     @PostMapping("/scan/{connectionId}")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    @Operation(summary = "Queue a catalog scan", description = "Discover files or objects and insert or update their catalog entries. Track completion through the returned job ID.")
+    @Operation(summary = "Queue a catalog scan", description = "Discover physical entries and remove entries absent from the scanned location. Track completion through the returned job ID.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse scan(@PathVariable UUID connectionId) { return catalog.submit(connectionId); }
 
     @GetMapping("/files")
-    @Operation(summary = "Browse cataloged files", description = "Filter by source or archive connection, lifecycle state, and literal relative-path prefix.")
+    @Operation(summary = "Browse cataloged files", description = "Filter by physical connection, lifecycle state, and literal relative-path prefix.")
     @PreAuthorize(KoonjRoles.READ)
     public PageResponse<FileResponse> list(@RequestParam(required = false) UUID connectionId,
             @RequestParam(required = false) StorageState storageState, @RequestParam(required = false) String pathPrefix,

@@ -18,13 +18,19 @@ public class FileMetadata {
     @Id @GeneratedValue
     private UUID id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    private StorageConnection sourceConnection;
+    @JoinColumn(name = "source_connection_id")
+    private StorageConnection connection;
     @ManyToOne(fetch = FetchType.LAZY)
     private StorageConnection targetConnection;
     @Column(nullable = false, columnDefinition = "text")
     private String relativePath;
     @Column(nullable = false, columnDefinition = "text")
     private String fileName;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(16) default 'FILE'")
+    private EntryType entryType = EntryType.FILE;
+    @Column(columnDefinition = "text")
+    private String symlinkTarget;
     private long sizeBytes;
     @Column(length = 64)
     private String checksumSha256;

@@ -11,7 +11,7 @@ import { Button, Icon } from '../shared/ui/primitives'
 
 const pages = [
   { path: '/Home', title: 'Home', icon: 'home', access: 'read' },
-  { path: '/explorer', title: 'Catalog explorer', shortTitle: 'Explorer', icon: 'folder', access: 'read' },
+  { path: '/explorer', title: 'Catalog', icon: 'folder', access: 'read' },
   { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: 'operate' },
   { path: '/storage', title: 'Storage status', shortTitle: 'Storage', icon: 'drive', access: 'admin' },
   { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: 'admin' },
@@ -95,7 +95,7 @@ export default function Console() {
             </div>
           </div>
         </section> : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
-            initialPath={params.get('path')} />
+            initialPath={params.get('path')} navigate={navigate} />
           : page.path === '/activities' ? <AuditLogPage key={location} initialJob={params.get('job')} />
           : page.path === '/admin' ? <AdminPage section={params.get('section')} job={params.get('job')} navigate={navigate} />
           : page.path === '/storage' ? <StorageStatusPage navigate={navigate} />

@@ -13,7 +13,7 @@ import { transferService } from './services/transferService'
 import type { ArchiveRequest, FileMetadataDTO, PageResponse, RecallRequest, TransferJobDTO } from './types'
 
 const file: FileMetadataDTO = {
-  id: 'file-id', sourceConnectionId: 'local-id', targetConnectionId: null, relativePath: 'docs/report.txt',
+  id: 'file-id', connectionId: 'local-id', entryType: 'FILE', symlinkTarget: null, targetConnectionId: null, relativePath: 'docs/report.txt',
   fileName: 'report.txt', sizeBytes: 1200, checksumSha256: null, storageState: 'LOCAL_ONLY', s3Key: null,
   s3StorageClass: 'STANDARD', lastModifiedAt: '2026-11-20T16:00:00Z', archivedAt: null, errorMessage: null,
 }
@@ -35,7 +35,7 @@ afterEach(() => { mock.restore(); client.clear() })
 describe('catalog API', () => {
   it('forwards server pagination, filters and cancellation, and maps Explorer rows', async () => {
     const abort = new AbortController()
-    const params = { connectionId: file.sourceConnectionId, page: 1, size: 50, pathPrefix: 'docs/', storageState: 'LOCAL_ONLY' } as const
+    const params = { connectionId: file.connectionId, page: 1, size: 50, pathPrefix: 'docs/', storageState: 'LOCAL_ONLY' } as const
     const response: PageResponse<FileMetadataDTO> = { content: [file], page: 1, size: 50, totalElements: 51, totalPages: 2 }
     mock.onGet('/catalog/files', { params }).reply(config => {
       expect(config.signal).toBe(abort.signal)
@@ -59,7 +59,7 @@ describe('transfers and cache invalidation', () => {
 
   it('posts the exact archive payload and invalidates catalog and jobs', async () => {
     const payload: ArchiveRequest = { sourceConnectionId: 'local-id', targetConnectionId: 's3-id',
-      paths: ['docs/report.txt'], storageClass: 'STANDARD', purgeSource: true }
+      paths: ['docs/report.txt'], storageClass: 'STANDARD', archiveMode: 'PURGE' }
     mock.onPost('/transfers/archive').reply(config => {
       expect(JSON.parse(config.data)).toEqual(payload)
       return [202, job]

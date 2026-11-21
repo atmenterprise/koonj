@@ -45,13 +45,17 @@ export interface ConnectionHealthDTO {
   message: string
 }
 
-export const storageStates = ['LOCAL_ONLY', 'QUEUED_ARCHIVE', 'ARCHIVING', 'ARCHIVED', 'PURGED_LOCAL',
+export const storageStates = ['LOCAL_ONLY', 'QUEUED_ARCHIVE', 'ARCHIVING', 'ARCHIVED', 'ARCHIVED_COPY', 'ARCHIVED_SYMLINK',
   'QUEUED_RECALL', 'RECALLING', 'FAILED'] as const
 export type StorageState = typeof storageStates[number]
 
+export type EntryType = 'FILE' | 'DIRECTORY' | 'SYMLINK'
+
 export interface FileMetadataDTO {
   id: string
-  sourceConnectionId: string
+  connectionId: string
+  entryType: EntryType
+  symlinkTarget: string | null
   targetConnectionId: string | null
   relativePath: string
   fileName: string
@@ -80,6 +84,7 @@ export interface CatalogParams extends PageParams {
   pathPrefix?: string
 }
 
+export type ArchiveMode = 'COPY' | 'PURGE'
 export type TransferOperation = 'ARCHIVE' | 'RECALL' | 'SCAN'
 export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL_FAILURE' | 'FAILED'
 
@@ -90,6 +95,8 @@ export interface TransferJobDTO {
   sourceConnectionId: string
   targetConnectionId: string | null
   requestedPaths: string[]
+  archiveMode?: ArchiveMode
+  deleteFromTarget?: boolean
   totalFiles: number
   processedFiles: number
   failedFiles: number
@@ -103,8 +110,8 @@ export interface TransferJobDTO {
 
 type TransferSelection = { paths: string[]; fileIds?: string[] } | { fileIds: string[]; paths?: string[] }
 type TransferRequest = { sourceConnectionId: string; targetConnectionId: string } & TransferSelection
-export type ArchiveRequest = TransferRequest & { storageClass?: string; purgeSource?: boolean }
-export type RecallRequest = TransferRequest
+export type ArchiveRequest = TransferRequest & { storageClass?: string; archiveMode?: ArchiveMode }
+export type RecallRequest = TransferRequest & { deleteFromTarget?: boolean }
 
 export interface DashboardSummaryDTO {
   reclaimedLocalBytes: number

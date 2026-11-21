@@ -4,25 +4,26 @@ import type { FileMetadataDTO, CatalogLocationDTO, CatalogMetadataTarget } from 
 import { Dialog, LoadingRows, RequestError } from '../../shared/ui/feedback'
 import { Badge, Button, Icon, bytes, date } from '../../shared/ui/primitives'
 
+import { SymlinkTarget } from './SymlinkTarget'
 import { MetadataForm } from './MetadataForm'
 import type { metadataFor } from './catalogMetadata'
 
 export function FileInspector({ file, target, location, connections, metadata, writable,
-  metadataError, onRetry, onClose, onOpen, onArchive, onRecall }: {
+  metadataError, navigate, onRetry, onClose, onOpen, onArchive, onRecall }: {
   file?: FileMetadataDTO; target: CatalogMetadataTarget; location: CatalogLocationDTO; connections: CatalogLocationDTO[]
   metadata?: ReturnType<typeof metadataFor>; writable: boolean; metadataError: Error | null
-  onRetry: () => void; onClose: () => void; onOpen?: () => void; onArchive?: () => void; onRecall?: () => void
+  navigate: (path: string) => void; onRetry: () => void; onClose: () => void; onOpen?: () => void; onArchive?: () => void; onRecall?: () => void
 }) {
   const [tab, setTab] = useState<'metadata' | 'lineage'>('metadata')
-  const source = connections.find(connection => connection.id === file?.sourceConnectionId) ?? location
+  const source = connections.find(connection => connection.id === file?.connectionId) ?? location
   const archive = connections.find(connection => connection.id === file?.targetConnectionId)
   const bucket = archive ?? (isObjectStorage(source.providerType) ? source : undefined)
   const fields = file ? [
     ['Relative path', file.relativePath],
-    ['Source connection', source?.name ?? file.sourceConnectionId],
+    ['Storage location', source.name],
     ['Archive connection', archive?.name ?? file.targetConnectionId],
     ['Size', bytes(file.sizeBytes)],
-    ['S3 URI', bucket?.bucket && file.s3Key ? `s3://${bucket.bucket}/${file.s3Key}` : null],
+    ...(file.entryType === 'SYMLINK' ? [] : [['S3 URI', bucket?.bucket && file.s3Key ? `s3://${bucket.bucket}/${file.s3Key}` : null]]),
     ['Storage class', file.s3Key ? file.s3StorageClass : null],
     ['Modified', file.lastModifiedAt ? date(file.lastModifiedAt) : null],
     ['Archived', file.archivedAt ? date(file.archivedAt) : null],
@@ -31,11 +32,11 @@ export function FileInspector({ file, target, location, connections, metadata, w
   const name = file?.fileName ?? target.path.replace(/\/+$/, '').split('/').at(-1)
   return <Dialog title="Metadata inspector" drawer onClose={onClose}>
     <div className="drawer-body">
-      <div className="inspector-title"><span className="icon-tile yellow"><Icon name={file ? 'file' : 'folder'} size={23} /></span>
+      <div className="inspector-title"><span className="icon-tile yellow"><Icon name={file?.entryType === 'SYMLINK' ? 'link' : file ? 'file' : 'folder'} size={23} /></span>
         <div><h3>{name}</h3><p>{file ? bytes(file.sizeBytes) + ' · ' : ''}{source.name}</p></div>
       </div>
       <div className="row-actions">
-        <Badge>{source.providerType}</Badge>{file && <Badge dot>{stateLabels[file.storageState]}</Badge>}
+        <Badge>{source.providerType}</Badge>{file?.entryType === 'SYMLINK' && <Badge tone="blue">SYMLINK</Badge>}{file && <Badge dot>{stateLabels[file.storageState]}</Badge>}
       </div>
       {file && <div className="filters inspector-tabs" role="group" aria-label="Inspector views">
         <button type="button" aria-pressed={tab === 'metadata'} onClick={() => setTab('metadata')}>Metadata</button>
@@ -47,7 +48,9 @@ export function FileInspector({ file, target, location, connections, metadata, w
           <RequestError error={metadataError} retry={onRetry} />
           {metadata ? <MetadataForm connectionId={location.id} targets={[target]} direct={metadata.direct}
             inherited={metadata.inherited} writable={writable} /> : !metadataError && <LoadingRows label="Loading custom metadata" />}
-          {fields.length > 0 && <dl className="live-metadata">{fields.map(([label, value]) =>
+          {fields.length > 0 && <dl className="live-metadata">
+            {file?.entryType === 'SYMLINK' && <div><dt>Symlink target</dt><dd><SymlinkTarget file={file} locations={connections} navigate={navigate} /></dd></div>}
+            {fields.map(([label, value]) =>
             <div key={label}><dt>{label}</dt><dd>{value ?? '—'}</dd></div>)}</dl>}
         </>
         : file?.archivedAt ? <ol className="file-lineage"><li>
@@ -61,8 +64,8 @@ export function FileInspector({ file, target, location, connections, metadata, w
     </div>
     {(onOpen || onArchive || onRecall) && <div className="dialog-footer">
       {onOpen && <Button icon="folder" onClick={onOpen}>Open folder</Button>}
-      {onArchive && <Button icon="upload" onClick={onArchive}>{file ? 'Archive' : 'Archive folder'}</Button>}
-      {onRecall && <Button icon="download" onClick={onRecall}>{file ? 'Recall' : 'Recall folder'}</Button>}
+      {onArchive && <Button icon="upload" onClick={onArchive}>Archive to S3</Button>}
+      {onRecall && <Button icon="download" onClick={onRecall}>Recall to Source</Button>}
     </div>}
   </Dialog>
 }

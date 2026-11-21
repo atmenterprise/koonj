@@ -1,35 +1,51 @@
 package uk.appsthatmatter.koonj.server.connector;
 
 import org.springframework.stereotype.Component;
+import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 
+import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+
 @Component
 public class LocalStorageConnector implements StorageConnector {
+    private static final String STUB_SUFFIX = ".koonj.symlink";
+    private static final String STUB_HEADER = "KOONJ-SYMLINK\n";
+    private static final String TEMP_PREFIX = ".koonj-transfer-";
+
     @Override
     public boolean supports(ProviderType type) {
         return type == ProviderType.LOCAL || type == ProviderType.NAS;
     }
 
+    protected Path configuredPath(StorageConnection config) throws IOException {
+        return Path.of(config.getBasePathOrBucket());
+    }
+
     private Path root(StorageConnection config) throws IOException {
-        Path root = Path.of(config.getBasePathOrBucket()).toRealPath();
+        Path root = configuredPath(config).toRealPath();
         if (!Files.isDirectory(root)) throw new IOException("Storage root must be a directory");
         return root;
     }
 
     private Path resolve(Path root, String relativePath) throws IOException {
         StoragePaths.requireSafe(relativePath);
-        Path path = root;
-        for (Path part : Path.of(relativePath)) {
-            path = path.resolve(part);
-            if (Files.isSymbolicLink(path)) throw new IOException("Symbolic links under the storage root are unsupported");
+        Path relative = Path.of(relativePath);
+        Path path = root.resolve(relative);
+        if (relative.isAbsolute() || !path.startsWith(root)) throw new IOException("Expected a path under the storage root");
+        for (Path parent = path.getParent(); parent != null && !parent.equals(root) && parent.startsWith(root);
+             parent = parent.getParent()) {
+            if (Files.isSymbolicLink(parent)) throw new IOException("Storage path traverses a symbolic link");
         }
         return path;
     }
@@ -41,7 +57,7 @@ public class LocalStorageConnector implements StorageConnector {
             entries.iterator().hasNext();
         }
         if (config.getRole() != StorageRole.SOURCE) {
-            Files.delete(Files.createTempFile(root, ".koonj-probe-", ".tmp"));
+            Files.delete(Files.createTempFile(root, TEMP_PREFIX, ".koonj.tmp"));
         }
     }
 
@@ -50,15 +66,48 @@ public class LocalStorageConnector implements StorageConnector {
         Path root = root(config);
         Path start = resolve(root, subPath);
         List<ScannedFileInfo> files = new ArrayList<>();
-        if (Files.notExists(start)) return files;
+        if (Files.notExists(start, NOFOLLOW_LINKS)) {
+            if (subPath.isEmpty() || stubTarget(stub(start)) == null) return files;
+            start = stub(start);
+        }
+        // The default walk options leave symlinks, including directory links, untraversed.
         Files.walkFileTree(start, new SimpleFileVisitor<>() {
             @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                if (attributes.isRegularFile()) {
-                    files.add(new ScannedFileInfo(root.relativize(file).toString().replace(File.separatorChar, '/'),
-                            attributes.size(), attributes.lastModifiedTime().toInstant(), null));
+            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+                if (!directory.equals(root)) add(directory, attributes, EntryType.DIRECTORY, null);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                if (file.getFileName().toString().startsWith(TEMP_PREFIX)
+                        && file.getFileName().toString().endsWith(".koonj.tmp")) return FileVisitResult.CONTINUE;
+                if (attributes.isSymbolicLink()) {
+                    Path link = Files.readSymbolicLink(file);
+                    String target = link.toString();
+                    if (target.startsWith("s3:/")) {
+                        target = "s3://" + target.substring(4).replaceFirst("^/+", "");
+                    } else {
+                        target = file.getParent().resolve(link).normalize().toString();
+                    }
+                    add(file, attributes, EntryType.SYMLINK, target);
+                } else if (attributes.isRegularFile()) {
+                    String target = stubTarget(file);
+                    if (target == null) {
+                        add(file, attributes, EntryType.FILE, null);
+                    } else {
+                        String name = file.getFileName().toString();
+                        Path logical = file.resolveSibling(name.substring(0, name.length() - STUB_SUFFIX.length()));
+                        if (Files.notExists(logical, NOFOLLOW_LINKS)) add(logical, attributes, EntryType.SYMLINK, target);
+                    }
                 }
                 return FileVisitResult.CONTINUE;
+            }
+
+            private void add(Path path, BasicFileAttributes attributes, EntryType type, String target) {
+                files.add(new ScannedFileInfo(root.relativize(path).toString().replace(File.separatorChar, '/'),
+                        type == EntryType.FILE ? attributes.size() : 0,
+                        attributes.lastModifiedTime().toInstant(), null, type, target));
             }
         });
         return files;
@@ -67,29 +116,184 @@ public class LocalStorageConnector implements StorageConnector {
     @Override
     public InputStream openReadStream(StorageConnection config, String relativePath) throws IOException {
         Path path = resolve(root(config), relativePath);
-        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
-        return new BufferedInputStream(Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS));
+        if (!Files.isRegularFile(path, NOFOLLOW_LINKS) || stubTarget(path) != null) throw new IOException("Expected a regular file");
+        return new BufferedInputStream(Files.newInputStream(path, NOFOLLOW_LINKS));
+    }
+
+    @Override
+    public boolean isSymlink(StorageConnection config, String relativePath) throws IOException {
+        Path path = resolve(root(config), relativePath);
+        return Files.isSymbolicLink(path) || (Files.notExists(path, NOFOLLOW_LINKS) && stubTarget(stub(path)) != null);
+    }
+
+    @Override
+    public void createSymlink(StorageConnection config, String relativePath, String targetReference) throws IOException {
+        Path path = resolve(root(config), relativePath);
+        if (Files.isDirectory(path, NOFOLLOW_LINKS)) throw new IOException("Cannot replace a directory with a symbolic link");
+        try (var temporary = new TemporaryFiles(path.getParent())) {
+            Path staged = temporary.reserve();
+            try {
+                Files.createSymbolicLink(staged, Path.of(targetReference));
+            } catch (IOException | UnsupportedOperationException | InvalidPathException unavailable) {
+                if (!targetReference.startsWith("s3://")) throw unavailable;
+                Path marker = stub(path);
+                Path contents = temporary.create();
+                Files.writeString(contents, STUB_HEADER + targetReference, StandardCharsets.UTF_8);
+                Files.move(contents, marker, replaceExistingStub(marker));
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException | RuntimeException failure) {
+                    try {
+                        Files.deleteIfExists(marker);
+                    } catch (IOException cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
+                    throw failure;
+                }
+                return;
+            }
+            Files.move(staged, path, ATOMIC_MOVE, REPLACE_EXISTING);
+        }
+    }
+
+    @Override
+    public void replaceWithSymlink(StorageConnection config, String relativePath, String targetReference,
+                                   RestoreCommit commit) throws IOException {
+        Path path = resolve(root(config), relativePath);
+        if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
+        try (var temporary = new TemporaryFiles(path.getParent())) {
+            Path backup = backup(path, temporary);
+            createSymlink(config, relativePath, targetReference);
+            try {
+                commit.run();
+            } catch (IOException | RuntimeException failure) {
+                rollback(temporary, backup, path, failure);
+                try {
+                    Path marker = stub(path);
+                    if (stubTarget(marker) != null) Files.delete(marker);
+                } catch (IOException cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
+        }
+    }
+
+    private static CopyOption[] replaceExistingStub(Path marker) throws IOException {
+        return stubTarget(marker) == null ? new CopyOption[0] : new CopyOption[]{REPLACE_EXISTING};
     }
 
     @Override
     public void writeStream(StorageConnection config, String relativePath, InputStream stream,
                             long contentLength, String storageClass) throws IOException {
+        restore(config, relativePath, stream, contentLength, () -> {});
+    }
+
+    @Override
+    public void restore(StorageConnection config, String relativePath, InputStream stream,
+                        long contentLength, RestoreCommit commit) throws IOException {
         Path destination = resolve(root(config), relativePath);
         Files.createDirectories(destination.getParent());
-        Path staging = Files.createTempFile(destination.getParent(), ".koonj-transfer-", ".tmp");
-        try {
-            long written = Files.copy(new BufferedInputStream(stream), staging, StandardCopyOption.REPLACE_EXISTING);
+        try (var temporary = new TemporaryFiles(destination.getParent())) {
+            Path staging = temporary.create();
+            long written = Files.copy(stream, staging, REPLACE_EXISTING);
             if (written != contentLength) throw new IOException("Source length changed during transfer");
-            Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(staging);
+
+            Path marker = stub(destination);
+            Path original = Files.exists(destination, NOFOLLOW_LINKS) ? destination
+                    : stubTarget(marker) != null ? marker : null;
+            Path backup = original == null ? null : backup(original, temporary);
+            Files.move(staging, destination, ATOMIC_MOVE, REPLACE_EXISTING);
+            try {
+                if (marker.equals(original)) Files.delete(marker);
+                commit.run();
+            } catch (IOException | RuntimeException failure) {
+                if (backup != null) rollback(temporary, backup, original, failure);
+                if (!destination.equals(original)) {
+                    try {
+                        Files.deleteIfExists(destination);
+                    } catch (IOException cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
+                }
+                throw failure;
+            }
+        }
+    }
+
+    private static Path backup(Path original, TemporaryFiles temporary) throws IOException {
+        if (Files.isDirectory(original, NOFOLLOW_LINKS)) throw new IOException("Cannot replace a directory");
+        Path backup = temporary.reserve();
+        if (!Files.isSymbolicLink(original)) {
+            try {
+                return Files.createLink(backup, original);
+            } catch (IOException | UnsupportedOperationException unavailable) {
+                // Some mounted filesystems cannot create hard links.
+            }
+        }
+        return Files.copy(original, backup, NOFOLLOW_LINKS, StandardCopyOption.COPY_ATTRIBUTES);
+    }
+
+    private static void rollback(TemporaryFiles temporary, Path backup, Path original, Exception failure) {
+        try {
+            Files.move(backup, original, ATOMIC_MOVE, REPLACE_EXISTING);
+        } catch (IOException cleanup) {
+            temporary.preserve(backup);
+            failure.addSuppressed(cleanup);
         }
     }
 
     @Override
     public void deleteFile(StorageConnection config, String relativePath) throws IOException {
         Path path = resolve(root(config), relativePath);
-        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
+        if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
         Files.delete(path);
+    }
+
+    private static Path stub(Path path) {
+        return path.resolveSibling(path.getFileName() + STUB_SUFFIX);
+    }
+
+    private static String stubTarget(Path path) throws IOException {
+        if (!path.getFileName().toString().endsWith(STUB_SUFFIX) || !Files.isRegularFile(path, NOFOLLOW_LINKS)) return null;
+        try (InputStream stream = Files.newInputStream(path, NOFOLLOW_LINKS)) {
+            byte[] bytes = stream.readNBytes(16 * 1024);
+            if (bytes.length == 16 * 1024) return null;
+            String contents = new String(bytes, StandardCharsets.UTF_8);
+            return contents.startsWith(STUB_HEADER + "s3://") ? contents.substring(STUB_HEADER.length()) : null;
+        }
+    }
+
+    private static final class TemporaryFiles implements AutoCloseable {
+        private final Path directory;
+        private final List<Path> paths = new ArrayList<>();
+
+        private TemporaryFiles(Path directory) { this.directory = directory; }
+
+        private Path create() throws IOException {
+            Path path = Files.createTempFile(directory, TEMP_PREFIX, ".koonj.tmp");
+            paths.add(path);
+            return path;
+        }
+
+        private Path reserve() throws IOException {
+            Path path = create();
+            Files.delete(path);
+            return path;
+        }
+
+        private void preserve(Path path) { paths.remove(path); }
+
+        @Override
+        public void close() {
+            for (Path path : paths) {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException failure) {
+                    System.getLogger(LocalStorageConnector.class.getName()).log(System.Logger.Level.WARNING,
+                            "Could not remove storage transfer temporary file", failure);
+                }
+            }
+        }
     }
 }
