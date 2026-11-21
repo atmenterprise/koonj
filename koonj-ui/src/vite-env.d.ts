@@ -10,3 +10,7 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+interface Window {
+  readonly KOONJ_CONFIG?: { readonly keycloakUrl?: string }
+}

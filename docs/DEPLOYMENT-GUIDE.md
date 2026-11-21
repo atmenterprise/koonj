@@ -4,8 +4,10 @@
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Build the Deployment ZIP](#build-the-deployment-zip)
 - [Prerequisites](#prerequisites)
 - [Option A: Docker Deployment](#option-a-docker-deployment)
+- [Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve)
 - [Option B: On-Premise Deployment](#option-b-on-premise-deployment)
 - [Scaling](#scaling)
 - [Configuration Reference](#configuration-reference)
@@ -68,6 +70,20 @@ instances behind a load balancer and multiple Nginx instances for the UI.
 
 ---
 
+## Build the Deployment ZIP
+
+From the repository root, with JDK 21, Maven 3.9+, and Node.js 22.12+ with npm:
+
+```bash
+mvn -pl koonj-assembly -am clean package
+```
+
+The build writes `koonj-assembly/target/koonj-<version>-deployment.zip`.
+Use `-Ddeployment.version=1.0.0` to set the version in the ZIP name and its
+top-level directory. The ZIP contains `docker/` and `on-premise/`, each
+with the executable server JAR and the compiled UI. The deployment server
+doesn't need Maven, Node.js, or the source checkout.
+
 ## Prerequisites
 
 ### For Docker Deployment
@@ -93,8 +109,8 @@ instances behind a load balancer and multiple Nginx instances for the UI.
 ### 1. Extract the distribution
 
 ```bash
-tar xzf koonj-<version>-docker.tar.gz
-cd koonj-<version>-docker
+unzip koonj-0.1.0-SNAPSHOT-deployment.zip
+cd koonj-0.1.0-SNAPSHOT/docker
 ```
 
 ### 2. Configure environment
@@ -121,6 +137,13 @@ KOONJ_CORS_ALLOWED_ORIGINS=https://koonj.yourcompany.com
 KOONJ_DATA_MOUNT=/mnt/shared-storage
 ```
 
+Set `keycloakUrl` in `ui/config.js` to the same public URL as
+`KOONJ_KEYCLOAK_EXTERNAL_URL`, without the realm path or a trailing slash.
+For remote browsers, make Keycloak reachable through your reverse proxy or
+configure `KOONJ_KEYCLOAK_BIND` for the appropriate host interface.
+Before the first start, follow [Keycloak Setup](#keycloak-setup) to set the
+console URL in the realm template.
+
 ### 3. Start the stack
 
 ```bash
@@ -139,8 +162,8 @@ This starts all four services in dependency order:
 # Check all services are healthy
 docker compose ps
 
-# Test the API health endpoint
-curl -sf http://localhost:8080/actuator/health
+# Test the API health endpoint through the UI proxy
+curl -sf http://localhost/actuator/health
 
 # Open the UI
 open http://localhost    # or http://<server-ip>
@@ -164,11 +187,51 @@ docker compose up -d --scale koonj-ui=2
 
 ```bash
 docker compose down          # stop (preserves data volumes)
-docker compose down -v       # stop and DELETE all data
 docker compose up -d --wait  # restart
 ```
 
 ---
+
+## Optional Docker Observability with OpenObserve
+
+The standard Docker command leaves metric export disabled. To enable it, set
+these values in the extracted `docker/.env` file:
+
+```dotenv
+OPENOBSERVE_ROOT_EMAIL=monitoring@example.com
+OPENOBSERVE_ROOT_PASSWORD='your_openobserve_password'
+OPENOBSERVE_AUTHORIZATION='Basic <base64(email:password)>'
+```
+
+Replace the placeholder after `Basic ` with the Base64-encoded ingestion
+credentials. For example, encode the email and password you configured above:
+
+```bash
+printf '%s' 'monitoring@example.com:your_openobserve_password' | base64 | tr -d '\r\n'
+```
+
+From the extracted `docker/` directory, start Compose with both files. The
+base file defines the Koonj services and the second file adds OpenObserve and
+enables the metrics exporter. Use the same file pair for subsequent Compose
+commands.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build --wait
+docker compose -f docker-compose.yml -f docker-compose.otel.yml ps
+curl -fsS http://127.0.0.1:5080/healthz
+```
+
+Sign in to OpenObserve at `http://127.0.0.1:5080` on the Docker host and open
+**Traces** in the `default` organization after running a scan or transfer.
+Look for the `koonj.job.execution` span and its `operation` and `outcome`
+attributes. **Metrics** shows aggregates such as job execution count and
+duration. Allow a minute for the first metrics export. Koonj sends both
+signals directly over OTLP/HTTP. The OpenObserve data volume persists
+across container restarts.
+
+When upgrading the same Compose project from the old Grafana setup, add
+`--remove-orphans` to the startup command to remove the old telemetry
+containers while preserving their named volumes.
 
 ## Option B: On-Premise Deployment
 
@@ -176,12 +239,13 @@ docker compose up -d --wait  # restart
 
 **Linux:**
 ```bash
-tar xzf koonj-<version>-on-premise.tar.gz
-cd koonj-<version>-on-premise
+unzip koonj-0.1.0-SNAPSHOT-deployment.zip
+cd koonj-0.1.0-SNAPSHOT/on-premise
 ```
 
 **Windows:**
-Extract `koonj-<version>-on-premise.zip` to a folder (e.g., `C:\koonj-install`).
+Extract the deployment ZIP and open the `on-premise` directory inside
+`koonj-<version>`.
 
 ### 2. Install
 
@@ -211,7 +275,8 @@ CREATE DATABASE koonj OWNER koonj;
 
 ### 4. Set up Keycloak
 
-Import the provided realm template:
+Set the console URL in the provided realm template using
+[Keycloak Setup](#keycloak-setup), then import it:
 
 **Option A — Automatic import at first start:**
 ```bash
@@ -247,6 +312,9 @@ KOONJ_AUTH_JWK_SET_URI=https://auth.yourcompany.com/realms/koonj/protocol/openid
 KOONJ_CORS_ALLOWED_ORIGINS=https://koonj.yourcompany.com
 ```
 
+In the installed `web/config.js`, set `keycloakUrl` to the browser-facing
+Keycloak URL, such as `https://auth.yourcompany.com`.
+
 ### 6. Start the server
 
 **Linux (systemd):**
@@ -272,11 +340,13 @@ C:\koonj\bin\koonj-server.cmd status
 
 ### 7. Configure Nginx for the UI
 
-The installer places the Nginx config at `/etc/nginx/conf.d/koonj.conf`.
-If you didn't use `--nginx`, copy it manually:
+The installer with `--nginx` places the config at
+`/etc/nginx/conf.d/koonj.conf`. For a manual install, copy it from the
+extracted `on-premise/` directory and update the web root if you used a
+custom installation prefix.
 
 ```bash
-sudo cp /opt/koonj/nginx/koonj.conf /etc/nginx/conf.d/
+sudo cp nginx/koonj.conf /etc/nginx/conf.d/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -289,6 +359,23 @@ URL Rewrite rule that proxies `/api/*` to `http://localhost:8080`.
 curl -sf http://localhost:8080/actuator/health
 # Open http://<server-hostname> in a browser
 ```
+
+### Optional OTLP metrics
+
+To send metrics to an existing OpenObserve instance, add these settings to
+the installed `config/koonj.env`. Use the full metrics endpoint for your
+organization and the ingestion authorization value described in
+[Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve).
+
+```dotenv
+MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=true
+MANAGEMENT_OTLP_METRICS_EXPORT_URL=https://observe.example.com/api/default/v1/metrics
+OPENOBSERVE_AUTHORIZATION="Basic <base64(email:password)>"
+```
+
+Restart the server with `sudo systemctl restart koonj-server` for a systemd
+installation, `/opt/koonj/bin/koonj-server.sh restart` for a manual Linux
+installation, or `C:\koonj\bin\koonj-server.cmd restart` on Windows.
 
 ---
 
@@ -374,6 +461,16 @@ JAVA_OPTS=-Xms1g -Xmx4g -XX:+UseG1GC
 
 ---
 
+## Keycloak Setup
+
+Before importing `keycloak/koonj-realm.json`, update the `koonj-ui`
+client's `redirectUris` and `post.logout.redirect.uris` entries to the
+deployed console URL followed by `/*`. For example, use
+`https://koonj.yourcompany.com/*` for a console at
+`https://koonj.yourcompany.com`. The existing `webOrigins` setting uses the
+origins from the allowed redirects. If the realm is already installed, update
+these client settings in the Keycloak Admin Console.
+
 ## Security Checklist
 
 - [ ] Change all default passwords in `.env` / `koonj.env`
@@ -423,3 +520,14 @@ docker compose logs <service-name>
 docker compose ps    # check health status
 docker inspect --format='{{json .State.Health}}' <container>
 ```
+
+### Docker: missing build context or telemetry export errors
+
+- If Compose reports that `koonj-server` has neither an image nor a build
+  context, run it from the extracted `docker/` directory and supply
+  `docker-compose.yml` before `docker-compose.otel.yml`.
+- If startup logs still reference `otel-collector` or `TEMPO_ENDPOINT`, use
+  the updated deployment ZIP and rebuild the server image with `up --build`.
+- If OpenObserve returns HTTP 401, check that `OPENOBSERVE_AUTHORIZATION`
+  contains `Basic ` followed by the Base64-encoded ingestion credentials.
+  Recreate `koonj-server` with both Compose files after updating `.env`.

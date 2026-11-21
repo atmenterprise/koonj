@@ -177,3 +177,4 @@ dist
 
 /.idea
 /koonj-server-archived/
+.DS_Store

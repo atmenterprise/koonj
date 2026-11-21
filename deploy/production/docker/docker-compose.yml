@@ -29,7 +29,7 @@ services:
     ports:
       - "${KOONJ_PG_BIND:-127.0.0.1}:${KOONJ_PG_PORT:-5432}:5432"
     volumes:
-      - koonj_pgdata:/var/lib/postgresql/data
+      - koonj_pgdata:/var/lib/postgresql
       - ./keycloak/init-db.sql:/docker-entrypoint-initdb.d/10-keycloak.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
@@ -72,7 +72,7 @@ services:
       test:
         - CMD-SHELL
         - >-
-          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080;
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/9000;
           printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3;
           read -r version code rest <&3; test "$$code" = 200'
       interval: 10s
@@ -104,22 +104,13 @@ services:
       KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
       KOONJ_DB_PASSWORD: ${KOONJ_DB_PASSWORD}
       KOONJ_DDL_AUTO: ${KOONJ_DDL_AUTO:-update}
-      KOONJ_AUTH_ISSUER_URI: "http://keycloak:8080/realms/koonj"
+      KOONJ_AUTH_ISSUER_URI: "${KOONJ_KEYCLOAK_EXTERNAL_URL:?Set KOONJ_KEYCLOAK_EXTERNAL_URL in .env}/realms/koonj"
       KOONJ_AUTH_JWK_SET_URI: "http://keycloak:8080/realms/koonj/protocol/openid-connect/certs"
       KOONJ_CORS_ALLOWED_ORIGINS: ${KOONJ_CORS_ALLOWED_ORIGINS:-http://localhost}
       KOONJ_BASIC_AUTH_ENABLED: ${KOONJ_BASIC_AUTH_ENABLED:-false}
       KOONJ_BASIC_AUTH_USERNAME: ${KOONJ_BASIC_AUTH_USERNAME:-}
       KOONJ_BASIC_AUTH_PASSWORD: ${KOONJ_BASIC_AUTH_PASSWORD:-}
       KOONJ_BASIC_AUTH_ROLE: ${KOONJ_BASIC_AUTH_ROLE:-KOONJ_VIEWER}
-      # OpenTelemetry integration
-      OTEL_JAVAAGENT_ENABLED: ${OTEL_JAVAAGENT_ENABLED:-false}
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-koonj-server}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
-      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
-      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
-      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
-      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
-      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       JAVA_OPTS: >-
         -XX:+UseContainerSupport
         -XX:MaxRAMPercentage=75.0

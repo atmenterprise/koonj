@@ -1,85 +1,24 @@
-# =============================================================================
-# Koonj — Docker Compose with OpenTelemetry & Grafana Observability
-# =============================================================================
-# Extends the standard Koonj stack with:
-#   - OpenTelemetry Collector (ingests OTLP traces & scrapes Prometheus metrics)
-#   - Grafana Tempo (distributed tracing storage)
-#   - Prometheus (time-series metrics storage)
-#   - Grafana (dashboards for metrics and traces)
-#
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build
-# =============================================================================
-
+# Use with docker-compose.yml from this directory.
+# docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build --wait
 services:
   koonj-server:
     environment:
-      OTEL_JAVAAGENT_ENABLED: "true"
-      OTEL_SERVICE_NAME: "koonj-server"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
-      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
-      OTEL_TRACES_EXPORTER: "otlp"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "true"
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://openobserve:5080/api/default/v1/metrics
+      MANAGEMENT_OTLP_TRACING_EXPORT_ENABLED: "true"
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://openobserve:5080/api/default/v1/traces
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      OPENOBSERVE_AUTHORIZATION: ${OPENOBSERVE_AUTHORIZATION:?Set OPENOBSERVE_AUTHORIZATION in .env}
     depends_on:
-      otel-collector:
+      openobserve:
         condition: service_started
 
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.119.0
-    command: ["--config=/etc/otelcol/config.yaml"]
-    restart: unless-stopped
-    volumes:
-      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
-    ports:
-      - "4317:4317"     # OTLP gRPC receiver
-      - "4318:4318"     # OTLP HTTP receiver
-      - "8889:8889"     # Prometheus metrics exporter
-    networks:
-      - koonj-internal
-
-  tempo:
-    image: grafana/tempo:2.7.0
-    command: ["-config.file=/etc/tempo.yaml"]
-    restart: unless-stopped
-    volumes:
-      - ./config/tempo.yaml:/etc/tempo.yaml:ro
-      - tempo_data:/var/tempo
-    ports:
-      - "3200:3200"     # Tempo HTTP
-    networks:
-      - koonj-internal
-
-  prometheus:
-    image: prom/prometheus:v3.1.0
-    restart: unless-stopped
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - koonj-internal
-
-  grafana:
-    image: grafana/grafana:11.5.1
-    restart: unless-stopped
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
-      - grafana_data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-      - tempo
+  openobserve:
+    extends:
+      file: openobserve.compose.yml
+      service: openobserve
     networks:
       - koonj-internal
 
 volumes:
-  tempo_data:
-  prometheus_data:
-  grafana_data:
+  openobserve_data:

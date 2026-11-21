@@ -111,21 +111,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Test Master Build Script (On-Premise & Docker bundles)
-        run: |
-          chmod +x deploy/production/build.sh deploy/production/on-premise/install.sh
-          ./deploy/production/build.sh --skip-tests
+      - name: Build Deployment ZIP
+        run: mvn -B -ntp -pl koonj-assembly -am clean package -DskipTests
 
-      - name: Verify Distribution Archives Exist
+      - name: Verify Deployment ZIP
         run: |
-          test -f dist/koonj-*-on-premise.tar.gz || { echo "Missing on-premise tar.gz"; exit 1; }
-          test -f dist/koonj-*-docker.tar.gz || { echo "Missing docker tar.gz"; exit 1; }
-          echo "All distribution bundles created successfully."
+          unzip -q koonj-assembly/target/koonj-*-deployment.zip -d dist
+          cd dist/koonj-*/
+          cmp docker/server/koonj-server.jar on-premise/lib/koonj-server.jar
+          cmp docker/ui/index.html on-premise/web/index.html
+          test -x on-premise/install.sh
+          test -x on-premise/bin/koonj-server.sh
+          test -f on-premise/install.cmd
 
       - name: Test Building Production Docker Images
         run: |
-          # Test build using the artifacts generated in dist
-          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          cd "dist/koonj-${VERSION}-docker"
+          cd dist/koonj-*/docker
+          docker compose --env-file .env.example -f docker-compose.yml config -q
+          OPENOBSERVE_ROOT_EMAIL=ci@example.com OPENOBSERVE_ROOT_PASSWORD=ci-config-only \
+            OPENOBSERVE_AUTHORIZATION='Basic Y2k=' \
+            docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.otel.yml config -q
           docker build -t koonj-server:test -f server/Dockerfile.server server/
           docker build -t koonj-ui:test -f ui/Dockerfile.ui ui/

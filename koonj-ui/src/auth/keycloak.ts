@@ -14,7 +14,7 @@ export type AuthState =
   | { status: 'authenticated'; user: AuthUser }
 
 const keycloak = new Keycloak({
-  url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180',
+  url: globalThis.window?.KOONJ_CONFIG?.keycloakUrl || import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180',
   realm: import.meta.env.VITE_KEYCLOAK_REALM || 'koonj',
   clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'koonj-ui',
 })

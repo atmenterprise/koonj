@@ -14,7 +14,7 @@ set "ENV_FILE=%KOONJ_HOME%\config\koonj.env"
 if exist "%ENV_FILE%" (
   for /f "usebackq tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
     set "LINE=%%a"
-    if not "!LINE:~0,1!"=="#" if not "%%a"=="" set "%%a=%%b"
+    if not "!LINE:~0,1!"=="#" if not "%%a"=="" set "%%a=%%~b"
   )
 )
 
@@ -28,15 +28,6 @@ if not defined KOONJ_SERVER_PORT set "KOONJ_SERVER_PORT=8080"
 set "SPRING_CONFIG=%KOONJ_HOME%\config\application-production.yml"
 set "SPRING_CONFIG_FLAG="
 if exist "%SPRING_CONFIG%" set "SPRING_CONFIG_FLAG=--spring.config.additional-location=file:%SPRING_CONFIG%"
-
-set "OTEL_AGENT_JAR=%KOONJ_HOME%\lib\opentelemetry-javaagent.jar"
-set "OTEL_AGENT_FLAG="
-if /I "%OTEL_JAVAAGENT_ENABLED%"=="true" (
-  if exist "%OTEL_AGENT_JAR%" (
-    set "OTEL_AGENT_FLAG=-javaagent:%OTEL_AGENT_JAR%"
-    if not defined OTEL_SERVICE_NAME set "OTEL_SERVICE_NAME=koonj-server"
-  )
-)
 
 if not exist "%KOONJ_LOG_DIR%" mkdir "%KOONJ_LOG_DIR%"
 
@@ -56,7 +47,7 @@ if exist "%KOONJ_PID_FILE%" (
   del "%KOONJ_PID_FILE%" 2>nul
 )
 echo Starting Koonj Server ...
-start /B "" javaw %JAVA_OPTS% %OTEL_AGENT_FLAG% -Dspring.profiles.active=%SPRING_PROFILES_ACTIVE% -Dserver.port=%KOONJ_SERVER_PORT% -jar "%KOONJ_JAR%" %SPRING_CONFIG_FLAG% >> "%KOONJ_LOG_FILE%" 2>&1
+start /B "" javaw %JAVA_OPTS% -Dspring.profiles.active=%SPRING_PROFILES_ACTIVE% -Dserver.port=%KOONJ_SERVER_PORT% -jar "%KOONJ_JAR%" %SPRING_CONFIG_FLAG% >> "%KOONJ_LOG_FILE%" 2>&1
 timeout /t 3 /nobreak >nul
 for /f "tokens=2" %%p in ('tasklist /FI "IMAGENAME eq javaw.exe" /FO LIST 2^>nul ^| findstr "PID:"') do set "NEW_PID=%%p"
 if defined NEW_PID ( echo !NEW_PID!>"%KOONJ_PID_FILE%" & echo   Started ^(PID !NEW_PID!^) )

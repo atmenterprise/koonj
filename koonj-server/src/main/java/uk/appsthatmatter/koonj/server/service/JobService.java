@@ -1,5 +1,7 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Async;
@@ -22,9 +24,13 @@ import java.util.concurrent.locks.ReentrantLock;
 @Service
 public class JobService {
     private final TransferJobRepository jobs;
+    private final ObservationRegistry observations;
     private final ReentrantLock execution = new ReentrantLock(true);
 
-    public JobService(TransferJobRepository jobs) { this.jobs = jobs; }
+    public JobService(TransferJobRepository jobs, ObservationRegistry observations) {
+        this.jobs = jobs;
+        this.observations = observations;
+    }
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths) {
         TransferJob job = new TransferJob();
@@ -47,8 +53,11 @@ public class JobService {
 
     @Async("applicationTaskExecutor")
     public void execute(TransferJob job, JobWork work) {
+        Observation activity = Observation.createNotStarted("koonj.job.execution", observations)
+                .lowCardinalityKeyValue("operation", job.getOperation().name());
         execution.lock();
         try {
+            activity.start();
             job.setStatus(Status.RUNNING);
             jobs.save(job);
             try {
@@ -61,8 +70,13 @@ public class JobService {
             }
             job.setCompletedAt(Instant.now());
             jobs.save(job);
+            activity.lowCardinalityKeyValue("outcome", job.getStatus().name());
+        } catch (RuntimeException failure) {
+            activity.lowCardinalityKeyValue("outcome", "FAILED");
+            throw failure;
         } finally {
             execution.unlock();
+            activity.stop();
         }
     }
 

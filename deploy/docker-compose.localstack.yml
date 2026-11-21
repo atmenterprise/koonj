@@ -1,0 +1,21 @@
+name: localstack
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - AWS_DEFAULT_REGION=${KOONJ_LOCAL_REGION:-eu-west-2}
+      - KOONJ_LOCAL_BUCKET=${KOONJ_LOCAL_BUCKET:-koonj-local-archive}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'awslocal s3api head-bucket --bucket "$$KOONJ_LOCAL_BUCKET"']
+      interval: 5s
+      timeout: 4s
+      retries: 30
+
+volumes:
+  localstack_data:

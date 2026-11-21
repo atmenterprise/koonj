@@ -29,14 +29,6 @@ SPRING_CONFIG="${KOONJ_HOME}/config/application-production.yml"
 SPRING_CONFIG_FLAG=""
 [[ -f "${SPRING_CONFIG}" ]] && SPRING_CONFIG_FLAG="--spring.config.additional-location=file:${SPRING_CONFIG}"
 
-# OpenTelemetry Java Agent support (optional)
-OTEL_AGENT_JAR="${KOONJ_HOME}/lib/opentelemetry-javaagent.jar"
-OTEL_AGENT_FLAG=""
-if [[ "${OTEL_JAVAAGENT_ENABLED:-false}" == "true" && -f "${OTEL_AGENT_JAR}" ]]; then
-  OTEL_AGENT_FLAG="-javaagent:${OTEL_AGENT_JAR}"
-  export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-koonj-server}"
-fi
-
 mkdir -p "${KOONJ_LOG_DIR}"
 
 get_pid() {
@@ -55,7 +47,6 @@ do_start() {
   [[ -f "${KOONJ_JAR}" ]] || { echo "ERROR: JAR not found at ${KOONJ_JAR}"; exit 1; }
   echo "Starting Koonj Server …"
   nohup java ${JAVA_OPTS} \
-    ${OTEL_AGENT_FLAG} \
     -Dspring.profiles.active="${SPRING_PROFILES}" \
     -Dserver.port="${SERVER_PORT}" \
     -jar "${KOONJ_JAR}" ${SPRING_CONFIG_FLAG} \
