@@ -145,9 +145,10 @@ xcopy /E /Q /Y "%UI_DIST%\*" "%DK_DIR%\ui\" >nul
 
 copy /Y "%SCRIPT_DIR%docker\Dockerfile.server"           "%DK_DIR%\server\"   >nul
 copy /Y "%SCRIPT_DIR%docker\Dockerfile.ui"               "%DK_DIR%\ui\"       >nul
+copy /Y "%SCRIPT_DIR%docker\nginx\default.conf.template" "%DK_DIR%\ui\"       >nul
+copy /Y "%SCRIPT_DIR%docker\nginx\default.conf.template" "%DK_DIR%\nginx\"    >nul
 copy /Y "%SCRIPT_DIR%docker\docker-compose.yml"          "%DK_DIR%\"          >nul
 copy /Y "%SCRIPT_DIR%docker\.env.example"                "%DK_DIR%\.env"      >nul
-copy /Y "%SCRIPT_DIR%docker\nginx\default.conf.template" "%DK_DIR%\nginx\"    >nul
 copy /Y "%PROJECT_ROOT%\deploy\keycloak\koonj-realm.json" "%DK_DIR%\keycloak\" >nul
 copy /Y "%PROJECT_ROOT%\deploy\keycloak\init-db.sql"     "%DK_DIR%\keycloak\" >nul
 

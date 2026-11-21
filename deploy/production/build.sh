@@ -159,9 +159,10 @@ assemble_docker() {
   # Docker files
   cp "${SCRIPT_DIR}/docker/Dockerfile.server"              "${DK_DIR}/server/"
   cp "${SCRIPT_DIR}/docker/Dockerfile.ui"                  "${DK_DIR}/ui/"
+  cp "${SCRIPT_DIR}/docker/nginx/default.conf.template"    "${DK_DIR}/ui/"
+  cp "${SCRIPT_DIR}/docker/nginx/default.conf.template"    "${DK_DIR}/nginx/"
   cp "${SCRIPT_DIR}/docker/docker-compose.yml"             "${DK_DIR}/"
   cp "${SCRIPT_DIR}/docker/.env.example"                   "${DK_DIR}/.env"
-  cp "${SCRIPT_DIR}/docker/nginx/default.conf.template"    "${DK_DIR}/nginx/"
 
   # Keycloak realm
   cp "${PROJECT_ROOT}/deploy/keycloak/koonj-realm.json"    "${DK_DIR}/keycloak/"
