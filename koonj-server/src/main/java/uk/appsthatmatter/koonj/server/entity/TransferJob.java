@@ -52,6 +52,7 @@ public class TransferJob {
     private String triggeredBy;
     @CreationTimestamp
     private Instant createdAt;
+    private Instant startedAt;
     private Instant completedAt;
     @Column(columnDefinition = "text")
     private String details;

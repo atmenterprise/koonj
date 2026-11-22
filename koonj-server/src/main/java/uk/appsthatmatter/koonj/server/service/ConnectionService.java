@@ -23,15 +23,17 @@ public class ConnectionService {
     private final TransferJobRepository jobs;
     private final StorageConnectorFactory connectors;
     private final CatalogAnnotationRepository annotations;
+    private final CatalogFavoriteRepository favorites;
 
     public ConnectionService(StorageConnectionRepository connections, FileMetadataRepository files,
                              TransferJobRepository jobs, StorageConnectorFactory connectors,
-                             CatalogAnnotationRepository annotations) {
+                             CatalogAnnotationRepository annotations, CatalogFavoriteRepository favorites) {
         this.connections = connections;
         this.files = files;
         this.jobs = jobs;
         this.connectors = connectors;
         this.annotations = annotations;
+        this.favorites = favorites;
     }
 
     public StorageConnection get(UUID id) {
@@ -84,6 +86,7 @@ public class ConnectionService {
         if (referenced(id)) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Connection is referenced by the catalog. Set active to false to retire it.");
         annotations.deleteByConnectionId(id);
+        favorites.deleteByConnectionId(id);
         connections.delete(connection);
     }
 

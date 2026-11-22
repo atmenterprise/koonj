@@ -19,27 +19,71 @@ export function linkedBucket(file: FileMetadataDTO, locations: CatalogLocationDT
     : candidates.length === 1 ? candidates[0] : undefined
 }
 
+export interface TransferPlan {
+  source: CatalogLocationDTO
+  paths: string[]
+  fileIds: string[]
+  destinationId?: string
+  targetFolderPaths?: string[]
+  fileCount: number
+}
+
+function selectedFolderFor(path: string, folders: ReadonlySet<string>) {
+  for (let slash = path.lastIndexOf('/'); slash >= 0; slash = path.lastIndexOf('/', slash - 1)) {
+    const prefix = path.slice(0, slash + 1)
+    if (folders.has(prefix)) return prefix
+    if (slash === 0) break
+  }
+}
+
 export function planTransfers(location: CatalogLocationDTO | undefined, locations: CatalogLocationDTO[],
-  files: FileMetadataDTO[], folders: FolderNode[], catalog: FileMetadataDTO[]) {
-  const paths = folders.map(folder => folder.prefix)
-  const fileIds = files.map(file => file.id)
+  files: FileMetadataDTO[], folders: FolderNode[], catalog: FileMetadataDTO[]): { archive?: TransferPlan; recall?: TransferPlan } {
   if (!location?.active || !(files.length || folders.length)) return {}
+  const chosen = new Set(folders.map(folder => folder.prefix))
+  const paths = [...chosen].filter(path => !selectedFolderFor(path.slice(0, -1), chosen))
+  const prefixes = new Set(paths)
+  const explicitFiles = files.filter(file => !selectedFolderFor(file.relativePath, prefixes))
+  const fileIds = explicitFiles.map(file => file.id)
   const cloud = isObjectStorage(location.providerType)
   const regular = (file: FileMetadataDTO) => file.connectionId === location.id && file.entryType === 'FILE'
-  const hasRegularFiles = paths.every(path => catalog.some(file => regular(file) && file.relativePath.startsWith(path)))
-  const archive = !cloud && location.role !== 'TARGET' && files.every(regular) && hasRegularFiles
-    ? { source: location, paths, fileIds, destinationId: undefined } : undefined
+  const regularFolders = new Set<string>()
+  const linkFolders = new Set<string>()
+  let regularCount = 0
+  let linkCount = 0
+  let source: CatalogLocationDTO | undefined
+  let compatibleLinks = true
+  const checkLinks = !cloud && explicitFiles.every(file => file.entryType === 'SYMLINK')
 
-  if (cloud) return { archive, recall: files.every(regular) && hasRegularFiles
-    ? { source: location, paths, fileIds, destinationId: undefined } : undefined }
+  function includeLink(file: FileMetadataDTO, path?: string) {
+    if (!compatibleLinks) return
+    const bucket = linkedBucket(file, locations)
+    if (file.connectionId !== location?.id || !bucket || (source && bucket.id !== source.id)) {
+      compatibleLinks = false
+      return
+    }
+    source = bucket
+    linkCount++
+    if (path) linkFolders.add(path)
+  }
 
-  const folderLinks = paths.map(path => catalog.filter(file => file.entryType === 'SYMLINK' && file.relativePath.startsWith(path)))
-  if (folderLinks.some(entries => entries.length === 0)) return { archive }
-  const selected = [...new Map([...files, ...folderLinks.flat()].map(file => [file.id, file])).values()]
-  const source = selected[0] && linkedBucket(selected[0], locations)
-  const recall = source && selected.every(file => file.connectionId === location.id && file.entryType === 'SYMLINK'
-    && linkedBucket(file, locations)?.id === source.id)
-    ? { source, paths: [], fileIds: selected.map(file => file.id), destinationId: location.id } : undefined
+  if (checkLinks) explicitFiles.forEach(file => includeLink(file))
+  if (paths.length) {
+    for (const file of catalog) {
+      if (file.entryType === 'DIRECTORY') continue
+      const path = selectedFolderFor(file.relativePath, prefixes)
+      if (!path) continue
+      if (regular(file)) {
+        regularFolders.add(path)
+        regularCount++
+      } else if (checkLinks && file.entryType === 'SYMLINK') includeLink(file, path)
+    }
+  }
+  const regularPlan = explicitFiles.every(regular) && regularFolders.size === paths.length
+    ? { source: location, paths, fileIds, fileCount: regularCount + fileIds.length } : undefined
+  if (cloud) return { recall: regularPlan }
+  const archive = location.role !== 'TARGET' ? regularPlan : undefined
+  const recall = source && compatibleLinks && linkFolders.size === paths.length
+    ? { source, paths: [], fileIds, targetFolderPaths: paths, destinationId: location.id, fileCount: linkCount } : undefined
   return { archive, recall }
 }
 

@@ -1,6 +1,6 @@
 import type { FolderNode } from '../../api/mappers'
 import { isUuidArchiveLink } from './transferSelection'
-import type { CatalogMetadataTarget, FileMetadataDTO } from '../../api/types'
+import type { FileMetadataDTO } from '../../api/types'
 
 export function folderTotals(folders: FolderNode[], files: FileMetadataDTO[]) {
   const totals = new Map<string, { sizeBytes: number; files: number; folders: number }>()
@@ -36,19 +36,30 @@ export function folderTotals(folders: FolderNode[], files: FileMetadataDTO[]) {
   return totals
 }
 
-function childrenOf(folders: FolderNode[], prefix: string): FolderNode[] {
-  if (!prefix) return folders
-  const parent = folders.find(folder => prefix.startsWith(folder.prefix))
-  if (!parent) return []
-  return parent.prefix === prefix ? parent.children : childrenOf(parent.children, prefix)
-}
+export function indexFolderContents(folders: FolderNode[], files: FileMetadataDTO[]) {
+  const foldersByPath = new Map<string, FolderNode>()
+  const filesByFolder = new Map<string, FileMetadataDTO[]>()
 
-export function folderContents(folders: FolderNode[], files: FileMetadataDTO[], prefix: string,
-  matches: (target: CatalogMetadataTarget) => boolean = () => true) {
+  function indexFolders(nodes: FolderNode[]) {
+    for (const node of nodes) {
+      foldersByPath.set(node.prefix, node)
+      indexFolders(node.children)
+    }
+  }
+  indexFolders(folders)
+
+  for (const file of files) {
+    if (file.entryType === 'DIRECTORY') continue
+    const prefix = file.relativePath.slice(0, file.relativePath.lastIndexOf('/') + 1)
+    const siblings = filesByFolder.get(prefix)
+    if (siblings) siblings.push(file)
+    else filesByFolder.set(prefix, [file])
+  }
+
   return {
-    folders: childrenOf(folders, prefix).filter(folder => matches({ scope: 'FOLDER', path: folder.prefix })),
-    files: files.filter(file => file.entryType !== 'DIRECTORY' && file.relativePath.startsWith(prefix)
-      && !file.relativePath.slice(prefix.length).includes('/')
-      && matches({ scope: 'FILE', path: file.relativePath })),
+    foldersByPath,
+    contents(prefix: string) {
+      return { folders: prefix ? foldersByPath.get(prefix)?.children ?? [] : folders, files: filesByFolder.get(prefix) ?? [] }
+    },
   }
 }

@@ -6,6 +6,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { JobStatusBadge, type Navigate } from '../../shared/ui/feedback'
 import { Button, Icon, Metric, Progress, bytes, count, date, percent, time } from '../../shared/ui/primitives'
+import { QuickAccess } from './QuickAccess'
 
 const activityIcons = {
   ARCHIVE: { name: 'upload', tone: 'yellow' },
@@ -54,6 +55,7 @@ export default function DashboardPage({ navigate }: { navigate: Navigate }) {
         Open explorer <Icon name="arrow" size={15} />
       </Button>
     </div>
+    <QuickAccess navigate={navigate} />
     <DashboardOverview navigate={navigate} canAdminister={canAdminister} canOperate={canOperate} />
   </>
 }

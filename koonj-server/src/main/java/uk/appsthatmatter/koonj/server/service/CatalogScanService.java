@@ -4,6 +4,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import software.amazon.awssdk.core.exception.SdkException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.appsthatmatter.koonj.server.connector.*;
@@ -11,6 +12,7 @@ import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -139,6 +141,18 @@ public class CatalogScanService {
         return files.findById(id).map(FileResponse::from).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Catalog entry was not found"));
+    }
+
+    public FileAttributes attributes(UUID id) {
+        FileResponse file = get(id);
+        if (file.entryType() != EntryType.FILE) return FileAttributes.EMPTY;
+        StorageConnection source = connections.get(file.connectionId());
+        if (!source.isActive()) return FileAttributes.EMPTY;
+        try {
+            return connectors.resolve(source.getProviderType()).fileAttributes(source, file.relativePath());
+        } catch (IOException | SdkException failure) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "File attributes could not be read from storage", failure);
+        }
     }
 
     public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix, Pageable pageable) {

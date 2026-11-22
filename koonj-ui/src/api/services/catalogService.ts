@@ -1,7 +1,14 @@
 import { apiClient } from '../client'
-import type { CatalogLocationDTO, CatalogMetadataEntry, CatalogMetadataWriteRequest, CatalogParams, PaginatedFileResponse, TransferJobDTO } from '../types'
+import type { CatalogFavorite, CatalogFavoriteTarget, CatalogLocationDTO, CatalogMetadataEntry, CatalogMetadataWriteRequest,
+  CatalogParams, FileAttributesDTO, FileMovementDTO, PageResponse, PaginatedFileResponse, TransferJobDTO } from '../types'
 
 export const catalogService = {
+  async getFavorites(signal?: AbortSignal) {
+    return (await apiClient.get<CatalogFavorite[]>('/catalog/favorites', { signal })).data
+  },
+  async setFavorite(request: CatalogFavoriteTarget & { favorite: boolean }) {
+    await apiClient.put('/catalog/favorites', request)
+  },
   async getMetadata(connectionId: string, signal?: AbortSignal) {
     return (await apiClient.get<CatalogMetadataEntry[]>(`/catalog/locations/${connectionId}/metadata`, { signal })).data
   },
@@ -13,6 +20,17 @@ export const catalogService = {
   },
   async getFiles(params: CatalogParams = {}, signal?: AbortSignal) {
     return (await apiClient.get<PaginatedFileResponse>('/catalog/files', { params, signal })).data
+  },
+  async getFileAttributes(fileId: string, signal?: AbortSignal) {
+    return (await apiClient.get<FileAttributesDTO>(`/catalog/files/${fileId}/attributes`, { signal })).data
+  },
+  async getLineage(connectionId: string, path: string, page: number, signal?: AbortSignal) {
+    return (await apiClient.get<PageResponse<FileMovementDTO>>(`/catalog/locations/${connectionId}/lineage`,
+      { params: { path, page }, signal })).data
+  },
+  async getLineageReport(connectionId: string, path: string) {
+    return (await apiClient.get<Blob>(`/catalog/locations/${connectionId}/lineage/report`,
+      { params: { path }, responseType: 'blob', timeout: 0, headers: { Accept: 'text/csv' } })).data
   },
   async triggerScan(connectionId: string, signal?: AbortSignal) {
     return (await apiClient.post<TransferJobDTO>(`/catalog/scan/${connectionId}`, undefined, { signal })).data

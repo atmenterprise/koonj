@@ -28,6 +28,12 @@ export function useCatalogFiles(params: CatalogParams, enabled = true) {
     queryFn: ({ signal }) => catalogService.getFiles(params, signal), select: catalogTablePage })
 }
 
+export function useCatalogFileAttributes(fileId?: string) {
+  return useQuery({ queryKey: [...queryKeys.files, 'attributes', fileId], enabled: !!fileId, retry: false,
+    meta: { errorTitle: 'Could not load file attributes from storage' },
+    queryFn: ({ signal }) => catalogService.getFileAttributes(fileId!, signal) })
+}
+
 async function collectPages<T extends { id: string }>(read: (page: number) => Promise<PageResponse<T>>) {
   const first = await read(0)
   const records = [...first.content]
@@ -65,4 +71,7 @@ export const transferJobsOptions = queryOptions({
   refetchIntervalInBackground: true,
 })
 
-export function useTransferJobs(enabled = true) { return useQuery({ ...transferJobsOptions, enabled }) }
+export function useTransferJobs(enabled = true, watchForNewJobs = false) {
+  return useQuery({ ...transferJobsOptions, enabled,
+    refetchInterval: query => jobPollingInterval(query.state.data) || (watchForNewJobs ? 15_000 : false) })
+}

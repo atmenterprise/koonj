@@ -4,6 +4,9 @@ spring:
   threads:
     virtual:
       enabled: true
+  mvc:
+    async:
+      request-timeout: ${KOONJ_REPORT_TIMEOUT:10m}
   datasource:
     url: "${KOONJ_DB_URL:jdbc:postgresql://localhost:5432/koonj?reWriteBatchedInserts=true}"
     username: ${KOONJ_DB_USERNAME:koonj}

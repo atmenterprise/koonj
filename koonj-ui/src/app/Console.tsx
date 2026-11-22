@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import AdminPage from '../modules/admin/AdminPage'
-import AuditLogPage from '../modules/activity/AuditLogPage'
 import DashboardPage from '../modules/home/DashboardPage'
 import StorageBrowserPage from '../modules/catalog/StorageBrowserPage'
 import StorageStatusPage from '../modules/storage/StorageStatusPage'
@@ -9,6 +8,9 @@ import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { useAuth } from '../auth/AuthProvider'
 import { Button, Icon } from '../shared/ui/primitives'
+import { LoadingRows } from '../shared/ui/feedback'
+
+const AuditLogPage = lazy(() => import('../modules/activity/AuditLogPage'))
 
 const pages = [
   { path: '/Home', title: 'Home', icon: 'home', access: 'read' },
@@ -103,7 +105,9 @@ export default function Console() {
       <main id="main-content" className="main-content" tabIndex={-1}>
         {!pageAllowed ? null : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
             initialPath={params.get('path')} navigate={navigate} />
-          : page.path === '/activities' ? <AuditLogPage key={location} initialJob={params.get('job')} />
+          : page.path === '/activities' ? <Suspense fallback={<LoadingRows label="Loading activity" />}>
+            <AuditLogPage key={location} initialJob={params.get('job')} />
+          </Suspense>
           : page.path === '/admin' ? <AdminPage section={params.get('section')} job={params.get('job')} navigate={navigate} />
           : page.path === '/storage' ? <StorageStatusPage navigate={navigate} />
           : <DashboardPage navigate={navigate} />}

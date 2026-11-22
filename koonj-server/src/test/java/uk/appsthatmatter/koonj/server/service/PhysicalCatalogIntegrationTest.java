@@ -9,7 +9,13 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import uk.appsthatmatter.koonj.server.connector.*;
+import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteRequest;
+import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteResponse;
+import uk.appsthatmatter.koonj.server.dto.CatalogMetadataValues;
+import uk.appsthatmatter.koonj.server.dto.CatalogMetadataWriteRequest;
 import uk.appsthatmatter.koonj.server.dto.FileResponse;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
 import uk.appsthatmatter.koonj.server.dto.TransferRequest;
@@ -19,13 +25,17 @@ import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,6 +58,10 @@ class PhysicalCatalogIntegrationTest {
     @Autowired StorageConnectionRepository connections;
     @Autowired FileMetadataRepository files;
     @Autowired CatalogScanService catalog;
+    @Autowired FileLineageService lineage;
+    @Autowired CatalogMetadataService metadata;
+    @Autowired CatalogFavoriteService favorites;
+    @Autowired ConnectionService connectionService;
     @Autowired FileTransferService transfers;
     @Autowired JobService jobs;
     @Autowired TransferJobRepository jobRepository;
@@ -62,6 +76,65 @@ class PhysicalCatalogIntegrationTest {
         s3.reset();
         source = connection(ProviderType.LOCAL, root.toString());
         bucket = connection(ProviderType.MINIO, "archive");
+    }
+
+    @Test
+    void keepsFavoritesPrivateAndCleansThemUpWhenTheirConnectionIsDeleted() {
+        var folder = CatalogMetadataWriteRequest.Scope.FOLDER;
+        var file = CatalogMetadataWriteRequest.Scope.FILE;
+        var selectedFolder = new CatalogFavoriteRequest(source.getId(), folder, "docs/", true);
+        favorites.setFavorite("alice", selectedFolder);
+        favorites.setFavorite("alice", new CatalogFavoriteRequest(source.getId(), folder, "docs", true));
+        favorites.setFavorite("alice", new CatalogFavoriteRequest(source.getId(), file, "docs/report.txt", true));
+        favorites.setFavorite("bob", selectedFolder);
+
+        assertThat(favorites.list("alice")).extracting(CatalogFavoriteResponse::path)
+                .containsExactlyInAnyOrder("docs", "docs/report.txt");
+        assertThat(favorites.list("bob")).extracting(CatalogFavoriteResponse::path).containsExactly("docs");
+
+        favorites.setFavorite("alice", new CatalogFavoriteRequest(source.getId(), folder, "docs/", false));
+        assertThat(favorites.list("alice")).extracting(CatalogFavoriteResponse::path).containsExactly("docs/report.txt");
+        assertThat(favorites.list("bob")).hasSize(1);
+        connectionService.delete(source.getId());
+        assertThat(favorites.list("alice")).isEmpty();
+        assertThat(favorites.list("bob")).isEmpty();
+    }
+
+    @Test
+    void readsFileAttributesOnDemandWithoutInferringTheAuthorFromTheOwner() throws IOException {
+        Path report = Files.writeString(root.resolve("report"), "contents");
+        completed(catalog.submit(source.getId()));
+
+        var attributes = catalog.attributes(entry(source, "report").id());
+        assertThat(attributes.owner()).isEqualTo(Files.getOwner(report).getName());
+        assertThat(attributes.createdAt()).isNotNull();
+        assertThat(attributes.lastAccessedAt()).isNotNull();
+        assertThat(attributes.author()).isNull();
+        assertThat(attributes.lastAccessedBy()).isNull();
+    }
+
+    @Test
+    void savesFileAndFolderDescriptionsAndPreservesThemWhenOnlyOtherMetadataChanges() {
+        var folder = new CatalogMetadataWriteRequest.Target(CatalogMetadataWriteRequest.Scope.FOLDER, "docs/");
+        var file = new CatalogMetadataWriteRequest.Target(CatalogMetadataWriteRequest.Scope.FILE, "docs/report");
+        var replace = CatalogMetadataWriteRequest.Mode.REPLACE;
+        metadata.save(source.getId(), new CatalogMetadataWriteRequest(List.of(folder),
+                new CatalogMetadataValues(List.of(), List.of(), "Reports\nand supporting files"), replace));
+        metadata.save(source.getId(), new CatalogMetadataWriteRequest(List.of(file),
+                new CatalogMetadataValues(List.of("finance"), List.of(), "Quarterly report"), replace));
+        metadata.save(source.getId(), new CatalogMetadataWriteRequest(List.of(file),
+                new CatalogMetadataValues(List.of("reviewed"), List.of()), replace));
+
+        assertThat(metadata.list(source.getId())).satisfiesExactly(
+                item -> assertThat(item.values().description()).isEqualTo("Reports\nand supporting files"),
+                item -> {
+                    assertThat(item.values().description()).isEqualTo("Quarterly report");
+                    assertThat(item.values().tags()).containsExactly("reviewed");
+                });
+
+        metadata.save(source.getId(), new CatalogMetadataWriteRequest(List.of(folder),
+                new CatalogMetadataValues(List.of(), List.of(), ""), replace));
+        assertThat(metadata.list(source.getId())).extracting(item -> item.values().description()).containsExactly("Quarterly report");
     }
 
     @Test
@@ -201,6 +274,88 @@ class PhysicalCatalogIntegrationTest {
     }
 
     @Test
+    void logsTimingActorAndIndividualReasonsForPartialFailures() throws IOException {
+        Files.writeString(root.resolve("copied.txt"), "verified bytes");
+        Files.writeString(root.resolve("corrupt.txt"), "damaged during archive");
+        s3.corruptReads = "corrupt.txt";
+        JobResponse accepted;
+        var context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated("catalog-operator", null, List.of()));
+        SecurityContextHolder.setContext(context);
+        try {
+            accepted = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                    List.of("copied.txt", "corrupt.txt", "missing.txt"), null, null, ArchiveMode.COPY, false));
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        var job = finished(accepted);
+        assertThat(job.status()).isEqualTo(PARTIAL_FAILURE);
+        assertThat(job.triggeredBy()).isEqualTo("catalog-operator");
+        assertThat(job.startedAt()).isBetween(job.createdAt(), job.completedAt());
+        assertThat(job.failedFiles()).isEqualTo(2);
+        assertThat(jobs.fileResults(job.id(), false, PageRequest.of(0, 1)).totalElements()).isEqualTo(2);
+        assertThat(jobs.fileResults(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(file -> {
+            assertThat(file.sourcePath()).isEqualTo("corrupt.txt");
+            assertThat(file.error()).contains("checksum mismatch");
+        });
+        assertThat(jobs.events(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(event -> {
+            assertThat(event.path()).isEqualTo("missing.txt");
+            assertThat(event.message()).isEqualTo("No regular files found");
+        });
+        assertThat(jobs.events(job.id(), false, PageRequest.of(0, 10)).content()).extracting(event -> event.message())
+                .contains("Job queued", "Execution started", "Execution completed with failures");
+    }
+
+    @Test
+    void retainsCopyAndSymlinkRecallEvidenceAndExportsFolderChecksums() throws Exception {
+        Files.createDirectories(root.resolve("docs_%/nested"));
+        Files.createDirectories(root.resolve("docs-other"));
+        String path = "docs_%/nested/report.txt";
+        Path report = Files.writeString(root.resolve(path), "audited bytes");
+        Files.writeString(root.resolve("docs_%/pending.txt"), "never archived");
+        Files.writeString(root.resolve("docs-other/other.txt"), "outside report scope");
+        completed(catalog.submit(source.getId()));
+        String expected = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(report)));
+        var copy = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of(path), null, null, ArchiveMode.COPY, false));
+        completed(copy);
+        var purge = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of(path), null, null, ArchiveMode.PURGE, false));
+        completed(purge);
+        assertThat(Files.isSymbolicLink(report)).isTrue();
+        var recall = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
+                List.of(path), null, null, null, true));
+        completed(recall);
+
+        for (var connection : List.of(source, bucket)) {
+            var movements = lineage.forFile(connection.getId(), path, 0, 10).content();
+            assertThat(movements).extracting(item -> item.jobId()).containsExactly(recall.id(), purge.id(), copy.id());
+            assertThat(movements).extracting(item -> item.operation()).containsExactly(
+                    FileMovement.Operation.RECALL, FileMovement.Operation.ARCHIVE_PURGE, FileMovement.Operation.ARCHIVE_COPY);
+            assertThat(movements).allSatisfy(item -> {
+                assertThat(item.outcome()).isEqualTo(FileMovement.Outcome.VERIFIED);
+                assertThat(item.sourceChecksum()).isEqualTo(expected);
+                assertThat(item.targetChecksum()).isEqualTo(expected);
+                assertThat(item.sourcePath()).isEqualTo(path);
+                assertThat(item.targetPath()).isEqualTo(path);
+            });
+            assertThat(movements.getFirst().archiveRemoved()).isTrue();
+            assertThat(movements.getFirst().symlinkReference()).startsWith("koonj-ref://");
+            assertThat(movements.get(1).symlinkReference()).isEqualTo(movements.getFirst().symlinkReference());
+            assertThat(movements.getLast().symlinkReference()).isNull();
+        }
+        assertThat(inventory(bucket)).isEmpty();
+
+        var output = new ByteArrayOutputStream();
+        lineage.folderReport(source.getId(), "docs_%/").writeTo(output);
+        String csv = output.toString(StandardCharsets.UTF_8);
+        assertThat(csv.lines().toList()).hasSize(5);
+        assertThat(csv).contains("\"source_sha256\",\"target_sha256\"", "\"" + expected + "\",\"" + expected + "\"",
+                "\"docs_%/pending.txt\",\"NO_RECORD\"", copy.id().toString(), recall.id().toString())
+                .doesNotContain("docs-other");
+    }
+
+    @Test
     void failedArchiveAndRecallPreserveThePreviousPhysicalEntry() throws IOException {
         Path original = Files.writeString(root.resolve("report"), "original bytes");
         s3.corruptReads = "report";
@@ -208,6 +363,10 @@ class PhysicalCatalogIntegrationTest {
         assertThat(original).hasContent("original bytes");
         assertThat(inventory(bucket)).isEmpty();
         assertThat(s3.objects).isEmpty();
+        var evidence = lineage.forFile(source.getId(), "report", 0, 10).content().getFirst();
+        assertThat(evidence.outcome()).isEqualTo(FileMovement.Outcome.FAILED);
+        assertThat(evidence.sourceChecksum()).isNotBlank().isNotEqualTo(evidence.targetChecksum());
+        assertThat(evidence.targetChecksum()).isNotBlank();
 
         s3.corruptReads = null;
         completed(transfers.submit(ARCHIVE, request(source, bucket, ArchiveMode.PURGE, false)));
@@ -254,6 +413,30 @@ class PhysicalCatalogIntegrationTest {
 
     private FileResponse entry(StorageConnection location, String path) {
         return inventory(location).stream().filter(file -> file.relativePath().equals(path)).findFirst().orElseThrow();
+    }
+
+    @Test
+    void recallsOnlyTheArchivedLinksUnderTheSelectedMountedFolder() throws IOException {
+        Files.createDirectories(root.resolve("selected_%/nested"));
+        Files.createDirectory(root.resolve("selected-other"));
+        Path inside = Files.writeString(root.resolve("selected_%/nested/report"), "archived in folder");
+        Path outside = Files.writeString(root.resolve("selected-other/report"), "archived outside folder");
+        Path localOnly = Files.writeString(root.resolve("selected_%/local"), "still local");
+        completed(transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("selected_%/nested/report", "selected-other/report"), null, null, ArchiveMode.PURGE, false)));
+        assertThat(Files.isSymbolicLink(inside)).isTrue();
+        assertThat(Files.isSymbolicLink(outside)).isTrue();
+
+        var recall = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
+                null, null, null, null, false, List.of("selected_%/")));
+        assertThat(recall.requestedPaths()).containsExactly("selected_%/");
+        var finished = finished(recall);
+        assertThat(finished.status()).as(finished.details()).isEqualTo(COMPLETED);
+        assertThat(finished.totalFiles()).isEqualTo(1);
+        assertThat(inside).hasContent("archived in folder");
+        assertThat(Files.isSymbolicLink(inside)).isFalse();
+        assertThat(Files.isSymbolicLink(outside)).isTrue();
+        assertThat(localOnly).hasContent("still local");
     }
 
     private TransferRequest request(StorageConnection from, StorageConnection to, ArchiveMode mode, boolean delete) {

@@ -2,14 +2,24 @@ import { describe, expect, it } from 'vitest'
 import type { CatalogLocationDTO, FileMetadataDTO } from '../../api/types'
 import { metadataFor, metadataIndex } from './catalogMetadata'
 import { planTransfers, transferTargets } from './transferSelection'
-import { folderContents, folderTotals } from './folderContents'
+import { folderTotals, indexFolderContents } from './folderContents'
 import { folderTree } from '../../api/mappers'
 import { compareCatalogValues } from './catalogSort'
 import { catalogSearchResults } from './catalogSearchResults'
+import { fileAge } from './fileDates'
+import { favoriteHref, favoriteKey } from './catalogFavorites'
 
 const local: CatalogLocationDTO = { id: 'local', name: 'Local', providerType: 'LOCAL', bucket: null, role: 'BOTH', active: true }
 const bucket: CatalogLocationDTO = { id: 's3', name: 'Bucket', providerType: 'AWS_S3', bucket: 'archive', role: 'BOTH', active: true }
 const folders = [{ name: 'docs', prefix: 'docs/', children: [] }, { name: 'photos', prefix: 'photos/', children: [] }]
+
+it('links favorite folders and files to their exact catalog paths', () => {
+  const folder = { connectionId: local.id, scope: 'FOLDER' as const, path: 'docs & notes/' }
+  const file = { connectionId: local.id, scope: 'FILE' as const, path: 'docs & notes/report #2.txt' }
+  expect(favoriteKey(folder)).toBe(favoriteKey({ ...folder, path: 'docs & notes' }))
+  expect(favoriteHref(folder)).toBe('/explorer?endpoint=local&path=docs+%26+notes%2F')
+  expect(favoriteHref(file)).toBe('/explorer?endpoint=local&path=docs+%26+notes%2Freport+%232.txt')
+})
 
 it('sorts catalog sizes numerically and keeps missing values at the end in both directions', () => {
   expect(compareCatalogValues(2, 10, 'ascending')).toBeLessThan(0)
@@ -46,7 +56,7 @@ describe('folder transfer selection', () => {
     const selected = file('standalone', 'readme.txt')
     const inventory = [selected, file('doc', 'docs/doc.txt'), file('photo', 'photos/photo.jpg')]
     expect(planTransfers(local, [local, bucket], [selected], folders, inventory).archive).toEqual({
-      source: local, paths: ['docs/', 'photos/'], fileIds: ['standalone'], destinationId: undefined,
+      source: local, paths: ['docs/', 'photos/'], fileIds: ['standalone'], fileCount: 3,
     })
   })
 
@@ -61,15 +71,33 @@ describe('folder transfer selection', () => {
     expect(planTransfers(sourceOnly, locations, [file('new', 'docs/new.txt')], [], []).recall).toBeUndefined()
   })
 
-  it('recalls cloud folders by prefix, or uses matching archive IDs when browsing a mounted location', () => {
+  it('recalls cloud folders by source prefix and mounted folders by destination prefix', () => {
     const files = [file('a', 'docs/a.txt', true), file('b', 'photos/b.jpg', true), file('c', 'docs/not-archived.txt'),
       file('d', 'docs-old/d.txt', true)]
     expect(planTransfers(local, [local, bucket], [files[0]], folders, files).recall).toEqual({
-      source: bucket, paths: [], fileIds: ['a', 'b'], destinationId: local.id,
+      source: bucket, paths: [], fileIds: [], targetFolderPaths: ['docs/', 'photos/'], destinationId: local.id, fileCount: 2,
     })
     const objects = files.map(file => ({ ...file, connectionId: bucket.id, entryType: 'FILE' as const }))
     expect(planTransfers(bucket, [local, bucket], [], folders, objects).recall).toEqual({
-      source: bucket, paths: ['docs/', 'photos/'], fileIds: [], destinationId: undefined,
+      source: bucket, paths: ['docs/', 'photos/'], fileIds: [], fileCount: 3,
+    })
+  })
+
+  it('counts a 500,001-file folder once and keeps redundant paths and IDs out of the request', () => {
+    const first = file('first', 'docs/nested/first.txt')
+    const catalog = [first, ...Array.from({ length: 500_000 }, (_, index) => ({
+      ...first, id: String(index), relativePath: `docs/nested/${index}.txt`,
+    }))]
+    const nested = { prefix: 'docs/nested/', name: 'nested', children: [] }
+    const plan = planTransfers(local, [local, bucket], [first], [folders[0], nested], catalog).archive
+    expect(plan).toEqual({ source: local, paths: ['docs/'], fileIds: [], fileCount: 500_001 })
+    const link = file('archived', 'docs/nested/archived.txt', true)
+    const links = Array.from({ length: 500_001 }, (_, index) => ({
+      ...link, id: String(index), relativePath: `docs/nested/${index}.txt`,
+      symlinkTarget: `koonj-ref://${index}`, s3Key: `archive/${index}.txt`,
+    }))
+    expect(planTransfers(local, [local, bucket], [links[0]], [folders[0], nested], links).recall).toEqual({
+      source: bucket, paths: [], fileIds: [], targetFolderPaths: ['docs/'], destinationId: local.id, fileCount: 500_001,
     })
   })
 })
@@ -86,18 +114,33 @@ it('inherits folder tags and uses the nearest direct property, matching names wi
   expect(metadataFor(index, { scope: 'FILE', path: 'docs-old/report.txt' }).effective.tags).toEqual([])
 })
 
-it('lists only the selected folder’s direct files and child folders, including during a search', () => {
+it('keeps descriptions on their own items and indicates when age is based on modification', () => {
+  const index = metadataIndex([
+    { scope: 'FOLDER', path: 'docs', values: { description: 'All documents', tags: ['Finance'], properties: [] } },
+    { scope: 'FILE', path: 'docs/report.pdf', values: { description: 'Quarterly report', tags: [], properties: [] } },
+  ])
+  const metadata = metadataFor(index, { scope: 'FILE', path: 'docs/report.pdf' })
+  expect(metadata.direct.description).toBe('Quarterly report')
+  expect(metadata.inherited.description).toBeUndefined()
+  expect(metadata.effective.tags).toEqual(['Finance'])
+  const now = Date.parse('2026-11-22')
+  expect(fileAge('2026-11-01', '2026-11-20', now)).toBe('21 days')
+  expect(fileAge(null, '2026-11-20', now)).toBe('2 days since last modified')
+})
+
+it('indexes the direct files and child folders for each expandable path', () => {
   const files = [file('root', 'root.txt'), file('doc', 'docs/report.txt'),
     file('nested', 'docs/2026/report.txt'), file('sibling', 'docs-old/report.txt')]
   const tree = folderTree(files.map(item => item.relativePath))
-  const root = folderContents(tree, files, '', () => true)
+  const catalog = indexFolderContents(tree, files)
+  const root = catalog.contents('')
   expect(root.files.map(item => item.id)).toEqual(['root'])
   expect(root.folders.map(item => item.name)).toEqual(['docs', 'docs-old'])
-  const docs = folderContents(tree, files, 'docs/', () => true)
+  const docs = catalog.contents('docs/')
   expect(docs.files.map(item => item.id)).toEqual(['doc'])
   expect(docs.folders.map(item => item.name)).toEqual(['2026'])
-  expect(folderContents(tree, files, 'docs/', item => item.path.includes('report')).files.map(item => item.id)).toEqual(['doc'])
-  expect(folderContents(tree, files, 'docs/2026/', () => true).files.map(item => item.id)).toEqual(['nested'])
+  expect(catalog.contents('docs/2026/').files.map(item => item.id)).toEqual(['nested'])
+  expect(catalog.foldersByPath.get('docs/2026/')?.name).toBe('2026')
 })
 
 it('totals nested catalog files and folders without including similarly named siblings', () => {
@@ -119,8 +162,11 @@ it('shows physical empty directories and limits archive actions to regular files
   const empty = { ...file('empty', 'empty'), entryType: 'DIRECTORY' as const }
   const link = file('link', 'docs/link', true)
   const tree = folderTree([empty.relativePath + '/', link.relativePath])
-  expect(folderContents(tree, [empty, link], '').folders.map(folder => folder.name)).toEqual(['empty', 'docs'])
-  expect(folderContents(tree, [empty, link], '').files).toEqual([])
+  const catalog = indexFolderContents(tree, [empty, link])
+  expect(catalog.contents('').folders.map(folder => folder.name)).toEqual(['empty', 'docs'])
+  expect(catalog.contents('').files).toEqual([])
+  expect(catalog.contents('empty/')).toEqual({ folders: [], files: [] })
+  expect(catalog.contents('docs/').files).toEqual([link])
   expect(planTransfers(local, [local, bucket], [link], [], [link]).archive).toBeUndefined()
   expect(catalogSearchResults([link], [local, bucket], new Map(), value => value.includes('docs/link')).files)
     .toHaveLength(1)

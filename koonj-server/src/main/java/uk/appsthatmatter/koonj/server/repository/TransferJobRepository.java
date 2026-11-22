@@ -7,9 +7,13 @@ import uk.appsthatmatter.koonj.server.entity.TransferJob;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 public interface TransferJobRepository extends JpaRepository<TransferJob, UUID> {
+    @Query("select j.id from TransferJob j where j.status in :statuses")
+    List<UUID> idsWithStatus(Collection<TransferJob.Status> statuses);
+
     @Modifying
     @Query("""
             update TransferJob j set j.status = :status, j.completedAt = :finished, j.details = :details

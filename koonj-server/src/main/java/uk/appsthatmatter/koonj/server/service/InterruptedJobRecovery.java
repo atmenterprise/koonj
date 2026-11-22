@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import uk.appsthatmatter.koonj.server.entity.StorageState;
+import uk.appsthatmatter.koonj.server.entity.JobEvent.Level;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Status;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
@@ -19,11 +20,13 @@ public class InterruptedJobRecovery implements ApplicationRunner {
     private final TransferJobRepository jobs;
     private final FileMetadataRepository files;
     private final JdbcTemplate jdbc;
+    private final JobService jobService;
 
-    public InterruptedJobRecovery(TransferJobRepository jobs, FileMetadataRepository files, JdbcTemplate jdbc) {
+    public InterruptedJobRecovery(TransferJobRepository jobs, FileMetadataRepository files, JdbcTemplate jdbc, JobService jobService) {
         this.jobs = jobs;
         this.files = files;
         this.jdbc = jdbc;
+        this.jobService = jobService;
     }
 
     @Override
@@ -31,7 +34,10 @@ public class InterruptedJobRecovery implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         updateLegacyStorageStateConstraint();
         String reason = "Interrupted by server restart. Resubmit to retry.";
-        jobs.finishInterrupted(Status.FAILED, Instant.now(), reason, List.of(Status.PENDING, Status.RUNNING));
+        Instant finished = Instant.now();
+        var active = List.of(Status.PENDING, Status.RUNNING);
+        for (var jobId : jobs.idsWithStatus(active)) jobService.log(jobId, finished, Level.ERROR, null, reason);
+        jobs.finishInterrupted(Status.FAILED, finished, reason, active);
         files.failInterrupted(StorageState.FAILED, reason, List.of(StorageState.QUEUED_ARCHIVE,
                 StorageState.ARCHIVING, StorageState.QUEUED_RECALL, StorageState.RECALLING));
     }

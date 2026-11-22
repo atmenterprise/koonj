@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -10,6 +11,7 @@ import uk.appsthatmatter.koonj.server.dto.TransferRequest;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Operation;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
+import uk.appsthatmatter.koonj.server.repository.FileMovementRepository;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -25,23 +27,27 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 @Service
 public class FileTransferService {
+    private static final PageRequest RECALL_LINK_BATCH = PageRequest.of(0, 1000);
     private final ConnectionService connections;
     private final StorageConnectorFactory connectors;
     private final FileMetadataRepository files;
+    private final FileMovementRepository movements;
     private final CatalogScanService catalog;
     private final JobService jobs;
     private final TransactionTemplate transaction;
     private final ConcurrentHashMap<UUID, CompletableFuture<JobResponse>> interactiveRecalls = new ConcurrentHashMap<>();
 
     public FileTransferService(ConnectionService connections, StorageConnectorFactory connectors,
-                               FileMetadataRepository files, CatalogScanService catalog, JobService jobs,
+                               FileMetadataRepository files, FileMovementRepository movements, CatalogScanService catalog, JobService jobs,
                                TransactionTemplate transaction) {
         this.connections = connections;
         this.connectors = connectors;
         this.files = files;
+        this.movements = movements;
         this.catalog = catalog;
         this.jobs = jobs;
         this.transaction = transaction;
@@ -60,6 +66,15 @@ public class FileTransferService {
         }
         Map<String, String> restorePaths = new HashMap<>();
         Set<String> paths = new LinkedHashSet<>();
+        Set<String> targetFolders = new LinkedHashSet<>();
+        if (request.targetFolderPaths() != null && !request.targetFolderPaths().isEmpty()) {
+            if (archive) throw new IllegalArgumentException("Mounted folder selections are only supported for recall");
+            for (String folder : request.targetFolderPaths()) {
+                String path = transferPath(folder);
+                if (!path.endsWith("/")) throw new IllegalArgumentException("Provide a non-root mounted folder ending in /");
+                targetFolders.add(path);
+            }
+        }
         if (request.paths() != null) request.paths().stream().map(FileTransferService::transferPath).forEach(paths::add);
         Set<String> exactPaths = new HashSet<>();
         if (request.fileIds() != null) {
@@ -71,11 +86,13 @@ public class FileTransferService {
                 paths.add(path);
             }
         }
-        if (paths.isEmpty()) throw new IllegalArgumentException("Provide at least one path or file ID");
+        if (paths.isEmpty() && targetFolders.isEmpty()) throw new IllegalArgumentException("Provide at least one path, folder, or file ID");
+        Set<String> requestedPaths = new LinkedHashSet<>(paths);
+        requestedPaths.addAll(targetFolders);
         TransferJob job = jobs.create(operation, request.sourceConnectionId(), request.targetConnectionId(),
-                List.copyOf(paths), request.archiveMode(), request.deleteFromTarget());
+                List.copyOf(requestedPaths), request.archiveMode(), request.deleteFromTarget());
         JobResponse accepted = JobResponse.from(job);
-        jobs.execute(job, running -> transfer(running, storageClass, restorePaths, exactPaths));
+        jobs.execute(job, running -> transfer(running, storageClass, paths, targetFolders, restorePaths, exactPaths));
         return accepted;
     }
 
@@ -111,7 +128,7 @@ public class FileTransferService {
                         .filter(item -> item.entryType() == EntryType.FILE)
                         .orElseThrow(() -> new IOException("Archive object was not found"));
                 jobs.totals(running, 1, found.sizeBytes());
-                recall(endpoints, found, current.getRelativePath(), false);
+                move(running, endpoints, found, current.getRelativePath(), null);
                 jobs.progress(running, found.sizeBytes(), null);
             });
         });
@@ -162,24 +179,34 @@ public class FileTransferService {
         }
         if (operation == Operation.RECALL && file.getConnection().getId().equals(endpoints.target().getId())
                 && file.getEntryType() == EntryType.SYMLINK && file.getSymlinkTarget() != null) {
-            String prefix = s3Uri(endpoints.source(), "");
-            String reference = file.getSymlinkTarget();
-            String key = reference.startsWith(prefix) ? reference.substring(prefix.length()) : file.getS3Key();
-            if (key != null && matchesArchiveLink(file, endpoints.source(), key, reference)
-                    && (file.getTargetConnection() == null
-                    || file.getTargetConnection().getId().equals(endpoints.source().getId()))) {
-                StoragePaths.requireSafe(key);
-                if (key.isEmpty() || StoragePaths.isArchiveStagingKey(key)) {
-                    throw new IllegalArgumentException("Invalid archive object key");
-                }
-                String previous = restorePaths.putIfAbsent(key, file.getRelativePath());
-                if (previous != null && !previous.equals(file.getRelativePath())) {
-                    throw new IllegalArgumentException("Select one source symlink per archived object");
-                }
+            UUID boundTarget = file.getTargetConnection() == null ? null : file.getTargetConnection().getId();
+            String key = recallKey(endpoints.source(), file.getId(), boundTarget, file.getSymlinkTarget(), file.getS3Key());
+            if (key != null) {
+                bindRestorePath(restorePaths, key, file.getRelativePath());
                 return key;
             }
         }
         throw new IllegalArgumentException("Catalog file ID is not transferable between the selected connections");
+    }
+
+    private static String recallKey(StorageConnection bucket, UUID id, UUID boundTarget, String reference, String objectKey) {
+        if (reference == null || (boundTarget != null && !bucket.getId().equals(boundTarget))) return null;
+        String prefix = s3Uri(bucket, "");
+        String key = reference.startsWith(prefix) ? reference.substring(prefix.length())
+                : boundTarget != null && (LocalStorageConnector.ARCHIVE_REFERENCE + id).equals(reference) ? objectKey : null;
+        if (key == null) return null;
+        StoragePaths.requireSafe(key);
+        if (key.isEmpty() || StoragePaths.isArchiveStagingKey(key)) {
+            throw new IllegalArgumentException("Invalid archive object key");
+        }
+        return key;
+    }
+
+    private static void bindRestorePath(Map<String, String> restorePaths, String key, String relativePath) {
+        String previous = restorePaths.putIfAbsent(key, relativePath);
+        if (previous != null && !previous.equals(relativePath)) {
+            throw new IllegalArgumentException("Select one source symlink per archived object");
+        }
     }
 
     private Endpoints endpoints(Operation operation, UUID sourceId, UUID targetId) {
@@ -197,11 +224,17 @@ public class FileTransferService {
         return new Endpoints(source, reader, target, writer);
     }
 
-    private void transfer(TransferJob job, String storageClass, Map<String, String> restorePaths, Set<String> exactPaths) {
+    private void transfer(TransferJob job, String storageClass, Set<String> paths, Set<String> targetFolders,
+                          Map<String, String> restorePaths, Set<String> exactPaths) {
         Endpoints endpoints = endpoints(job.getOperation(), job.getSourceConnectionId(), job.getTargetConnectionId());
         Map<String, ScannedFileInfo> selected = new LinkedHashMap<>();
         Map<String, String> unavailable = new LinkedHashMap<>();
-        for (String path : job.getRequestedPaths()) {
+        for (String folder : targetFolders) {
+            if (!collectRecallFolder(endpoints, folder, paths, restorePaths, exactPaths)) {
+                unavailable.put(folder, "No archived links found for the selected S3 connection");
+            }
+        }
+        for (String path : paths) {
             try {
                 boolean folder = path.endsWith("/");
                 String prefix = folder ? path.substring(0, path.length() - 1) : path;
@@ -220,21 +253,12 @@ public class FileTransferService {
         }
         jobs.totals(job, selected.size() + unavailable.size(),
                 selected.values().stream().mapToLong(ScannedFileInfo::sizeBytes).sum());
-        unavailable.forEach((path, error) -> jobs.progress(job, 0, path + ": " + error));
+        unavailable.forEach((path, error) -> jobs.selectionFailed(job, path, error));
         for (ScannedFileInfo found : selected.values()) {
             jobs.runWaitingInteractiveJobs();
             String error = null;
             try {
-                StoragePaths.requireSafe(found.relativePath());
-                if (StoragePaths.isArchiveStagingKey(found.relativePath())) {
-                    throw new IOException("Path is reserved for archive staging");
-                }
-                if (job.getOperation() == Operation.ARCHIVE) {
-                    archive(endpoints, found, storageClass, job.getArchiveMode());
-                } else {
-                    recall(endpoints, found, restorePaths.getOrDefault(found.relativePath(), found.relativePath()),
-                            job.isDeleteFromTarget());
-                }
+                move(job, endpoints, found, restorePaths.getOrDefault(found.relativePath(), found.relativePath()), storageClass);
             } catch (IOException | RuntimeException failure) {
                 error = found.relativePath() + ": " + StorageErrors.describe(failure);
             }
@@ -242,7 +266,71 @@ public class FileTransferService {
         }
     }
 
-    private void archive(Endpoints endpoints, ScannedFileInfo found, String storageClass, ArchiveMode mode) throws IOException {
+    private void move(TransferJob job, Endpoints endpoints, ScannedFileInfo found, String targetPath, String storageClass)
+            throws IOException {
+        var movement = new FileMovement();
+        movement.setJobId(job.getId());
+        boolean archive = job.getOperation() == Operation.ARCHIVE;
+        movement.setOperation(archive
+                ? job.getArchiveMode() == ArchiveMode.PURGE ? FileMovement.Operation.ARCHIVE_PURGE : FileMovement.Operation.ARCHIVE_COPY
+                : FileMovement.Operation.RECALL);
+        movement.setSourceConnectionId(endpoints.source().getId());
+        movement.setSourceLocation(endpoints.source().getName());
+        movement.setSourcePath(found.relativePath());
+        movement.setTargetConnectionId(endpoints.target().getId());
+        movement.setTargetLocation(endpoints.target().getName());
+        movement.setTargetPath(targetPath);
+        movement.setSizeBytes(found.sizeBytes());
+        try {
+            StoragePaths.requireSafe(found.relativePath());
+            if (StoragePaths.isArchiveStagingKey(found.relativePath())) throw new IOException("Path is reserved for archive staging");
+            if (archive) archive(endpoints, found, storageClass, job.getArchiveMode(), movement);
+            else recall(endpoints, found, targetPath, job.isDeleteFromTarget(), movement);
+        } catch (IOException | RuntimeException failure) {
+            // A rolled-back verification may have obtained an ID before the transaction failed.
+            movement.setId(null);
+            movement.setArchiveRemoved(false);
+            movement.setError(StorageErrors.describe(failure));
+            movement.setOutcome(FileMovement.Outcome.FAILED);
+            movement.setRecordedAt(Instant.now());
+            movements.save(movement);
+            throw failure;
+        }
+    }
+
+    private void recordVerified(FileMovement movement, Instant now) {
+        if (movement.getSourceChecksum() == null || !movement.getSourceChecksum().equals(movement.getTargetChecksum())) {
+            throw new IllegalStateException("A verified movement requires matching SHA-256 checksums");
+        }
+        movement.setOutcome(FileMovement.Outcome.VERIFIED);
+        movement.setRecordedAt(now);
+        movements.save(movement);
+    }
+
+    private boolean collectRecallFolder(Endpoints endpoints, String folder, Set<String> paths,
+                                        Map<String, String> restorePaths, Set<String> exactPaths) {
+        String pattern = folder.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+        String after = "";
+        List<FileMetadataRepository.RecallLink> batch;
+        boolean matched = false;
+        do {
+            batch = files.recallLinks(endpoints.target().getId(), pattern, after, RECALL_LINK_BATCH);
+            for (var link : batch) {
+                after = link.getRelativePath();
+                if (!after.startsWith(folder)) continue;
+                String key = recallKey(endpoints.source(), link.getId(), link.getTargetId(), link.getSymlinkTarget(), link.getS3Key());
+                if (key == null) continue;
+                bindRestorePath(restorePaths, key, after);
+                exactPaths.add(key);
+                paths.add(key);
+                matched = true;
+            }
+        } while (batch.size() == RECALL_LINK_BATCH.getPageSize());
+        return matched;
+    }
+
+    private void archive(Endpoints endpoints, ScannedFileInfo found, String storageClass, ArchiveMode mode, FileMovement movement)
+            throws IOException {
         String path = found.relativePath();
         StorageConnection mounted = endpoints.source();
         StorageConnection bucket = endpoints.target();
@@ -288,13 +376,15 @@ public class FileTransferService {
                 s3.writeStream(bucket, staging, stream, found.sizeBytes(), "STANDARD");
             }
             String checksum = encode(digest.digest());
+            movement.setSourceChecksum(checksum);
             if (!checksum.equals(checksum(s3, bucket, staging))) throw new IOException("Archive checksum mismatch");
 
             publishAttempted = true;
             try (InputStream verified = verifying(s3.openReadStream(bucket, staging), checksum)) {
                 s3.writeStream(bucket, path, verified, found.sizeBytes(), storageClass);
             }
-            if (!checksum.equals(checksum(s3, bucket, path))) throw new IOException("Published archive checksum mismatch");
+            movement.setTargetChecksum(checksum(s3, bucket, path));
+            if (!checksum.equals(movement.getTargetChecksum())) throw new IOException("Published archive checksum mismatch");
             ScannedFileInfo object = exact(s3, bucket, path)
                     .orElseThrow(() -> new IOException("Uploaded archive object could not be found"));
             if (mode == ArchiveMode.PURGE) {
@@ -302,14 +392,15 @@ public class FileTransferService {
                 source.replaceWithSymlink(mounted, path, LocalStorageConnector.ARCHIVE_REFERENCE + local.getId(), () -> {
                     ScannedFileInfo link = exact(source, mounted, path).filter(item -> item.entryType() == EntryType.SYMLINK)
                             .orElseThrow(() -> new IOException("Archive symbolic link was not created"));
+                    movement.setSymlinkReference(link.symlinkTarget());
                     recordArchive(local, bucket, object, new ScannedFileInfo(path, found.sizeBytes(),
-                            found.lastModifiedAt(), null, EntryType.SYMLINK, link.symlinkTarget()), checksum, mode);
+                            found.lastModifiedAt(), null, EntryType.SYMLINK, link.symlinkTarget()), checksum, mode, movement);
                 });
             } else {
                 ScannedFileInfo physical = exact(source, mounted, path).filter(item -> item.entryType() == EntryType.FILE)
                         .orElseThrow(() -> new IOException("Source file disappeared during archive"));
                 if (!Objects.equals(physical, found)) throw new IOException("Source changed during archive");
-                recordArchive(local, bucket, object, physical, checksum, mode);
+                recordArchive(local, bucket, object, physical, checksum, mode, movement);
             }
         } catch (IOException | RuntimeException failure) {
             if (publishAttempted) {
@@ -335,7 +426,7 @@ public class FileTransferService {
     }
 
     private void recordArchive(FileMetadata local, StorageConnection bucket, ScannedFileInfo object,
-                               ScannedFileInfo physicalSource, String checksum, ArchiveMode mode) {
+                               ScannedFileInfo physicalSource, String checksum, ArchiveMode mode, FileMovement movement) {
         transaction.executeWithoutResult(status -> {
             Instant now = Instant.now();
             FileMetadata target = catalog.entry(bucket, object.relativePath());
@@ -355,6 +446,7 @@ public class FileTransferService {
             local.setArchivedAt(now);
             local.setStorageState(mode == ArchiveMode.PURGE ? StorageState.ARCHIVED_SYMLINK : StorageState.ARCHIVED_COPY);
             files.save(local);
+            recordVerified(movement, now);
         });
     }
 
@@ -367,7 +459,8 @@ public class FileTransferService {
         }
     }
 
-    private void recall(Endpoints endpoints, ScannedFileInfo found, String path, boolean deleteFromTarget) throws IOException {
+    private void recall(Endpoints endpoints, ScannedFileInfo found, String path, boolean deleteFromTarget, FileMovement movement)
+            throws IOException {
         StorageConnection bucket = endpoints.source();
         StorageConnection mounted = endpoints.target();
         StorageConnector s3 = endpoints.reader();
@@ -386,6 +479,7 @@ public class FileTransferService {
                 throw new IOException("Recall destination does not match the archive reference");
             }
             if (physical.entryType() == EntryType.FILE) CatalogScanService.updatePhysical(local, physical);
+            if (physical.entryType() == EntryType.SYMLINK) movement.setSymlinkReference(physical.symlinkTarget());
             local.setStorageState(StorageState.RECALLING);
             local.setErrorMessage(null);
             files.save(local);
@@ -398,11 +492,15 @@ public class FileTransferService {
             String expected = local.getEntryType() == EntryType.SYMLINK && local.getChecksumSha256() != null
                     ? local.getChecksumSha256() : object.getChecksumSha256();
             String checksum = expected == null ? checksum(s3, bucket, key) : expected;
-            try (InputStream stream = verifying(s3.openReadStream(bucket, key), checksum)) {
+            try (InputStream stream = verifying(s3.openReadStream(bucket, key), checksum, movement::setSourceChecksum)) {
                 source.restore(mounted, path, stream, found.sizeBytes(), () -> {
                     ScannedFileInfo restored = exact(source, mounted, path)
                             .filter(item -> item.entryType() == EntryType.FILE)
                             .orElseThrow(() -> new IOException("Restored source file could not be found"));
+                    movement.setTargetChecksum(checksum(source, mounted, path));
+                    if (!checksum.equals(movement.getTargetChecksum()) || !checksum.equals(movement.getSourceChecksum())) {
+                        throw new IOException("Restored file SHA-256 checksum mismatch");
+                    }
                     if (deleteFromTarget) s3.deleteFile(bucket, key);
                     try {
                         transaction.executeWithoutResult(status -> {
@@ -427,6 +525,8 @@ public class FileTransferService {
                                 object.setS3StorageClass(found.storageClass());
                                 files.save(object);
                             }
+                            movement.setArchiveRemoved(deleteFromTarget);
+                            recordVerified(movement, Instant.now());
                         });
                     } catch (RuntimeException failure) {
                         if (deleteFromTarget) suppress(failure, () -> {
@@ -489,13 +589,19 @@ public class FileTransferService {
     }
 
     private static InputStream verifying(InputStream input, String expected) {
+        return verifying(input, expected, ignored -> {});
+    }
+
+    private static InputStream verifying(InputStream input, String expected, Consumer<String> observed) {
         var stream = new DigestInputStream(input, sha256());
         return new FilterInputStream(stream) {
             private boolean verified;
 
             private int check(int count) throws IOException {
                 if (count == -1 && !verified) {
-                    if (!expected.equals(encode(stream.getMessageDigest().digest()))) throw new IOException("SHA-256 checksum mismatch");
+                    String actual = encode(stream.getMessageDigest().digest());
+                    observed.accept(actual);
+                    if (!expected.equals(actual)) throw new IOException("SHA-256 checksum mismatch");
                     verified = true;
                 }
                 return count;

@@ -24,7 +24,7 @@ import java.util.*;
 
 @Component
 public class S3CompatibleStorageConnector implements StorageConnector {
-    private static final Duration RESTORE_REQUEST_TIMEOUT = Duration.ofSeconds(8);
+    private static final Duration METADATA_REQUEST_TIMEOUT = Duration.ofSeconds(8);
     private static final int PART_BYTES = 8 * 1024 * 1024;
 
     @Override
@@ -95,11 +95,20 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     }
 
     @Override
+    public FileAttributes fileAttributes(StorageConnection config, String key) {
+        try (S3Client client = client(config)) {
+            var head = client.headObject(request -> request.bucket(config.getBasePathOrBucket()).key(key)
+                    .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
+            return FileAttributes.from(null, null, null, head.metadata());
+        }
+    }
+
+    @Override
     public Optional<Instant> requestColdRestore(StorageConnection config, String key) {
         String bucket = config.getBasePathOrBucket();
         try (S3Client client = client(config)) {
             var head = client.headObject(request -> request.bucket(bucket).key(key)
-                    .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(RESTORE_REQUEST_TIMEOUT)));
+                    .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
             StorageClass storageClass = head.storageClass();
             if (storageClass != StorageClass.GLACIER && storageClass != StorageClass.DEEP_ARCHIVE) return Optional.empty();
             String restore = head.restore();
@@ -107,7 +116,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
             if (restore == null || !restore.contains("ongoing-request=\"true\"")) {
                 try {
                     client.restoreObject(request -> request.bucket(bucket).key(key)
-                            .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(RESTORE_REQUEST_TIMEOUT))
+                            .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(METADATA_REQUEST_TIMEOUT))
                             .restoreRequest(restoreRequest -> restoreRequest.days(2)
                                     .glacierJobParameters(parameters -> parameters.tier(Tier.STANDARD))));
                 } catch (S3Exception failure) {

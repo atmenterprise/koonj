@@ -17,8 +17,8 @@ export function JobStatusBadge({ status }: { status: JobStatus }) {
   return <Badge tone={tone} dot>{jobLabels[status]}</Badge>
 }
 
-export function Dialog({ title, onClose, drawer, children }: {
-  title: string; onClose: () => void; drawer?: boolean; children: ReactNode
+export function Dialog({ title, onClose, drawer, className, children }: {
+  title: string; onClose: () => void; drawer?: boolean; className?: string; children: ReactNode
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   const validationPending = useRef(false)
@@ -48,7 +48,7 @@ export function Dialog({ title, onClose, drawer, children }: {
     notify({ tone: 'error', title: 'Check the form', detail })
   }
 
-  return <dialog ref={ref} aria-label={title} className={drawer ? 'drawer' : 'operation-dialog'}
+  return <dialog ref={ref} aria-label={title} className={className ?? (drawer ? 'drawer' : 'operation-dialog')}
     onInvalid={onInvalid} onCancel={event => { event.preventDefault(); onClose() }}>
     <div className="dialog-content">
       <div className="dialog-header"><h2>{title}</h2>

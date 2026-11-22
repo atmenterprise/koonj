@@ -4,6 +4,7 @@ const roles = ['KOONJ_ADMIN', 'KOONJ_OPERATOR', 'KOONJ_VIEWER'] as const
 export type KoonjRole = typeof roles[number]
 
 export interface AuthUser {
+  id: string
   name: string
   email: string | null
   roles: KoonjRole[]
@@ -29,16 +30,16 @@ function publish(next: AuthState) {
 }
 
 function publishSession() {
-  if (!keycloak.authenticated || !keycloak.tokenParsed) {
+  const claims = keycloak.tokenParsed
+  if (!keycloak.authenticated || !claims?.sub) {
     publish({ status: 'anonymous', user: null })
     return
   }
-  const claims = keycloak.tokenParsed
   const email = typeof claims.email === 'string' ? claims.email : null
   const name = typeof claims.name === 'string' ? claims.name
     : typeof claims.preferred_username === 'string' ? claims.preferred_username : email ?? 'Koonj user'
   const userRoles = roles.filter(role => keycloak.hasRealmRole(role) || keycloak.hasResourceRole(role, 'koonj-server'))
-  publish({ status: 'authenticated', user: { name, email, roles: userRoles } })
+  publish({ status: 'authenticated', user: { id: claims.sub, name, email, roles: userRoles } })
 }
 
 export function subscribeToAuth(listener: () => void) {

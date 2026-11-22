@@ -43,9 +43,11 @@ public class CatalogMetadataService {
         var targets = request.targets().stream().map(CatalogMetadataService::normalize).distinct().toList();
         for (Target target : targets) {
             var existing = annotations.findByConnectionIdAndScopeAndPath(connectionId, target.scope(), target.path());
-            var previous = request.mode() == Mode.MERGE ? existing.map(CatalogAnnotation::getAttributes).orElse(EMPTY) : EMPTY;
-            var values = merge(previous, request.values());
-            if (values.tags().isEmpty() && values.properties().isEmpty()) {
+            var saved = existing.map(CatalogAnnotation::getAttributes).orElse(EMPTY);
+            var previous = request.mode() == Mode.MERGE ? saved : EMPTY;
+            String description = request.values().description() == null ? saved.description() : request.values().description().strip();
+            var values = merge(previous, request.values(), description == null || description.isEmpty() ? null : description);
+            if (values.tags().isEmpty() && values.properties().isEmpty() && values.description() == null) {
                 existing.ifPresent(annotations::delete);
             } else {
                 var entry = existing.orElseGet(CatalogAnnotation::new);
@@ -66,7 +68,7 @@ public class CatalogMetadataService {
         return new Target(target.scope(), path);
     }
 
-    private static CatalogMetadataValues merge(CatalogMetadataValues previous, CatalogMetadataValues incoming) {
+    private static CatalogMetadataValues merge(CatalogMetadataValues previous, CatalogMetadataValues incoming, String description) {
         var tags = new LinkedHashMap<String, String>();
         previous.tags().forEach(tag -> tags.put(tag.toLowerCase(Locale.ROOT), tag));
         incoming.tags().forEach(value -> {
@@ -80,7 +82,7 @@ public class CatalogMetadataService {
             properties.put(name.toLowerCase(Locale.ROOT), new Property(name, property.value().strip()));
         });
         if (tags.size() > 100 || properties.size() > 100) throw new IllegalArgumentException("An item can have at most 100 tags and 100 properties");
-        return new CatalogMetadataValues(List.copyOf(tags.values()), List.copyOf(properties.values()));
+        return new CatalogMetadataValues(List.copyOf(tags.values()), List.copyOf(properties.values()), description);
     }
 
     private static ResponseStatusException missingConnection() {

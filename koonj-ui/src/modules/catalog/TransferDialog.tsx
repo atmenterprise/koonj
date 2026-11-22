@@ -1,14 +1,49 @@
 import { useState, type FormEvent } from 'react'
 import { useArchiveMutation, useRecallMutation } from '../../api/hooks/mutations'
-import type { ArchiveMode, CatalogLocationDTO } from '../../api/types'
+import type { ArchiveMode, CatalogLocationDTO, CatalogMetadataTarget } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
 import { Dialog } from '../../shared/ui/feedback'
-import { Button, count } from '../../shared/ui/primitives'
+import { Button, Icon, count } from '../../shared/ui/primitives'
+import type { TransferPlan } from './transferSelection'
 
 export type CatalogTransferAction = 'archive' | 'recall'
 
-export function TransferDialog({ action, fileIds, paths, selectionCount, source, targets, onClose, onSubmitted }: {
-  action: CatalogTransferAction; fileIds: string[]; paths: string[]; selectionCount: number; source: CatalogLocationDTO; targets: CatalogLocationDTO[]
+const selectionPageSize = 20
+
+function SelectionSummary({ items, location, plan }: { items: CatalogMetadataTarget[]; location: string; plan: TransferPlan }) {
+  const [page, setPage] = useState(0)
+  const start = page * selectionPageSize
+  const end = Math.min(start + selectionPageSize, items.length)
+  const folders = items.filter(item => item.scope === 'FOLDER').length
+  const files = items.length - folders
+  const summary = [folders && `${count(folders)} ${folders === 1 ? 'folder' : 'folders'}`,
+    files && `${count(files)} ${files === 1 ? 'file' : 'files'}`].filter(Boolean).join(' and ')
+
+  return <section className="transfer-selection" aria-label="Selected folders and files">
+    <div className="transfer-selection-heading">
+      <h3>{summary} selected</h3>
+      <p>{location}{plan.destinationId && <span> · Archive source: {plan.source.name}</span>}</p>
+    </div>
+    <ul className="transfer-selection-list">
+      {items.slice(start, end).map(item => <li key={item.scope + ':' + item.path}>
+        <Icon name={item.scope === 'FOLDER' ? 'folder' : 'file'} size={16} />
+        <span><span className="sr-only">{item.scope === 'FOLDER' ? 'Folder ' : 'File '}</span>{item.path}</span>
+      </li>)}
+    </ul>
+    {items.length > selectionPageSize && <div className="transfer-selection-pages">
+      <span aria-live="polite">{count(start + 1)}–{count(end)} of {count(items.length)} selected items</span>
+      <Button disabled={!page} onClick={() => setPage(page - 1)}>Previous</Button>
+      <Button disabled={end === items.length} onClick={() => setPage(page + 1)}>Next</Button>
+    </div>}
+    {folders > 0 && <p className="transfer-selection-note">
+      <strong>{count(plan.fileCount)} {plan.fileCount === 1 ? 'eligible file' : 'eligible files'} in the catalog.</strong>
+      {' '}Folder selections include subfolders and all pages. The transfer resolves folder contents when it runs.
+    </p>}
+  </section>
+}
+
+export function TransferDialog({ action, plan, selectedItems, selectedLocation, targets, onClose, onSubmitted }: {
+  action: CatalogTransferAction; plan: TransferPlan; selectedItems: CatalogMetadataTarget[]; selectedLocation: string; targets: CatalogLocationDTO[]
   onClose: () => void; onSubmitted: () => void
 }) {
   const { hasRole } = useAuth()
@@ -19,21 +54,24 @@ export function TransferDialog({ action, fileIds, paths, selectionCount, source,
   const isArchive = action === 'archive'
   const mutation = isArchive ? archive : recall
   const title = isArchive ? 'Archive to S3' : 'Recall to Source'
+  const { source, paths, fileIds, targetFolderPaths } = plan
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const request = { sourceConnectionId: source.id, targetConnectionId: String(form.get('target')),
-      ...(paths.length ? { paths, ...(fileIds.length ? { fileIds } : {}) } : { fileIds }) }
-    if (isArchive) archive.mutate({ ...request, storageClass: String(form.get('storageClass')),
+    const endpoints = { sourceConnectionId: source.id, targetConnectionId: String(form.get('target')) }
+    const selection = paths.length ? { paths, ...(fileIds.length ? { fileIds } : {}) } : { fileIds }
+    if (isArchive) archive.mutate({ ...endpoints, ...selection, storageClass: String(form.get('storageClass')),
       archiveMode: mode }, { onSuccess: onSubmitted })
-    else recall.mutate({ ...request, deleteFromTarget: form.has('deleteFromTarget') }, { onSuccess: onSubmitted })
+    else recall.mutate({ ...endpoints, ...(targetFolderPaths?.length
+      ? { targetFolderPaths, ...(fileIds.length ? { fileIds } : {}) } : selection),
+      deleteFromTarget: form.has('deleteFromTarget') }, { onSuccess: onSubmitted })
   }
 
-  return <Dialog title={title} onClose={() => { if (!mutation.isPending) onClose() }}>
+  return <Dialog title={title} className="catalog-transfer-dialog" onClose={() => { if (!mutation.isPending) onClose() }}>
     <form onSubmit={submit}>
       <div className="dialog-body">
-        <p>{count(selectionCount)} selected · {source.name}</p>
+        <SelectionSummary items={selectedItems} location={selectedLocation} plan={plan} />
         <label>Destination<select name="target" required defaultValue={targets.length === 1 ? targets[0].id : ''}><option value="" disabled>Choose a destination</option>
           {targets.map(target => <option value={target.id} key={target.id}>{target.name}</option>)}</select></label>
         {!targets.length && <p>No active destination connections support this transfer.</p>}

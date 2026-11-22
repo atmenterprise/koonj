@@ -69,6 +69,34 @@ export interface FileMetadataDTO {
   errorMessage: string | null
 }
 
+export interface FileAttributesDTO {
+  owner: string | null
+  createdAt: string | null
+  lastAccessedAt: string | null
+  author: string | null
+  createdBy: string | null
+  lastModifiedBy: string | null
+  lastAccessedBy: string | null
+}
+
+export interface FileMovementDTO {
+  id: number
+  jobId: string
+  recordedAt: string
+  operation: 'ARCHIVE_COPY' | 'ARCHIVE_PURGE' | 'RECALL'
+  outcome: 'VERIFIED' | 'FAILED'
+  sourceLocation: string
+  sourcePath: string
+  targetLocation: string
+  targetPath: string
+  symlinkReference: string | null
+  sourceChecksum: string | null
+  targetChecksum: string | null
+  sizeBytes: number
+  archiveRemoved: boolean
+  error: string | null
+}
+
 export interface PageResponse<T> {
   content: T[]
   page: number
@@ -103,15 +131,25 @@ export interface TransferJobDTO {
   totalBytes: number
   transferredBytes: number
   createdAt: string
+  startedAt?: string | null
   completedAt: string | null
   details: string | null
   triggeredBy: string | null
 }
 
+export interface JobEventDTO {
+  id: number
+  recordedAt: string
+  level: 'INFO' | 'WARNING' | 'ERROR'
+  path: string | null
+  message: string
+}
+
 type TransferSelection = { paths: string[]; fileIds?: string[] } | { fileIds: string[]; paths?: string[] }
-type TransferRequest = { sourceConnectionId: string; targetConnectionId: string } & TransferSelection
-export type ArchiveRequest = TransferRequest & { storageClass?: string; archiveMode?: ArchiveMode }
-export type RecallRequest = TransferRequest & { deleteFromTarget?: boolean }
+type TransferEndpoints = { sourceConnectionId: string; targetConnectionId: string }
+export type ArchiveRequest = TransferEndpoints & TransferSelection & { storageClass?: string; archiveMode?: ArchiveMode }
+type MountedFolderSelection = { targetFolderPaths: string[]; paths?: string[]; fileIds?: string[] }
+export type RecallRequest = TransferEndpoints & (TransferSelection | MountedFolderSelection) & { deleteFromTarget?: boolean }
 
 export interface DashboardSummaryDTO {
   reclaimedLocalBytes: number
@@ -135,11 +173,20 @@ export interface ServerTelemetryDTO {
 export interface CatalogMetadataValues {
   tags: string[]
   properties: { name: string; value: string }[]
+  description?: string | null
 }
 
 export interface CatalogMetadataTarget {
   scope: 'FILE' | 'FOLDER'
   path: string
+}
+
+export interface CatalogFavoriteTarget extends CatalogMetadataTarget {
+  connectionId: string
+}
+
+export interface CatalogFavorite extends CatalogFavoriteTarget {
+  connectionName: string
 }
 
 export interface CatalogMetadataEntry extends CatalogMetadataTarget {

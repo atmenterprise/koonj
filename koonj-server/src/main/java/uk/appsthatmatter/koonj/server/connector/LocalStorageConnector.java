@@ -7,11 +7,17 @@ import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.UserDefinedFileAttributeView;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
@@ -24,6 +30,8 @@ public class LocalStorageConnector implements StorageConnector {
     public static final String ARCHIVE_REFERENCE = "koonj-ref://";
     private static final String WINDOWS_REFERENCE = ".koonj-ref-";
     private static final String TEMP_PREFIX = ".koonj-transfer-";
+    private static final List<String> INSPECTED_ATTRIBUTES = List.of(
+            "author", "created-by", "last-modified-by", "last-accessed-by", "created-at", "last-accessed-at");
 
     @Override
     public boolean supports(ProviderType type) {
@@ -118,6 +126,47 @@ public class LocalStorageConnector implements StorageConnector {
             }
         });
         return files;
+    }
+
+    @Override
+    public FileAttributes fileAttributes(StorageConnection config, String relativePath) throws IOException {
+        Path path = resolve(root(config), relativePath);
+        var attributes = Files.readAttributes(path, BasicFileAttributes.class, NOFOLLOW_LINKS);
+        if (!attributes.isRegularFile()) return FileAttributes.EMPTY;
+        String owner = null;
+        try {
+            owner = Files.getOwner(path, NOFOLLOW_LINKS).getName();
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // The mount may expose timestamps without sharing owner information.
+        }
+        return FileAttributes.from(owner, reportedTime(attributes.creationTime()), reportedTime(attributes.lastAccessTime()),
+                userAttributes(path));
+    }
+
+    private static Instant reportedTime(FileTime time) {
+        Instant value = time.toInstant();
+        return Instant.EPOCH.equals(value) ? null : value;
+    }
+
+    private static Map<String, String> userAttributes(Path path) {
+        var view = Files.getFileAttributeView(path, UserDefinedFileAttributeView.class, NOFOLLOW_LINKS);
+        if (view == null) return Map.of();
+        Map<String, String> values = new HashMap<>();
+        try {
+            var names = view.list();
+            for (String name : INSPECTED_ATTRIBUTES) {
+                if (!names.contains(name)) continue;
+                int length = view.size(name);
+                if (length == 0 || length > 4096) continue;
+                var content = ByteBuffer.allocate(length);
+                view.read(name, content);
+                String value = StandardCharsets.UTF_8.decode(content.flip()).toString().strip();
+                if (!value.isEmpty()) values.put(name, value);
+            }
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // Optional user attributes are independent of the basic file attributes.
+        }
+        return values;
     }
 
     @Override

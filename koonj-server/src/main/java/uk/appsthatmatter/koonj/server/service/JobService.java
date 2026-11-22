@@ -6,19 +6,29 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
+import uk.appsthatmatter.koonj.server.dto.JobEventResponse;
+import uk.appsthatmatter.koonj.server.dto.FileMovementResponse;
 import uk.appsthatmatter.koonj.server.dto.PageResponse;
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
 import uk.appsthatmatter.koonj.server.entity.ArchiveMode;
+import uk.appsthatmatter.koonj.server.entity.FileMovement;
+import uk.appsthatmatter.koonj.server.entity.JobEvent;
+import uk.appsthatmatter.koonj.server.entity.JobEvent.Level;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Operation;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Status;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
+import uk.appsthatmatter.koonj.server.repository.JobEventRepository;
+import uk.appsthatmatter.koonj.server.repository.FileMovementRepository;
 
 import uk.appsthatmatter.koonj.server.security.JobActor;
 
+import java.nio.file.FileSystemException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
@@ -30,7 +40,10 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class JobService {
     private final TransferJobRepository jobs;
+    private final JobEventRepository events;
+    private final FileMovementRepository movements;
     private final ObservationRegistry observations;
+    private final TransactionTemplate transaction;
     public static final int INTERACTIVE = 100;
     private static final int BACKGROUND = 5;
 
@@ -41,9 +54,13 @@ public class JobService {
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, pending,
             Thread.ofPlatform().name("koonj-transfer").factory());
 
-    public JobService(TransferJobRepository jobs, ObservationRegistry observations) {
+    public JobService(TransferJobRepository jobs, JobEventRepository events, FileMovementRepository movements,
+                      ObservationRegistry observations, TransactionTemplate transaction) {
         this.jobs = jobs;
+        this.events = events;
+        this.movements = movements;
         this.observations = observations;
+        this.transaction = transaction;
     }
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths) {
@@ -62,11 +79,15 @@ public class JobService {
         job.setArchiveMode(archiveMode);
         job.setDeleteFromTarget(deleteFromTarget);
         job.setOperation(operation);
-        job.setTriggeredBy(JobActor.current());
+        job.setTriggeredBy(Objects.requireNonNullElse(JobActor.current(), "System"));
         job.setSourceConnectionId(source);
         job.setTargetConnectionId(target);
         job.setRequestedPaths(paths);
-        return jobs.saveAndFlush(job);
+        return transaction.execute(status -> {
+            TransferJob saved = jobs.saveAndFlush(job);
+            log(saved.getId(), saved.getCreatedAt(), Level.INFO, null, "Job queued");
+            return saved;
+        });
     }
 
     public JobResponse get(UUID id) {
@@ -76,6 +97,34 @@ public class JobService {
 
     public PageResponse<JobResponse> list(Pageable pageable) {
         return PageResponse.from(jobs.findAll(pageable).map(JobResponse::from));
+    }
+
+    public PageResponse<JobEventResponse> events(UUID jobId, boolean errorsOnly, Pageable page) {
+        requireJob(jobId);
+        var result = errorsOnly ? events.findByJobIdAndLevelOrderByIdAsc(jobId, Level.ERROR, page)
+                : events.findByJobIdOrderByIdAsc(jobId, page);
+        return PageResponse.from(result.map(JobEventResponse::from));
+    }
+
+    public PageResponse<FileMovementResponse> fileResults(UUID jobId, boolean failedOnly, Pageable page) {
+        requireJob(jobId);
+        var result = failedOnly ? movements.findByJobIdAndOutcomeOrderByIdAsc(jobId, FileMovement.Outcome.FAILED, page)
+                : movements.findByJobIdOrderByIdAsc(jobId, page);
+        return PageResponse.from(result.map(FileMovementResponse::from));
+    }
+
+    private void requireJob(UUID jobId) {
+        if (!jobs.existsById(jobId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer job was not found");
+    }
+
+    void log(UUID jobId, Instant recordedAt, Level level, String path, String message) {
+        var event = new JobEvent();
+        event.setJobId(jobId);
+        event.setRecordedAt(recordedAt);
+        event.setLevel(level);
+        event.setPath(path);
+        event.setMessage(message);
+        events.save(event);
     }
 
     public CompletableFuture<JobResponse> execute(TransferJob job, JobWork work) {
@@ -114,17 +163,37 @@ public class JobService {
         try {
             activity.start();
             job.setStatus(Status.RUNNING);
-            jobs.save(job);
+            job.setStartedAt(Instant.now());
+            transaction.executeWithoutResult(status -> {
+                jobs.save(job);
+                log(job.getId(), job.getStartedAt(), Level.INFO, null, "Execution started");
+            });
+            String executionError = null;
+            String executionPath = null;
             try {
                 work.run(job);
                 job.setStatus(job.getFailedFiles() == 0 ? Status.COMPLETED
                         : job.getProcessedFiles() > job.getFailedFiles() ? Status.PARTIAL_FAILURE : Status.FAILED);
             } catch (Exception failure) {
-                appendError(job, StorageErrors.describe(failure));
+                executionError = StorageErrors.describe(failure);
+                if (failure instanceof FileSystemException filesystem) executionPath = filesystem.getFile();
+                appendError(job, executionError);
                 job.setStatus(Status.FAILED);
             }
             job.setCompletedAt(Instant.now());
-            jobs.save(job);
+            String error = executionError;
+            String path = executionPath;
+            transaction.executeWithoutResult(status -> {
+                jobs.save(job);
+                if (error != null) log(job.getId(), job.getCompletedAt(), Level.ERROR, path, error);
+                String result = switch (job.getStatus()) {
+                    case COMPLETED -> "Execution completed";
+                    case PARTIAL_FAILURE -> "Execution completed with failures";
+                    case FAILED -> "Execution failed";
+                    default -> throw new IllegalStateException("Job has no terminal status");
+                };
+                log(job.getId(), job.getCompletedAt(), job.getStatus() == Status.COMPLETED ? Level.INFO : Level.WARNING, null, result);
+            });
             activity.lowCardinalityKeyValue("outcome", job.getStatus().name());
         } catch (RuntimeException failure) {
             activity.lowCardinalityKeyValue("outcome", "FAILED");
@@ -147,7 +216,18 @@ public class JobService {
     public void totals(TransferJob job, int count, long bytes) {
         job.setTotalFiles(count);
         job.setTotalBytes(bytes);
-        jobs.save(job);
+        transaction.executeWithoutResult(status -> {
+            jobs.save(job);
+            String items = job.getOperation() == Operation.SCAN ? " catalog entries" : " transfer items";
+            log(job.getId(), Instant.now(), Level.INFO, null, "Discovered " + count + items + " (" + bytes + " bytes)");
+        });
+    }
+
+    public void selectionFailed(TransferJob job, String path, String reason) {
+        transaction.executeWithoutResult(status -> {
+            progress(job, 0, path + ": " + reason);
+            log(job.getId(), Instant.now(), Level.ERROR, path, reason);
+        });
     }
 
     public void scanned(TransferJob job, int count) {

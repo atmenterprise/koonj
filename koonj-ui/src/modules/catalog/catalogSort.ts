@@ -3,9 +3,9 @@ export const catalogColumns = {
   size: 'Size',
   state: 'Storage state',
   temperature: 'Temperature',
-  modified: 'Last modified date',
+  modified: 'Modified',
   integrity: 'Integrity',
-  tags: 'Custom Tags',
+  tags: 'Tags',
 } as const
 
 export type CatalogColumn = keyof typeof catalogColumns

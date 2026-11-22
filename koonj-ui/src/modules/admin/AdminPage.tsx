@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { isActiveJob, isObjectStorage } from '../../api/mappers'
 import { adminService } from '../../api/services/adminService'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
-import type { Navigate } from '../../shared/ui/feedback'
+import { LoadingRows, type Navigate } from '../../shared/ui/feedback'
 import { Badge, Button, Icon, Metric, bytes, count, duration, statusTone, time } from '../../shared/ui/primitives'
-import AuditLogPage from '../activity/AuditLogPage'
 import { StorageConnectionsPage } from '../storage/StorageConnectionsPage'
+
+const AuditLogPage = lazy(() => import('../activity/AuditLogPage'))
 
 const sections = [
   { id: 'overview', title: 'Overview', icon: 'home' },
@@ -133,7 +134,9 @@ export default function AdminPage({ section, job, navigate }: {
     </nav>
     {active.id === 'overview' && <Overview />}
     {active.id === 'telemetry' && <Telemetry />}
-    {active.id === 'activity' && <AuditLogPage key={job} initialJob={job} />}
+    {active.id === 'activity' && <Suspense fallback={<LoadingRows label="Loading activity" />}>
+      <AuditLogPage key={job} initialJob={job} />
+    </Suspense>}
     {active.id === 'storage' && <StorageConnectionsPage navigate={navigate} embedded grouped />}
   </>
 }

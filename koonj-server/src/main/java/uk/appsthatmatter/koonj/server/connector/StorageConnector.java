@@ -18,6 +18,9 @@ public interface StorageConnector {
     default boolean objectStorage() { return false; }
     void testConnection(StorageConnection config) throws IOException;
     List<ScannedFileInfo> listFiles(StorageConnection config, String subPath) throws IOException;
+    default FileAttributes fileAttributes(StorageConnection config, String relativePath) throws IOException {
+        return FileAttributes.EMPTY;
+    }
     InputStream openReadStream(StorageConnection config, String relativePath) throws IOException;
     void writeStream(StorageConnection config, String relativePath, InputStream dataStream,
                      long contentLength, String storageClass) throws IOException;

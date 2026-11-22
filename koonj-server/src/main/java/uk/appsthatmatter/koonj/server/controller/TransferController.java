@@ -68,4 +68,22 @@ public class TransferController {
     @Operation(summary = "Read job progress", description = "Return status, file and byte counters, completion time, and any recorded errors.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse get(@PathVariable UUID jobId) { return jobs.get(jobId); }
+
+    @GetMapping("/jobs/{jobId}/events")
+    @PreAuthorize(KoonjRoles.OPERATE)
+    public PageResponse<JobEventResponse> events(@PathVariable UUID jobId,
+            @RequestParam(defaultValue = "false") boolean errorsOnly,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "25") @Min(1) @Max(200) int size) {
+        return jobs.events(jobId, errorsOnly, PageRequest.of(page, size));
+    }
+
+    @GetMapping("/jobs/{jobId}/files")
+    @PreAuthorize(KoonjRoles.OPERATE)
+    public PageResponse<FileMovementResponse> fileResults(@PathVariable UUID jobId,
+            @RequestParam(defaultValue = "false") boolean failedOnly,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "25") @Min(1) @Max(200) int size) {
+        return jobs.fileResults(jobId, failedOnly, PageRequest.of(page, size));
+    }
 }

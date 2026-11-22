@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 
 import java.util.List;
 
-@Schema(description = "Update direct metadata for one or more catalog items. Folder metadata is inherited by descendants.")
+@Schema(description = "Update direct metadata for catalog items. Descendants inherit folder tags and properties.")
 public record CatalogMetadataWriteRequest(
         @NotNull @Size(min = 1, max = 500) List<@NotNull @Valid Target> targets,
         @NotNull @Valid CatalogMetadataValues values,

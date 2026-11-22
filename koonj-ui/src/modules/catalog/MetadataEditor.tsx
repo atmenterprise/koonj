@@ -11,11 +11,15 @@ function tagTone(tag: string) {
   return tagTones[hash]
 }
 
+export function MetadataTags({ tags }: { tags: string[] }) {
+  return tags.length > 0 && <ul className="metadata-tag-list" aria-label="Tags">
+    {tags.map(tag => <li key={tag}><Badge tone={tagTone(tag)}>{tag}</Badge></li>)}
+  </ul>
+}
+
 export function MetadataValues({ values }: { values: CustomMetadata }) {
   return <>
-    {values.tags.length > 0 && <ul className="metadata-tag-list" aria-label="Tags">
-      {values.tags.map(tag => <li key={tag}><Badge tone={tagTone(tag)}>{tag}</Badge></li>)}
-    </ul>}
+    <MetadataTags tags={values.tags} />
     {values.properties.length > 0 && <dl className="metadata-property-list">
       {values.properties.map(({ name, value }) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}
     </dl>}
@@ -50,8 +54,9 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
     setTagDraft('')
   }
 
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const description = new FormData(event.currentTarget).get('description')
     const pairs = properties.map(({ name, value }) => ({ name: name.trim(), value: value.trim() }))
     if (pairs.some(({ name, value }) => (!name && value) || (name && !value))) {
       notify({ tone: 'error', title: 'Check custom properties',
@@ -66,7 +71,9 @@ export default function MetadataEditor({ initial = emptyMetadata, inherited = em
       notify({ tone: 'error', title: 'Add at least one tag or property' })
       return
     }
-    try { await onSave(values) } catch { return }
+    try {
+      await onSave(typeof description === 'string' ? { ...values, description } : values)
+    } catch { return }
     setTags(values.tags)
     setTagDraft('')
   }
