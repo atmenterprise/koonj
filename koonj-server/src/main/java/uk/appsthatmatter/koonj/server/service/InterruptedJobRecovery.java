@@ -35,7 +35,7 @@ public class InterruptedJobRecovery implements ApplicationRunner {
         updateLegacyStorageStateConstraint();
         String reason = "Interrupted by server restart. Resubmit to retry.";
         Instant finished = Instant.now();
-        var active = List.of(Status.PENDING, Status.RUNNING);
+        var active = List.of(Status.PENDING, Status.RUNNING, Status.PAUSING, Status.STOPPING);
         for (var jobId : jobs.idsWithStatus(active)) jobService.log(jobId, finished, Level.ERROR, null, reason);
         jobs.finishInterrupted(Status.FAILED, finished, reason, active);
         files.failInterrupted(StorageState.FAILED, reason, List.of(StorageState.QUEUED_ARCHIVE,
@@ -62,6 +62,23 @@ public class InterruptedJobRecovery implements ApplicationRunner {
                                     (storage_state IN (''LOCAL_ONLY'', ''QUEUED_ARCHIVE'', ''ARCHIVING'',
                                     ''ARCHIVED'', ''ARCHIVED_COPY'', ''ARCHIVED_SYMLINK'', ''PURGED_LOCAL'',
                                     ''QUEUED_RECALL'', ''RECALLING'', ''FAILED''))', legacy.conname);
+                            END LOOP;
+                        END $$;
+                        """);
+                statement.execute("""
+                        DO $$
+                        DECLARE legacy record;
+                        BEGIN
+                            FOR legacy IN
+                                SELECT conname FROM pg_constraint
+                                WHERE conrelid = 'transfer_jobs'::regclass AND contype = 'c'
+                                    AND pg_get_constraintdef(oid) LIKE '%status%PARTIAL_FAILURE%'
+                                    AND pg_get_constraintdef(oid) NOT LIKE '%PAUSED%'
+                            LOOP
+                                EXECUTE format('ALTER TABLE transfer_jobs DROP CONSTRAINT %I', legacy.conname);
+                                EXECUTE format('ALTER TABLE transfer_jobs ADD CONSTRAINT %I CHECK
+                                    (status IN (''PENDING'', ''RUNNING'', ''PAUSING'', ''PAUSED'', ''STOPPING'', ''STOPPED'',
+                                    ''COMPLETED'', ''PARTIAL_FAILURE'', ''FAILED''))', legacy.conname);
                             END LOOP;
                         END $$;
                         """);

@@ -7,7 +7,7 @@ export function isObjectStorage(provider: ProviderType) {
 }
 
 export function isActiveJob(job: TransferJobDTO) {
-  return job.status === 'PENDING' || job.status === 'RUNNING'
+  return ['PENDING', 'RUNNING', 'PAUSING', 'STOPPING'].includes(job.status)
 }
 
 export const stateLabels: Record<StorageState, string> = {
@@ -17,7 +17,8 @@ export const stateLabels: Record<StorageState, string> = {
 }
 
 export const jobLabels: Record<JobStatus, string> = {
-  PENDING: 'Pending', RUNNING: 'Running', COMPLETED: 'Completed', PARTIAL_FAILURE: 'Partial failure', FAILED: 'Failed',
+  PENDING: 'Pending', RUNNING: 'Running', PAUSING: 'Pausing', PAUSED: 'Paused', STOPPING: 'Stopping',
+  STOPPED: 'Stopped', COMPLETED: 'Completed', PARTIAL_FAILURE: 'Partial failure', FAILED: 'Failed',
 }
 
 export const operationLabels = { ARCHIVE: 'Archive', RECALL: 'Recall', SCAN: 'Scan' } as const

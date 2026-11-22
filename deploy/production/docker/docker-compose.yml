@@ -68,6 +68,7 @@ services:
       - "${KOONJ_KEYCLOAK_BIND:-127.0.0.1}:${KOONJ_KEYCLOAK_PORT:-8180}:8080"
     volumes:
       - ./keycloak/koonj-realm.json:/opt/keycloak/data/import/koonj-realm.json:ro
+      - ./keycloak/themes/koonj:/opt/keycloak/themes/koonj:ro
     healthcheck:
       test:
         - CMD-SHELL

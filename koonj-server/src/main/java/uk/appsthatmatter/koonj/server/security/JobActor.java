@@ -6,6 +6,17 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 public final class JobActor {
     private JobActor() {}
 
+    public static String displayName() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken token)) return null;
+        String name = token.getToken().getClaimAsString("name");
+        if (name != null && !name.isBlank()) return name.strip();
+        String given = token.getToken().getClaimAsString("given_name");
+        String family = token.getToken().getClaimAsString("family_name");
+        String fullName = ((given == null ? "" : given.strip()) + " " + (family == null ? "" : family.strip())).strip();
+        return fullName.isEmpty() ? null : fullName;
+    }
+
     public static String current() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken token) {

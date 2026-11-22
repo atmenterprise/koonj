@@ -38,7 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     }
   }
 
-  return <><main className="auth-gate">
+  return <><main className="auth-gate auth-gate--landing">
     <section className="panel auth-card" aria-labelledby="auth-title">
       <span className="brand-mark"><Icon name="bird" size={28} /></span>
       <h1 id="auth-title">Welcome to Koonj</h1>
@@ -52,5 +52,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
             </>}
       </div>
     </section>
+    <footer className="auth-copyright">© {new Date().getFullYear()} Apps That Matter</footer>
   </main><NotificationPopup /></>
 }

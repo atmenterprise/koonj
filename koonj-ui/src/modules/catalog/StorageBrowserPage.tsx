@@ -1,12 +1,12 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useScanMutation } from '../../api/hooks/mutations'
-import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
-import { folderTree, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
+import { useActiveArchives, useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
+import { folderTree, isActiveJob, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
 import type { CatalogMetadataTarget, ProviderType } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
-import { Badge, Button, Icon, bytes, count, date, storageName, temperatureTone } from '../../shared/ui/primitives'
+import { Badge, Button, Icon, bytes, count, date, storageName, temperatureTone, time } from '../../shared/ui/primitives'
 import { FileInspector } from './FileInspector'
 import { FavoriteButton } from './FavoriteButton'
 import { favoriteKey, useCatalogFavorites } from './catalogFavorites'
@@ -19,12 +19,22 @@ import { planTransfers, transferTargets, type TransferPlan } from './transferSel
 import { SymlinkTarget } from './SymlinkTarget'
 import { TransferDialog, type CatalogTransferAction } from './TransferDialog'
 
-function Folders({ nodes, prefix, onOpen }: { nodes: FolderNode[]; prefix: string; onOpen: (prefix: string) => void }) {
-  return <ul className="live-folders">{nodes.map(node => <FolderBranch key={node.prefix} node={node}
-    prefix={prefix} onOpen={onOpen} />)}</ul>
+function ArchiveSpinner() {
+  return <span className="catalog-archive-spinner" title="Archive in progress" role="img" aria-label="Archive in progress">
+    <Icon name="retry" size={14} />
+  </span>
 }
 
-function FolderBranch({ node, prefix, onOpen }: { node: FolderNode; prefix: string; onOpen: (prefix: string) => void }) {
+function Folders({ nodes, prefix, onOpen, archiving }: {
+  nodes: FolderNode[]; prefix: string; onOpen: (prefix: string) => void; archiving: ReadonlySet<string>
+}) {
+  return <ul className="live-folders">{nodes.map(node => <FolderBranch key={node.prefix} node={node}
+    prefix={prefix} onOpen={onOpen} archiving={archiving} />)}</ul>
+}
+
+function FolderBranch({ node, prefix, onOpen, archiving }: {
+  node: FolderNode; prefix: string; onOpen: (prefix: string) => void; archiving: ReadonlySet<string>
+}) {
   const [open, setOpen] = useState<boolean>()
   const expanded = open ?? prefix.startsWith(node.prefix)
   return <li>
@@ -35,9 +45,10 @@ function FolderBranch({ node, prefix, onOpen }: { node: FolderNode; prefix: stri
       </button> : <span className="tree-toggle" aria-hidden="true" />}
       <button type="button" className="tree-name" aria-current={node.prefix === prefix ? 'location' : undefined} onClick={() => onOpen(node.prefix)}>
         <Icon name="folder" size={14} /><span>{node.name}</span>
+        {archiving.has(node.prefix) && <ArchiveSpinner />}
       </button>
     </div>
-    {expanded && node.children.length > 0 && <Folders nodes={node.children} prefix={prefix} onOpen={onOpen} />}
+    {expanded && node.children.length > 0 && <Folders nodes={node.children} prefix={prefix} onOpen={onOpen} archiving={archiving} />}
   </li>
 }
 
@@ -101,9 +112,27 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   const selectedEndpoint = endpoints.find(item => item.id === endpointId) ?? endpoints[0]
   const scan = useScanMutation()
   const jobs = useTransferJobs(canTransfer)
-  const scanning = jobs.data?.some(job => job.operation === 'SCAN' && job.sourceConnectionId === selectedEndpoint?.id
-    && (job.status === 'PENDING' || job.status === 'RUNNING'))
+  const scanJob = jobs.data?.find(job => job.operation === 'SCAN' && job.sourceConnectionId === selectedEndpoint?.id
+    && (isActiveJob(job) || job.status === 'PAUSED'))
   const snapshot = useCatalogSnapshot(selectedEndpoint?.id, !!selectedEndpoint)
+  const archives = useActiveArchives(selectedEndpoint?.id)
+  const archiveIndicators = useMemo(() => {
+    const folderPaths = new Set<string>()
+    const filePaths = new Set<string>()
+    function addFolders(path: string) {
+      folderPaths.add('')
+      for (let i = path.indexOf('/'); i !== -1; i = path.indexOf('/', i + 1)) folderPaths.add(path.slice(0, i + 1))
+    }
+    for (const archive of archives.data ?? []) {
+      const currentFiles = archive.currentFiles ?? (archive.currentFile ? [archive.currentFile] : [])
+      if (!currentFiles.length) archive.requestedPaths.forEach(addFolders)
+      for (const currentFile of currentFiles) {
+        filePaths.add(currentFile)
+        addFolders(currentFile)
+      }
+    }
+    return { folderPaths, filePaths }
+  }, [archives.data])
   const annotations = useCatalogMetadata(selectedEndpoint?.id)
   const { favorites, change: changeFavorite } = useCatalogFavorites()
   const favoriteKeys = useMemo(() => new Set(favorites.data?.map(favoriteKey)), [favorites.data])
@@ -302,7 +331,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                       <Icon name={storageLocationIcon(item.providerType)} size={15} /><span>{item.name}</span><small>{item.providerType}</small>
                     </button>
                   </div>
-                  {current && <Folders nodes={folders} prefix={folder} onOpen={openFolder} />}
+                  {current && <Folders nodes={folders} prefix={folder} onOpen={openFolder} archiving={archiveIndicators.folderPaths} />}
                 </div>
               })}
             </section>
@@ -336,7 +365,9 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
             <div className="catalog-location-bar">
               <div className="catalog-location-identity">
                 <span className="catalog-location-icon"><Icon name={folder ? 'folder' : storageLocationIcon(selectedEndpoint.providerType)} size={23} /></span>
-                <div className="catalog-title"><h2>{locationName}</h2><Badge>{selectedEndpoint.providerType}</Badge></div>
+                <div className="catalog-title"><h2>{locationName}</h2><Badge>{selectedEndpoint.providerType}</Badge>
+                  {archiveIndicators.folderPaths.has(folder) && <ArchiveSpinner />}
+                </div>
               </div>
               {canTransfer && currentFolder && !!locationTotals?.files && <Button icon="folder" aria-pressed={wholeFolderSelected}
                 onClick={() => setSelection(wholeFolderSelected ? new Set() : new Set([currentFolder.prefix]))}>
@@ -348,8 +379,8 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   <div><dt>Files</dt><dd>{count(locationTotals.files)}</dd></div>
                   <div><dt>Folders</dt><dd>{count(locationTotals.folders)}</dd></div>
                 </dl>}
-                {canTransfer && <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || scanning}
-                  onClick={() => scan.mutate(selectedEndpoint.id)}>{scanning ? 'Scanning…' : 'Scan'}</Button>}
+                {canTransfer && <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || !!scanJob}
+                  onClick={() => scan.mutate(selectedEndpoint.id)}>{scanJob?.status === 'PAUSED' ? 'Scan paused' : scanJob ? 'Scanning…' : 'Scan'}</Button>}
                 {folder && <MetadataButton name={locationName} onClick={() => setInspectedId(folder)} />}
               </div>
             </div>
@@ -402,6 +433,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                           <span className="catalog-folder-icon"><Icon name="folder" size={17} /></span>
                           <span className="catalog-folder-label"><strong>{node.name}</strong><small>{summary}</small></span>
                         </button>
+                        {archiveIndicators.folderPaths.has(node.prefix) && <ArchiveSpinner />}
                       </div>
                       <span role="cell" className="catalog-column-size">{bytes(totals?.sizeBytes ?? 0)}</span>
                       {Array.from({ length: 4 }, (_, index) => <span role="cell" key={index}>—</span>)}
@@ -425,6 +457,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                       <div className="catalog-file-name">
                         <div className="catalog-name catalog-file-label"><Icon name={symlink ? 'link' : 'file'} size={17} />
                           <span className="catalog-file-title" title={file.relativePath}>{file.fileName}</span>
+                          {archiveIndicators.filePaths.has(file.relativePath) && <ArchiveSpinner />}
                           {symlink && <Badge tone="blue">SYMLINK</Badge>}
                         </div>
                         {symlink && <SymlinkTarget file={file} locations={endpoints} navigate={navigate} />}
@@ -437,7 +470,11 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                       </Badge>
                     </span>
                     <span role="cell">{temperature ? <Badge tone={temperatureTone[temperature]}>{temperature}</Badge> : '—'}</span>
-                    <span role="cell">{file.lastModifiedAt ? date(file.lastModifiedAt) : '—'}</span>
+                    <span role="cell">{file.lastModifiedAt
+                      ? <time className="catalog-modified-time" dateTime={file.lastModifiedAt}>
+                        {date(file.lastModifiedAt)}<small>{time(file.lastModifiedAt)}</small>
+                      </time>
+                      : '—'}</span>
                     <span role="cell">{file.checksumSha256 ? <Badge tone="green">Recorded</Badge> : '—'}</span>
                     {tags}
                     <div role="cell" className="catalog-action-cell">

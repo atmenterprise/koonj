@@ -85,7 +85,7 @@ function FileResults({ job, failedOnly }: { job: TransferJobDTO; failedOnly: boo
   </section>
 }
 
-export function JobDetails({ job, id }: { job: TransferJobDTO; id: string }) {
+export function JobDetails({ job, id, actor }: { job: TransferJobDTO; id: string; actor: string }) {
   const [view, setView] = useState<typeof views[number]>(() =>
     job.status === 'FAILED' || job.status === 'PARTIAL_FAILURE' ? 'Failures' : 'Overview')
   return <div className="execution-detail" id={id}>
@@ -95,7 +95,9 @@ export function JobDetails({ job, id }: { job: TransferJobDTO; id: string }) {
     {view === 'Overview' && <section className="activity-detail-section" aria-label="Job overview">
       <dl className="activity-job-facts">
         <div><dt>Job ID</dt><dd><code>{job.id}</code></dd></div>
-        <div><dt>Triggered by</dt><dd>{job.triggeredBy ?? 'Not recorded'}</dd></div>
+        {job.restartedFrom && <div><dt>Restarted from</dt><dd><code>{job.restartedFrom}</code></dd></div>}
+        {job.restartedAs && <div><dt>Restarted as</dt><dd><code>{job.restartedAs}</code></dd></div>}
+        <div><dt>Triggered by</dt><dd>{actor}</dd></div>
         <div><dt>Submitted</dt><dd><JobTime timestamp={job.createdAt} /></dd></div>
         <div><dt>Started</dt><dd><JobTime timestamp={job.startedAt} fallback={job.status === 'PENDING' ? 'Queued' : 'Not recorded'} /></dd></div>
         <div><dt>Finished</dt><dd><JobTime timestamp={job.completedAt} /></dd></div>

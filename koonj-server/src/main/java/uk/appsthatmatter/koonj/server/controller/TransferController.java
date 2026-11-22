@@ -2,6 +2,7 @@ package uk.appsthatmatter.koonj.server.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.parameters.P;
 import uk.appsthatmatter.koonj.server.security.KoonjRoles;
 import jakarta.validation.Valid;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
 import uk.appsthatmatter.koonj.server.service.FileTransferService;
+import uk.appsthatmatter.koonj.server.service.CatalogScanService;
 import uk.appsthatmatter.koonj.server.service.JobService;
 
 import java.util.UUID;
@@ -25,10 +27,12 @@ import java.util.UUID;
 public class TransferController {
     private final FileTransferService transfers;
     private final JobService jobs;
+    private final CatalogScanService catalog;
 
-    public TransferController(FileTransferService transfers, JobService jobs) {
+    public TransferController(FileTransferService transfers, JobService jobs, CatalogScanService catalog) {
         this.transfers = transfers;
         this.jobs = jobs;
+        this.catalog = catalog;
     }
 
     @PostMapping("/archive")
@@ -68,6 +72,21 @@ public class TransferController {
     @Operation(summary = "Read job progress", description = "Return status, file and byte counters, completion time, and any recorded errors.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse get(@PathVariable UUID jobId) { return jobs.get(jobId); }
+
+    public record ControlRequest(@NotNull JobService.Action action) {}
+
+    @PostMapping("/jobs/{jobId}/control")
+    @PreAuthorize(KoonjRoles.OPERATE)
+    public JobResponse control(@PathVariable UUID jobId, @Valid @RequestBody ControlRequest request, Authentication authentication) {
+        boolean administrator = authentication.getAuthorities().stream()
+                .anyMatch(authority -> authority.getAuthority().equals("ROLE_" + KoonjRoles.ADMIN));
+        var job = jobs.control(jobId, request.action(), administrator);
+        if (request.action() == JobService.Action.RESUME || request.action() == JobService.Action.RESTART) {
+            if (job.getOperation() == TransferJob.Operation.SCAN) catalog.execute(job);
+            else transfers.execute(job);
+        }
+        return JobResponse.from(job);
+    }
 
     @GetMapping("/jobs/{jobId}/events")
     @PreAuthorize(KoonjRoles.OPERATE)

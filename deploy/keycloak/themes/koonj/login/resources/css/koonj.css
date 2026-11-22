@@ -1,0 +1,137 @@
+#keycloak-bg {
+  --koonj-bg: #fcfcfc;
+  --koonj-surface: #fff;
+  --koonj-ink: #1a1a1a;
+  --koonj-muted: #656570;
+  --koonj-border: #e4e4e7;
+  --koonj-accent: #ffde59;
+  --koonj-focus: #745a00;
+  --koonj-overlay: rgb(252 252 252 / 28%), rgb(252 252 252 / 38%) 66%, rgb(252 252 252 / 96%);
+  margin: 0;
+  color: var(--koonj-ink);
+  background: linear-gradient(180deg, var(--koonj-overlay)),
+    url('../img/atm-banner-16x9-clean.jpg') 70% center / cover no-repeat var(--koonj-bg);
+  font: 14px/1.5 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.pf-v5-theme-dark #keycloak-bg {
+  --koonj-bg: #18181b;
+  --koonj-surface: #202023;
+  --koonj-ink: #fafafa;
+  --koonj-muted: #b0b0bb;
+  --koonj-border: #414148;
+  --koonj-focus: #ffde59;
+  --koonj-overlay: rgb(24 24 27 / 65%), rgb(24 24 27 / 73%) 66%, rgb(24 24 27 / 96%);
+}
+
+#keycloak-bg .pf-v5-c-login {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px 20px max(70px, calc(46px + env(safe-area-inset-bottom)));
+  background: none;
+}
+
+#keycloak-bg .pf-v5-c-login__container {
+  width: min(100%, 460px);
+  display: block;
+  padding: clamp(24px, 5vw, 38px);
+  border: 1px solid var(--koonj-border);
+  border-radius: 10px;
+  background: var(--koonj-surface);
+  box-shadow: 0 12px 40px rgb(24 24 27 / 9%);
+}
+
+#keycloak-bg #kc-header {
+  margin: 0 0 14px;
+}
+
+#keycloak-bg #kc-header-wrapper {
+  color: var(--koonj-ink) !important;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+#kc-header-wrapper .kc-logo-text {
+  width: auto;
+  height: auto;
+  background: none;
+}
+
+#kc-header-wrapper .kc-logo-text span {
+  display: inline;
+}
+
+#kc-header-wrapper::before {
+  display: block;
+  width: 39px;
+  height: 39px;
+  margin: 0 auto 10px;
+  background: url('../img/koonj-mark.svg') center / contain no-repeat;
+  content: '';
+}
+
+#keycloak-bg .pf-v5-c-login__main {
+  background: transparent;
+  box-shadow: none;
+}
+
+#keycloak-bg .pf-v5-c-login__main-header {
+  padding: 0;
+  border: 0;
+  text-align: center;
+}
+
+#keycloak-bg #kc-page-title {
+  color: var(--koonj-ink);
+  font-size: clamp(22px, 4vw, 28px);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -.035em;
+}
+
+#keycloak-bg .pf-v5-c-login__main-body {
+  padding: 20px 0 0;
+}
+
+#keycloak-bg .pf-v5-c-login__main-footer-band {
+  padding-inline: 0;
+  background: transparent;
+}
+
+#keycloak-bg a:not(.pf-v5-c-button) {
+  color: var(--koonj-focus);
+  text-underline-offset: 3px;
+}
+
+#keycloak-bg .pf-v5-c-button.pf-m-primary {
+  --pf-v5-c-button--m-primary--BackgroundColor: var(--koonj-accent);
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #f5cd38;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #f5cd38;
+  --pf-v5-c-button--m-primary--active--BackgroundColor: #f5cd38;
+  --pf-v5-c-button--m-primary--Color: #221b05;
+  --pf-v5-c-button--m-primary--hover--Color: #221b05;
+  --pf-v5-c-button--m-primary--focus--Color: #221b05;
+  --pf-v5-c-button--m-primary--active--Color: #221b05;
+  min-height: 40px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+#keycloak-bg :is(a, button, input, select):focus-visible {
+  outline: 2px solid var(--koonj-focus);
+  outline-offset: 2px;
+}
+
+.koonj-copyright {
+  position: absolute;
+  inset-inline: 20px;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  color: var(--koonj-muted);
+  font-size: 12px;
+  text-align: center;
+}

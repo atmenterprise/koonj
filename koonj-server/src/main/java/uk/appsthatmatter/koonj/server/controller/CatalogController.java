@@ -18,6 +18,7 @@ import uk.appsthatmatter.koonj.server.entity.StorageState;
 import uk.appsthatmatter.koonj.server.service.CatalogScanService;
 import uk.appsthatmatter.koonj.server.service.ConnectionService;
 import uk.appsthatmatter.koonj.server.service.FileLineageService;
+import uk.appsthatmatter.koonj.server.service.JobService;
 
 import java.util.List;
 import java.util.UUID;
@@ -29,17 +30,25 @@ public class CatalogController {
 
     private final ConnectionService connections;
     private final FileLineageService lineage;
+    private final JobService jobs;
 
-    public CatalogController(CatalogScanService catalog, ConnectionService connections, FileLineageService lineage) {
+    public CatalogController(CatalogScanService catalog, ConnectionService connections, FileLineageService lineage, JobService jobs) {
         this.catalog = catalog;
         this.connections = connections;
         this.lineage = lineage;
+        this.jobs = jobs;
     }
 
     @GetMapping("/locations")
     @Operation(summary = "List catalog locations", description = "Return the fields required to browse files and select transfer locations.")
     @PreAuthorize(KoonjRoles.READ)
     public List<CatalogLocationResponse> locations() { return connections.catalogLocations(); }
+
+    @GetMapping("/locations/{connectionId}/active-archives")
+    @PreAuthorize(KoonjRoles.READ)
+    public List<JobService.ArchiveActivity> activeArchives(@PathVariable UUID connectionId) {
+        return jobs.activeArchives(connectionId);
+    }
 
     @PostMapping("/scan/{connectionId}")
     @ResponseStatus(HttpStatus.ACCEPTED)

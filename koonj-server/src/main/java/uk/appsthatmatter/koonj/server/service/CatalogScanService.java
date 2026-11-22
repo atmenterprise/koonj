@@ -41,20 +41,26 @@ public class CatalogScanService {
         connections.active(id);
         TransferJob job = jobs.create(TransferJob.Operation.SCAN, id, null, List.of());
         JobResponse accepted = JobResponse.from(job);
-        jobs.execute(job, this::scan);
+        execute(job);
         return accepted;
+    }
+
+    public void execute(TransferJob job) {
+        jobs.execute(job, this::scan);
     }
 
     private void scan(TransferJob job) throws java.io.IOException {
         StorageConnection source = connections.active(job.getSourceConnectionId());
         StorageConnector connector = connectors.resolve(source.getProviderType());
         List<ScannedFileInfo> discovered = connector.listFiles(source, "");
+        jobs.checkpoint(job);
         jobs.totals(job, discovered.size(), discovered.stream().mapToLong(ScannedFileInfo::sizeBytes).sum());
         transaction.executeWithoutResult(status -> {
             var stale = new HashMap<String, FileMetadata>();
             var objects = new HashSet<String>();
             files.findByConnectionId(source.getId()).forEach(file -> stale.put(file.getRelativePath(), file));
             for (ScannedFileInfo found : discovered) {
+                jobs.checkpoint(job);
                 FileMetadata file = stale.remove(found.relativePath());
                 if (file == null) file = newEntry(source, found.relativePath());
                 if (file.getId() != null && found.entryType() == EntryType.SYMLINK
@@ -97,6 +103,7 @@ public class CatalogScanService {
                 updatePhysical(file, found);
                 files.save(file);
             }
+            jobs.checkpoint(job);
             files.deleteAll(stale.values());
             if (connector.objectStorage()) clearMissingArchiveCopies(source.getId(), key -> !objects.contains(key));
         });
@@ -105,14 +112,23 @@ public class CatalogScanService {
 
     void clearMissingArchiveCopies(UUID bucketId, Predicate<String> missing) {
         var states = List.of(StorageState.ARCHIVED_COPY, StorageState.ARCHIVED);
-        for (FileMetadata copy : files.findByTargetConnectionIdAndStorageStateIn(bucketId, states)) {
-            if (copy.getEntryType() == EntryType.FILE && missing.test(copy.getS3Key())) {
-                copy.setStorageState(StorageState.LOCAL_ONLY);
-                copy.setTargetConnection(null);
-                copy.setS3Key(null);
-                copy.setS3StorageClass(null);
-                files.save(copy);
-            }
+        files.findByTargetConnectionIdAndStorageStateIn(bucketId, states).stream()
+                .filter(copy -> missing.test(copy.getS3Key()))
+                .forEach(this::clearArchiveCopy);
+    }
+
+    void clearArchiveCopiesForKey(UUID bucketId, String key) {
+        files.findByTargetConnectionIdAndS3Key(bucketId, key).forEach(this::clearArchiveCopy);
+    }
+
+    private void clearArchiveCopy(FileMetadata copy) {
+        if (copy.getEntryType() == EntryType.FILE
+                && (copy.getStorageState() == StorageState.ARCHIVED_COPY || copy.getStorageState() == StorageState.ARCHIVED)) {
+            copy.setStorageState(StorageState.LOCAL_ONLY);
+            copy.setTargetConnection(null);
+            copy.setS3Key(null);
+            copy.setS3StorageClass(null);
+            files.save(copy);
         }
     }
 

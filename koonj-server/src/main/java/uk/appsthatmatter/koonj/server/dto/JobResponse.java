@@ -14,11 +14,14 @@ import java.util.UUID;
 public record JobResponse(UUID id, Operation operation, Status status, UUID sourceConnectionId, UUID targetConnectionId,
         ArchiveMode archiveMode, boolean deleteFromTarget, List<String> requestedPaths, int totalFiles, int processedFiles, int failedFiles, long totalBytes,
         long transferredBytes, Instant createdAt, Instant startedAt, Instant completedAt, String details,
-        @Schema(description = "Authenticated account that submitted the job") String triggeredBy) {
+        @Schema(description = "Authenticated account that submitted the job") String triggeredBy, boolean controllable,
+        UUID restartedFrom, UUID restartedAs, String triggeredByName) {
     public static JobResponse from(TransferJob job) {
         return new JobResponse(job.getId(), job.getOperation(), job.getStatus(), job.getSourceConnectionId(),
                 job.getTargetConnectionId(), job.getArchiveMode(), job.isDeleteFromTarget(), List.copyOf(job.getRequestedPaths()), job.getTotalFiles(),
                 job.getProcessedFiles(), job.getFailedFiles(), job.getTotalBytes(), job.getTransferredBytes(),
-                job.getCreatedAt(), job.getStartedAt(), job.getCompletedAt(), job.getDetails(), job.getTriggeredBy());
+                job.getCreatedAt(), job.getStartedAt(), job.getCompletedAt(), job.getDetails(), job.getTriggeredBy(),
+                job.getOperation() == Operation.SCAN || job.getPlan() != null, job.getRestartedFrom(), job.getRestartedAs(),
+                job.getTriggeredByName());
     }
 }

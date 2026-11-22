@@ -79,7 +79,7 @@ chmod +x "${INSTALL_PREFIX}/bin/"*.sh
   && echo "  ⊘ application-production.yml exists — skipped" \
   || cp "${SCRIPT_DIR}/config/application-production.yml" "${INSTALL_PREFIX}/config/"
 
-cp "${SCRIPT_DIR}/keycloak/"* "${INSTALL_PREFIX}/keycloak/" 2>/dev/null || true
+cp -R "${SCRIPT_DIR}/keycloak/"* "${INSTALL_PREFIX}/keycloak/" 2>/dev/null || true
 
 chown -R "${KOONJ_USER}:${KOONJ_GROUP}" "${INSTALL_PREFIX}" 2>/dev/null \
   || chown -R "${KOONJ_USER}" "${INSTALL_PREFIX}"

@@ -40,6 +40,14 @@ export function jobMessage(job: TransferJobDTO): ActivityMessage {
       return { tone: 'info', title: action + ' in progress', jobId }
     case 'PENDING':
       return { tone: 'info', title: action + ' queued', jobId }
+    case 'PAUSING':
+      return { tone: 'info', title: action + ' pausing', jobId }
+    case 'PAUSED':
+      return { tone: 'info', title: action + ' paused', jobId }
+    case 'STOPPING':
+      return { tone: 'info', title: action + ' stopping', jobId }
+    case 'STOPPED':
+      return { tone: 'info', title: action + ' stopped', jobId }
   }
 }
 
@@ -53,7 +61,7 @@ export function reconcileJobs(notices: ActivityNotice[], jobs: TransferJobDTO[])
     const update = jobMessage(job)
     if (update.tone === 'info' && update.title === notice.title) return notice
     changed = true
-    return { ...notice, ...update, pending: update.tone === 'info',
+    return { ...notice, ...update, pending: update.tone === 'info' && job.status !== 'STOPPED',
       dismissed: update.tone === 'info' ? notice.dismissed : false,
       read: update.tone === 'info' ? notice.read : false }
   })

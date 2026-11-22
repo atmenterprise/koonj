@@ -6,10 +6,32 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import uk.appsthatmatter.koonj.server.entity.FileMovement;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 public interface FileMovementRepository extends JpaRepository<FileMovement, Long> {
+    @Query("""
+            select m.sourcePath from FileMovement m
+            where m.sourceConnectionId = :connectionId and m.sourcePath in :paths and m.jobId in :jobIds
+              and (m.jobId = :currentJob or m.outcome = uk.appsthatmatter.koonj.server.entity.FileMovement.Outcome.VERIFIED)
+            """)
+    List<String> handledSourcePaths(UUID connectionId, Collection<String> paths, Collection<UUID> jobIds, UUID currentJob);
+
+    @Query("""
+            select m.id from FileMovement m
+            where m.sourceConnectionId = :connectionId and m.sourcePath like :pattern escape '!' and m.jobId in :jobIds
+              and (m.jobId = :currentJob or m.outcome = uk.appsthatmatter.koonj.server.entity.FileMovement.Outcome.VERIFIED)
+            """)
+    List<Long> handledSourceFolder(UUID connectionId, String pattern, Collection<UUID> jobIds, UUID currentJob, Pageable page);
+
+    @Query("""
+            select m.id from FileMovement m
+            where m.targetConnectionId = :connectionId and m.targetPath like :pattern escape '!' and m.jobId in :jobIds
+              and (m.jobId = :currentJob or m.outcome = uk.appsthatmatter.koonj.server.entity.FileMovement.Outcome.VERIFIED)
+            """)
+    List<Long> handledTargetFolder(UUID connectionId, String pattern, Collection<UUID> jobIds, UUID currentJob, Pageable page);
+
     Page<FileMovement> findByJobIdOrderByIdAsc(UUID jobId, Pageable page);
     Page<FileMovement> findByJobIdAndOutcomeOrderByIdAsc(UUID jobId, FileMovement.Outcome outcome, Pageable page);
 

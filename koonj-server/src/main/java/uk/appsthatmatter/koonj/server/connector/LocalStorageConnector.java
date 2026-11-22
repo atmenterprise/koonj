@@ -18,6 +18,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Consumer;
 
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
@@ -73,11 +75,29 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public List<ScannedFileInfo> listFiles(StorageConnection config, String subPath) throws IOException {
+        List<ScannedFileInfo> files = new ArrayList<>();
+        visitFiles(config, subPath, files::add);
+        return files;
+    }
+
+    @Override
+    public Optional<ScannedFileInfo> statFile(StorageConnection config, String path) throws IOException {
+        Path root = root(config);
+        Path entry = resolve(root, path);
+        if (Files.isDirectory(entry, NOFOLLOW_LINKS)) {
+            if (entry.equals(root)) return Optional.empty();
+            var modified = Files.getLastModifiedTime(entry, NOFOLLOW_LINKS).toInstant();
+            return Optional.of(new ScannedFileInfo(path, 0, modified, null, EntryType.DIRECTORY, null));
+        }
+        return StorageConnector.super.statFile(config, path);
+    }
+
+    @Override
+    public void visitFiles(StorageConnection config, String subPath, Consumer<ScannedFileInfo> visitor) throws IOException {
         Path root = root(config);
         Path start = resolve(root, subPath);
-        List<ScannedFileInfo> files = new ArrayList<>();
         if (Files.notExists(start, NOFOLLOW_LINKS)) {
-            if (subPath.isEmpty() || stubTarget(stub(start)) == null) return files;
+            if (subPath.isEmpty() || stubTarget(stub(start)) == null) return;
             start = stub(start);
         }
         // The default walk options leave symlinks, including directory links, untraversed.
@@ -120,12 +140,11 @@ public class LocalStorageConnector implements StorageConnector {
             }
 
             private void add(Path path, BasicFileAttributes attributes, EntryType type, String target) {
-                files.add(new ScannedFileInfo(root.relativize(path).toString().replace(File.separatorChar, '/'),
+                visitor.accept(new ScannedFileInfo(root.relativize(path).toString().replace(File.separatorChar, '/'),
                         type == EntryType.FILE ? attributes.size() : 0,
                         attributes.lastModifiedTime().toInstant(), null, type, target));
             }
         });
-        return files;
     }
 
     @Override

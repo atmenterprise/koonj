@@ -8,6 +8,7 @@ import type { CatalogParams, PageResponse, TransferJobDTO } from '../types'
 export const queryKeys = {
   connections: ['connections'] as const,
   catalogLocations: ['catalog', 'locations'] as const,
+  activeArchives: ['catalog', 'active-archives'] as const,
   files: ['catalog', 'files'] as const,
   jobs: ['transfers', 'jobs'] as const,
 }
@@ -20,6 +21,12 @@ export function useConnections() {
 export function useCatalogLocations() {
   return useQuery({ queryKey: queryKeys.catalogLocations, meta: { errorTitle: 'Could not load catalog locations' },
     queryFn: ({ signal }) => catalogService.getLocations(signal) })
+}
+
+export function useActiveArchives(connectionId?: string) {
+  return useQuery({ queryKey: [...queryKeys.activeArchives, connectionId], enabled: !!connectionId,
+    queryFn: ({ signal }) => catalogService.getActiveArchives(connectionId!, signal), refetchInterval: 2000,
+    meta: { errorTitle: 'Could not load active archives' } })
 }
 
 export function useCatalogFiles(params: CatalogParams, enabled = true) {

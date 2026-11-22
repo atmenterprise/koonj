@@ -1,7 +1,6 @@
 import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { dashboardSummary, isActiveJob, operationLabels } from '../../api/mappers'
 import type { TransferJobDTO } from '../../api/types'
-import { ConnectionCard } from '../storage/ConnectionCard'
 import { useAuth } from '../../auth/AuthProvider'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { JobStatusBadge, type Navigate } from '../../shared/ui/feedback'
@@ -41,27 +40,28 @@ function RecentActivity({ jobs, navigate }: { jobs: TransferJobDTO[]; navigate: 
 
 export default function DashboardPage({ navigate }: { navigate: Navigate }) {
   const { user, hasRole } = useAuth()
-  const canAdminister = hasRole('KOONJ_ADMIN')
-  const canOperate = canAdminister || hasRole('KOONJ_OPERATOR')
+  const canOperate = hasRole('KOONJ_ADMIN') || hasRole('KOONJ_OPERATOR')
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
   return <>
     <div className="page-heading personal-heading dashboard-welcome">
       <div>
-        <h1>{user?.name ? `Welcome, ${user.name}` : 'Welcome to Koonj'}</h1>
+        <h1>{user?.name ? `${greeting}, ${user.name}` : greeting}</h1>
         <p>{canOperate ? 'Explore your storage catalog and see how recent scans, archives and recalls are progressing.'
-          : 'Explore your storage endpoints and browse the files in your catalog.'}</p>
+          : 'Browse files and folders in your catalog.'}</p>
       </div>
       <Button variant="primary" icon="folder" onClick={() => navigate('/explorer')}>
         Open explorer <Icon name="arrow" size={15} />
       </Button>
     </div>
     <QuickAccess navigate={navigate} />
-    <DashboardOverview navigate={navigate} canAdminister={canAdminister} canOperate={canOperate} />
+    <DashboardOverview navigate={navigate} canOperate={canOperate} />
   </>
 }
 
-function DashboardOverview({ navigate, canAdminister, canOperate }: {
-  navigate: Navigate; canAdminister: boolean; canOperate: boolean
+function DashboardOverview({ navigate, canOperate }: {
+  navigate: Navigate; canOperate: boolean
 }) {
   const connections = useCatalogLocations()
   const jobs = useTransferJobs(canOperate)
@@ -70,7 +70,7 @@ function DashboardOverview({ navigate, canAdminister, canOperate }: {
   const summary = dashboardSummary(catalog.data ?? [], jobs.data ?? [])
   const nameOf = (id: string | null) => connections.data?.find(item => item.id === id)?.name ?? id ?? '—'
 
-  const queries = [connections, catalog, ...(canOperate ? [jobs] : [])]
+  const queries = [catalog, ...(canOperate ? [connections, jobs] : [])]
   const failed = queries.find(query => query.isError)
   if (failed?.error) return <ApiPageState loadingLabel="Loading dashboard" error={failed.error}
     retry={() => { for (const query of queries) if (query.isError) void query.refetch() }}
@@ -100,12 +100,5 @@ function DashboardOverview({ navigate, canAdminister, canOperate }: {
         </div>) : <p className="empty compact">No active transfers.</p>}
       </section>
     </div>}
-    <section className="panel endpoints live-section">
-      <div className="panel-heading"><h2>Storage endpoints</h2>{canAdminister && <Button icon="server" onClick={() => navigate('/storage')}>Manage connections</Button>}</div>
-      {connections.data?.length
-        ? <div className="live-endpoints">{connections.data.map(connection => <ConnectionCard key={connection.id}
-          connection={connection} navigate={navigate} />)}</div>
-        : <p className="empty compact">No storage connections configured.</p>}
-    </section>
   </>
 }

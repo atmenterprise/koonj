@@ -13,6 +13,7 @@ async function invalidateJobAndCatalog(client: QueryClient, accepted: TransferJo
   await Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.files }),
     client.invalidateQueries({ queryKey: queryKeys.jobs }),
+    client.invalidateQueries({ queryKey: queryKeys.activeArchives }),
   ])
 }
 

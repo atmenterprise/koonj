@@ -282,8 +282,13 @@ CREATE DATABASE koonj OWNER koonj;
 
 ### 4. Set up Keycloak
 
-Set the console URL in the provided realm template using
-[Keycloak Setup](#keycloak-setup), then import it:
+Copy the provided Koonj login theme to Keycloak's `themes` directory. Set the
+console URL in the realm template using [Keycloak Setup](#keycloak-setup), then
+import the realm.
+
+```bash
+cp -R /opt/koonj/keycloak/themes/koonj /opt/keycloak/themes/
+```
 
 **Option A — Automatic import at first start:**
 ```bash
@@ -477,6 +482,12 @@ deployed console URL followed by `/*`. For example, use
 `https://koonj.yourcompany.com`. The existing `webOrigins` setting uses the
 origins from the allowed redirects. If the realm is already installed, update
 these client settings in the Keycloak Admin Console.
+
+New realms use the Koonj login theme from the realm template. For an existing
+realm, deploy the theme files, restart Keycloak, then select **Koonj realm →
+Realm settings → Themes → Login theme → koonj** and save. Keycloak skips
+startup imports for realms that already exist. Rebuild the development Keycloak
+container with `docker compose -f deploy/docker-compose.yml up -d --build keycloak`.
 
 ## Security Checklist
 

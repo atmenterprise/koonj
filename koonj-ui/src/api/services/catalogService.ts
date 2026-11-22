@@ -1,5 +1,5 @@
 import { apiClient } from '../client'
-import type { CatalogFavorite, CatalogFavoriteTarget, CatalogLocationDTO, CatalogMetadataEntry, CatalogMetadataWriteRequest,
+import type { ArchiveActivityDTO, CatalogFavorite, CatalogFavoriteTarget, CatalogLocationDTO, CatalogMetadataEntry, CatalogMetadataWriteRequest,
   CatalogParams, FileAttributesDTO, FileMovementDTO, PageResponse, PaginatedFileResponse, TransferJobDTO } from '../types'
 
 export const catalogService = {
@@ -17,6 +17,9 @@ export const catalogService = {
   },
   async getLocations(signal?: AbortSignal) {
     return (await apiClient.get<CatalogLocationDTO[]>('/catalog/locations', { signal })).data
+  },
+  async getActiveArchives(connectionId: string, signal?: AbortSignal) {
+    return (await apiClient.get<ArchiveActivityDTO[]>(`/catalog/locations/${connectionId}/active-archives`, { signal })).data
   },
   async getFiles(params: CatalogParams = {}, signal?: AbortSignal) {
     return (await apiClient.get<PaginatedFileResponse>('/catalog/files', { params, signal })).data

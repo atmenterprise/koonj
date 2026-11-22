@@ -1,6 +1,7 @@
 {
   "realm": "koonj",
   "displayName": "Koonj",
+  "loginTheme": "koonj",
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": true,

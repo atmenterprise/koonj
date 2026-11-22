@@ -9,8 +9,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import uk.appsthatmatter.koonj.server.connector.*;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteRequest;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteResponse;
@@ -51,7 +52,8 @@ import static uk.appsthatmatter.koonj.server.entity.TransferJob.Status.*;
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:physical-catalog;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop",
+        "koonj.transfer.max-parallel-files=2"
 })
 class PhysicalCatalogIntegrationTest {
     @TempDir Path root;
@@ -274,13 +276,96 @@ class PhysicalCatalogIntegrationTest {
     }
 
     @Test
+    void pausesAfterBothInFlightFilesAndResumesTheSameArchive() throws Exception {
+        Files.createDirectory(root.resolve("docs"));
+        Files.writeString(root.resolve("docs/first.txt"), "first file");
+        Files.writeString(root.resolve("docs/second.txt"), "second file");
+        Files.writeString(root.resolve("docs/third.txt"), "third file");
+        var gate = s3.blockRead(StoragePaths.ARCHIVE_STAGING_PREFIX, 2);
+        var job = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("docs/"), null, null, ArchiveMode.COPY, false));
+        List<String> started;
+        try {
+            gate.awaitRead();
+            var activities = jobs.activeArchives(source.getId());
+            assertThat(activities).hasSize(1);
+            started = activities.getFirst().currentFiles();
+            assertThat(started).hasSize(2);
+            assertThat(jobs.control(job.id(), JobService.Action.PAUSE, true).getStatus()).isEqualTo(PAUSING);
+        } finally {
+            gate.release.countDown();
+        }
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(jobs.get(job.id()).status()).isEqualTo(PAUSED));
+        assertThat(jobs.get(job.id()).completedAt()).isNull();
+        assertThat(jobs.get(job.id()).processedFiles()).isEqualTo(2);
+        assertThat(s3.objects.keySet()).containsExactlyInAnyOrderElementsOf(started);
+        assertThat(jobs.activeArchives(source.getId())).isEmpty();
+        transfers.execute(jobs.control(job.id(), JobService.Action.RESUME, true));
+        completed(job);
+        assertThat(jobs.get(job.id()).processedFiles()).isEqualTo(3);
+        assertThat(jobs.fileResults(job.id(), false, PageRequest.of(0, 10)).content()).hasSize(3);
+    }
+
+    @Test
+    void restartsAStoppedPurgeWithoutReprocessingVerifiedFiles() throws Exception {
+        Path first = Files.writeString(root.resolve("first.txt"), "first");
+        Path second = Files.writeString(root.resolve("second.txt"), "second");
+        Path third = Files.writeString(root.resolve("third.txt"), "third");
+        var gate = s3.blockRead(StoragePaths.ARCHIVE_STAGING_PREFIX, 2);
+        var job = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("first.txt", "second.txt", "third.txt"), null, null, ArchiveMode.PURGE, false));
+        try {
+            gate.awaitRead();
+            assertThat(jobs.control(job.id(), JobService.Action.STOP, true).getStatus()).isEqualTo(STOPPING);
+        } finally {
+            gate.release.countDown();
+        }
+        assertThat(finished(job).status()).isEqualTo(STOPPED);
+        assertThat(Files.isSymbolicLink(first)).isTrue();
+        assertThat(Files.isSymbolicLink(second)).isTrue();
+        assertThat(Files.isSymbolicLink(third)).isFalse();
+        assertThatThrownBy(() -> jobs.control(job.id(), JobService.Action.RESTART, false))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("Only an administrator");
+        var replacement = jobs.control(job.id(), JobService.Action.RESTART, true);
+        transfers.execute(replacement);
+        completed(JobResponse.from(replacement));
+        assertThat(jobs.get(job.id()).restartedAs()).isEqualTo(replacement.getId());
+        assertThat(jobs.get(replacement.getId()).restartedFrom()).isEqualTo(job.id());
+        assertThat(jobs.get(replacement.getId()).processedFiles()).isEqualTo(1);
+        assertThat(Files.isSymbolicLink(third)).isTrue();
+        assertThat(lineage.forFile(source.getId(), "first.txt", 0, 10).content()).hasSize(1);
+        assertThat(lineage.forFile(source.getId(), "second.txt", 0, 10).content()).hasSize(1);
+    }
+
+    @Test
+    void recallsDifferentFilesInParallel() throws IOException {
+        s3.put("docs/first.txt", "first".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        s3.put("docs/second.txt", "second".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var gate = s3.blockRead("docs/", 2);
+        var job = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
+                List.of("docs/", "docs/first.txt"), null, null, null, false));
+        try {
+            gate.awaitRead();
+        } finally {
+            gate.release.countDown();
+        }
+        completed(job);
+        assertThat(jobs.get(job.id()).processedFiles()).isEqualTo(2);
+        assertThat(root.resolve("docs/first.txt")).hasContent("first");
+        assertThat(root.resolve("docs/second.txt")).hasContent("second");
+    }
+
+    @Test
     void logsTimingActorAndIndividualReasonsForPartialFailures() throws IOException {
         Files.writeString(root.resolve("copied.txt"), "verified bytes");
         Files.writeString(root.resolve("corrupt.txt"), "damaged during archive");
         s3.corruptReads = "corrupt.txt";
         JobResponse accepted;
         var context = SecurityContextHolder.createEmptyContext();
-        context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated("catalog-operator", null, List.of()));
+        var token = Jwt.withTokenValue("test-token").header("alg", "none").subject("operator-id")
+                .claim("preferred_username", "operator@example.com").claim("name", "Catalog Operator").build();
+        context.setAuthentication(new JwtAuthenticationToken(token));
         SecurityContextHolder.setContext(context);
         try {
             accepted = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
@@ -290,7 +375,8 @@ class PhysicalCatalogIntegrationTest {
         }
         var job = finished(accepted);
         assertThat(job.status()).isEqualTo(PARTIAL_FAILURE);
-        assertThat(job.triggeredBy()).isEqualTo("catalog-operator");
+        assertThat(job.triggeredBy()).isEqualTo("operator@example.com");
+        assertThat(job.triggeredByName()).isEqualTo("Catalog Operator");
         assertThat(job.startedAt()).isBetween(job.createdAt(), job.completedAt());
         assertThat(job.failedFiles()).isEqualTo(2);
         assertThat(jobs.fileResults(job.id(), false, PageRequest.of(0, 1)).totalElements()).isEqualTo(2);
@@ -439,6 +525,25 @@ class PhysicalCatalogIntegrationTest {
         assertThat(localOnly).hasContent("still local");
     }
 
+    @Test
+    void deduplicatesMountedLinksAndOverlappingS3Selections() throws IOException {
+        Files.createDirectories(root.resolve("docs/nested"));
+        Path first = Files.writeString(root.resolve("docs/first"), "first");
+        Path second = Files.writeString(root.resolve("docs/nested/second"), "second");
+        completed(transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("docs/"), null, null, ArchiveMode.PURGE, false)));
+
+        var recall = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
+                List.of("docs/nested/", "docs/nested/second"), null, null, null, true, List.of("docs/", "docs/nested/")));
+        completed(recall);
+
+        assertThat(jobs.get(recall.id()).processedFiles()).isEqualTo(2);
+        assertThat(jobs.fileResults(recall.id(), false, PageRequest.ofSize(10)).content()).hasSize(2);
+        assertThat(first).hasContent("first");
+        assertThat(second).hasContent("second");
+        assertThat(s3.objects).isEmpty();
+    }
+
     private TransferRequest request(StorageConnection from, StorageConnection to, ArchiveMode mode, boolean delete) {
         return new TransferRequest(from.getId(), to.getId(), List.of("report"), null, null, mode, delete);
     }
@@ -472,7 +577,11 @@ class PhysicalCatalogIntegrationTest {
         }
 
         ReadGate blockRead(String pathPrefix) {
-            gate = new ReadGate(pathPrefix, new CountDownLatch(1), new CountDownLatch(1));
+            return blockRead(pathPrefix, 1);
+        }
+
+        ReadGate blockRead(String pathPrefix, int readers) {
+            gate = new ReadGate(pathPrefix, new CountDownLatch(readers), new CountDownLatch(1));
             return gate;
         }
 
@@ -500,7 +609,6 @@ class PhysicalCatalogIntegrationTest {
         public InputStream openReadStream(StorageConnection config, String path) throws IOException {
             ReadGate current = gate;
             if (current != null && path.startsWith(current.pathPrefix)) {
-                gate = null;
                 current.entered.countDown();
                 try {
                     if (!current.release.await(10, TimeUnit.SECONDS)) throw new IOException("Read gate timed out");

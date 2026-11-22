@@ -114,7 +114,9 @@ export interface CatalogParams extends PageParams {
 
 export type ArchiveMode = 'COPY' | 'PURGE'
 export type TransferOperation = 'ARCHIVE' | 'RECALL' | 'SCAN'
-export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL_FAILURE' | 'FAILED'
+export type JobStatus = 'PENDING' | 'RUNNING' | 'PAUSING' | 'PAUSED' | 'STOPPING' | 'STOPPED' | 'COMPLETED' | 'PARTIAL_FAILURE' | 'FAILED'
+export type JobAction = 'PAUSE' | 'RESUME' | 'STOP' | 'RESTART'
+export interface ArchiveActivityDTO { currentFile: string | null; requestedPaths: string[]; currentFiles?: string[] }
 
 export interface TransferJobDTO {
   id: string
@@ -135,6 +137,10 @@ export interface TransferJobDTO {
   completedAt: string | null
   details: string | null
   triggeredBy: string | null
+  triggeredByName?: string | null
+  controllable?: boolean
+  restartedFrom?: string | null
+  restartedAs?: string | null
 }
 
 export interface JobEventDTO {

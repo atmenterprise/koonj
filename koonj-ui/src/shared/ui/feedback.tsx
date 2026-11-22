@@ -13,7 +13,8 @@ export function LoadingRows({ label }: { label: string }) {
 }
 
 export function JobStatusBadge({ status }: { status: JobStatus }) {
-  const tone = { PENDING: 'neutral', RUNNING: 'blue', COMPLETED: 'green', PARTIAL_FAILURE: 'yellow', FAILED: 'red' }[status]
+  const tone = { PENDING: 'neutral', RUNNING: 'blue', PAUSING: 'blue', PAUSED: 'neutral', STOPPING: 'blue',
+    STOPPED: 'neutral', COMPLETED: 'green', PARTIAL_FAILURE: 'yellow', FAILED: 'red' }[status]
   return <Badge tone={tone} dot>{jobLabels[status]}</Badge>
 }
 

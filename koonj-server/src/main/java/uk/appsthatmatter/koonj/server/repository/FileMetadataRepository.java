@@ -30,15 +30,17 @@ public interface FileMetadataRepository extends JpaRepository<FileMetadata, UUID
         String getSymlinkTarget();
         String getS3Key();
         UUID getTargetId();
+        long getSizeBytes();
     }
 
     @Query("""
             select f.id as id, f.relativePath as relativePath, f.symlinkTarget as symlinkTarget,
-                   f.s3Key as s3Key, target.id as targetId
+                   f.s3Key as s3Key, target.id as targetId, f.sizeBytes as sizeBytes
             from FileMetadata f left join f.targetConnection target
             where f.connection.id = :connectionId and f.entryType = uk.appsthatmatter.koonj.server.entity.EntryType.SYMLINK
               and f.relativePath like :pattern escape '!' and f.relativePath > :after
+              and (:aliasesOnly = false or f.s3Key <> f.relativePath or f.s3Key is null or f.symlinkTarget like 's3:%')
             order by f.relativePath
             """)
-    List<RecallLink> recallLinks(UUID connectionId, String pattern, String after, Pageable page);
+    List<RecallLink> recallLinks(UUID connectionId, String pattern, String after, boolean aliasesOnly, Pageable page);
 }

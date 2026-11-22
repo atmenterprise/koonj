@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 @Service
@@ -39,11 +41,15 @@ public class FileTransferService {
     private final CatalogScanService catalog;
     private final JobService jobs;
     private final TransactionTemplate transaction;
+    private final int maxParallelFiles;
+    private final long inFlightBytes;
     private final ConcurrentHashMap<UUID, CompletableFuture<JobResponse>> interactiveRecalls = new ConcurrentHashMap<>();
 
     public FileTransferService(ConnectionService connections, StorageConnectorFactory connectors,
                                FileMetadataRepository files, FileMovementRepository movements, CatalogScanService catalog, JobService jobs,
-                               TransactionTemplate transaction) {
+                               TransactionTemplate transaction,
+                               @Value("${koonj.transfer.max-parallel-files:24}") int maxParallelFiles,
+                               @Value("${koonj.transfer.in-flight-mib:512}") long inFlightMiB) {
         this.connections = connections;
         this.connectors = connectors;
         this.files = files;
@@ -51,6 +57,8 @@ public class FileTransferService {
         this.catalog = catalog;
         this.jobs = jobs;
         this.transaction = transaction;
+        this.maxParallelFiles = Math.clamp(maxParallelFiles, 1, 64);
+        this.inFlightBytes = Math.clamp(inFlightMiB, 16, 65536) * 1024L * 1024;
     }
 
     public JobResponse submit(Operation operation, TransferRequest request) {
@@ -89,11 +97,16 @@ public class FileTransferService {
         if (paths.isEmpty() && targetFolders.isEmpty()) throw new IllegalArgumentException("Provide at least one path, folder, or file ID");
         Set<String> requestedPaths = new LinkedHashSet<>(paths);
         requestedPaths.addAll(targetFolders);
+        var plan = new TransferPlan(storageClass, List.copyOf(paths), List.copyOf(targetFolders), restorePaths, exactPaths, null);
         TransferJob job = jobs.create(operation, request.sourceConnectionId(), request.targetConnectionId(),
-                List.copyOf(requestedPaths), request.archiveMode(), request.deleteFromTarget());
+                List.copyOf(requestedPaths), request.archiveMode(), request.deleteFromTarget(), JobService.BACKGROUND, plan, null);
         JobResponse accepted = JobResponse.from(job);
-        jobs.execute(job, running -> transfer(running, storageClass, paths, targetFolders, restorePaths, exactPaths));
+        execute(job);
         return accepted;
+    }
+
+    public void execute(TransferJob job) {
+        jobs.execute(job, this::transfer);
     }
 
     public record RecallResult(String status, Instant estimatedReadyAt) {}
@@ -117,8 +130,9 @@ public class FileTransferService {
         if (ready.isPresent()) return new RecallResult("RESTORING_GLACIER", ready.get());
 
         var submitted = interactiveRecalls.computeIfAbsent(fileId, id -> {
+            var plan = new TransferPlan("STANDARD", List.of(key), List.of(), Map.of(key, file.getRelativePath()), Set.of(key), id);
             TransferJob job = jobs.create(Operation.RECALL, endpoints.source().getId(), endpoints.target().getId(),
-                    List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE);
+                    List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE, plan, null);
             return jobs.execute(job, running -> {
                 FileMetadata current = file(id);
                 if (isLocal(current)) return;
@@ -128,7 +142,8 @@ public class FileTransferService {
                         .filter(item -> item.entryType() == EntryType.FILE)
                         .orElseThrow(() -> new IOException("Archive object was not found"));
                 jobs.totals(running, 1, found.sizeBytes());
-                move(running, endpoints, found, current.getRelativePath(), null);
+                jobs.beginFile(running, key);
+                move(running, endpoints, found, current.getRelativePath(), null, null, false);
                 jobs.progress(running, found.sizeBytes(), null);
             });
         });
@@ -224,50 +239,110 @@ public class FileTransferService {
         return new Endpoints(source, reader, target, writer);
     }
 
-    private void transfer(TransferJob job, String storageClass, Set<String> paths, Set<String> targetFolders,
-                          Map<String, String> restorePaths, Set<String> exactPaths) {
+    private void transfer(TransferJob job) {
         Endpoints endpoints = endpoints(job.getOperation(), job.getSourceConnectionId(), job.getTargetConnectionId());
-        Map<String, ScannedFileInfo> selected = new LinkedHashMap<>();
-        Map<String, String> unavailable = new LinkedHashMap<>();
-        for (String folder : targetFolders) {
-            if (!collectRecallFolder(endpoints, folder, paths, restorePaths, exactPaths)) {
-                unavailable.put(folder, "No archived links found for the selected S3 connection");
+        TransferPlan plan = job.getPlan();
+        if (plan.interactiveFileId() != null) {
+            FileMetadata current = file(plan.interactiveFileId());
+            if (isLocal(current)) return;
+            String key = plan.sourcePaths().getFirst();
+            if (!key.equals(resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>()))
+                    || !current.getRelativePath().equals(plan.restorePaths().get(key))) {
+                throw new IllegalStateException("Archive reference changed while recall was paused or stopped");
             }
         }
-        for (String path : paths) {
+        var restorePaths = new HashMap<>(plan.restorePaths());
+        var handled = jobs.handledPaths(job);
+        var unavailable = new LinkedHashMap<String, String>();
+        var folders = new LinkedHashMap<String, String>();
+        var selectedFiles = new LinkedHashMap<String, ScannedFileInfo>();
+        var restoreKeys = new HashMap<String, String>();
+        Set<String> requested = new LinkedHashSet<>(plan.targetFolders());
+        List<String> mountedFolders = requested.stream()
+                .filter(folder -> !handled.failedSelections().contains(folder))
+                .filter(folder -> !coveredByFolder(requested, folder.substring(0, folder.length() - 1)))
+                .toList();
+        validateRecallAliases(job, endpoints, mountedFolders, restorePaths);
+        restorePaths.forEach((key, path) -> {
+            String previous = restoreKeys.putIfAbsent(path, key);
+            if (previous != null && !previous.equals(key)) {
+                throw new IllegalArgumentException("Several archive keys resolve to the same mounted path: " + path);
+            }
+        });
+        for (String path : plan.sourcePaths()) {
+            jobs.checkpoint(job);
+            if (handled.failedSelections().contains(path)) continue;
+            if (!path.endsWith("/") && handled.sourcePaths(List.of(path)).contains(path)) continue;
             try {
-                boolean folder = path.endsWith("/");
-                String prefix = folder ? path.substring(0, path.length() - 1) : path;
-                StoragePaths.requireSafe(prefix);
-                List<ScannedFileInfo> found = endpoints.reader().listFiles(endpoints.source(), prefix).stream()
-                        .filter(file -> file.entryType() == EntryType.FILE)
-                        .filter(file -> !folder || file.relativePath().startsWith(path)).toList();
-                if (!folder && (exactPaths.contains(path) || found.stream().anyMatch(file -> path.equals(file.relativePath())))) {
-                    found = found.stream().filter(file -> path.equals(file.relativePath())).toList();
+                if (path.endsWith("/")) {
+                    folders.putIfAbsent(path, path);
+                    continue;
                 }
-                if (found.isEmpty()) unavailable.put(path, "No regular files found");
-                found.forEach(file -> selected.putIfAbsent(file.relativePath(), file));
-            } catch (IOException | RuntimeException failure) {
+                Optional<ScannedFileInfo> file = exact(endpoints.reader(), endpoints.source(), path)
+                        .filter(item -> item.entryType() == EntryType.FILE);
+                if (file.isPresent()) selectedFiles.put(path, file.get());
+                else if (plan.exactPaths().contains(path)) unavailable.put(path, "No regular files found");
+                else folders.putIfAbsent(path.isEmpty() ? "" : path + "/", path);
+            } catch (IOException | software.amazon.awssdk.core.exception.SdkException failure) {
                 unavailable.put(path, StorageErrors.describe(failure));
             }
         }
-        jobs.totals(job, selected.size() + unavailable.size(),
-                selected.values().stream().mapToLong(ScannedFileInfo::sizeBytes).sum());
-        unavailable.forEach((path, error) -> jobs.selectionFailed(job, path, error));
-        for (ScannedFileInfo found : selected.values()) {
-            jobs.runWaitingInteractiveJobs();
-            String error = null;
-            try {
-                move(job, endpoints, found, restorePaths.getOrDefault(found.relativePath(), found.relativePath()), storageClass);
-            } catch (IOException | RuntimeException failure) {
-                error = found.relativePath() + ": " + StorageErrors.describe(failure);
+
+        jobs.initializeTransferTotals(job);
+        try (var batch = new TransferBatch(jobs, job, maxParallelFiles, inFlightBytes, handled)) {
+            Consumer<ScannedFileInfo> enqueue = file -> {
+                String key = file.relativePath();
+                String target = restorePaths.getOrDefault(key, key);
+                batch.add(key, file.sizeBytes(),
+                        () -> move(job, endpoints, file, target, plan.storageClass(), restoreKeys.get(target), false));
+            };
+            for (String folder : mountedFolders) {
+                boolean matched = visitRecallLinks(job, endpoints, folder, false, (link, key) -> {
+                    if (selectedFiles.containsKey(key) || unavailable.containsKey(key)
+                            || coveredByFolder(folders.keySet(), key)) return;
+                    String target = link.getRelativePath();
+                    var hint = new ScannedFileInfo(key, link.getSizeBytes(), null, null);
+                    batch.add(key, hint.sizeBytes(), () -> move(job, endpoints, hint, target, plan.storageClass(), null, true));
+                });
+                if (!matched && !handled.hasTargetFolder(folder)) {
+                    batch.selectionFailed(folder, "No archived links found for the selected S3 connection");
+                }
             }
-            jobs.progress(job, error == null ? found.sizeBytes() : 0, error);
+            unavailable.forEach(batch::selectionFailed);
+            selectedFiles.values().forEach(enqueue);
+            for (String folder : folders.keySet()) {
+                String prefix = folder.isEmpty() ? folder : folder.substring(0, folder.length() - 1);
+                if (!folder.isEmpty() && coveredByFolder(folders.keySet(), prefix)) continue;
+                boolean[] matched = {false};
+                try {
+                    endpoints.reader().visitFolderFiles(endpoints.source(), folder, file -> {
+                        jobs.checkpoint(job);
+                        String key = file.relativePath();
+                        if (file.entryType() != EntryType.FILE || !key.startsWith(folder)) return;
+                        matched[0] = true;
+                        if (!selectedFiles.containsKey(key)) enqueue.accept(file);
+                    });
+                    if (!matched[0] && !handled.hasSourceFolder(folder)) {
+                        batch.selectionFailed(folders.get(folder), "No regular files found");
+                    }
+                } catch (IOException | software.amazon.awssdk.core.exception.SdkException failure) {
+                    batch.selectionFailed(folders.get(folder), StorageErrors.describe(failure));
+                }
+            }
+            batch.submitDiscovered();
         }
     }
 
-    private void move(TransferJob job, Endpoints endpoints, ScannedFileInfo found, String targetPath, String storageClass)
-            throws IOException {
+    private static boolean coveredByFolder(Set<String> folders, String path) {
+        if (folders.contains("")) return true;
+        for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+            if (folders.contains(path.substring(0, slash + 1))) return true;
+        }
+        return false;
+    }
+
+    private long move(TransferJob job, Endpoints endpoints, ScannedFileInfo found, String targetPath, String storageClass,
+                      String reservedSourceKey, boolean refreshSource) throws IOException {
         var movement = new FileMovement();
         movement.setJobId(job.getId());
         boolean archive = job.getOperation() == Operation.ARCHIVE;
@@ -282,10 +357,20 @@ public class FileTransferService {
         movement.setTargetPath(targetPath);
         movement.setSizeBytes(found.sizeBytes());
         try {
+            if (reservedSourceKey != null && !reservedSourceKey.equals(found.relativePath())) {
+                throw new IOException("Recall destination is reserved for another archive key");
+            }
             StoragePaths.requireSafe(found.relativePath());
             if (StoragePaths.isArchiveStagingKey(found.relativePath())) throw new IOException("Path is reserved for archive staging");
+            if (refreshSource) {
+                found = exact(endpoints.reader(), endpoints.source(), found.relativePath())
+                        .filter(file -> file.entryType() == EntryType.FILE)
+                        .orElseThrow(() -> new IOException("Archive object was not found"));
+                movement.setSizeBytes(found.sizeBytes());
+            }
             if (archive) archive(endpoints, found, storageClass, job.getArchiveMode(), movement);
             else recall(endpoints, found, targetPath, job.isDeleteFromTarget(), movement);
+            return found.sizeBytes();
         } catch (IOException | RuntimeException failure) {
             // A rolled-back verification may have obtained an ID before the transaction failed.
             movement.setId(null);
@@ -307,25 +392,47 @@ public class FileTransferService {
         movements.save(movement);
     }
 
-    private boolean collectRecallFolder(Endpoints endpoints, String folder, Set<String> paths,
-                                        Map<String, String> restorePaths, Set<String> exactPaths) {
-        String pattern = folder.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+    private void validateRecallAliases(TransferJob job, Endpoints endpoints, List<String> folders,
+                                       Map<String, String> restorePaths) {
+        // Normal archive links use the same path on both tiers. Only exceptions need their own routing table.
+        for (String folder : folders) {
+            visitRecallLinks(job, endpoints, folder, true, (link, key) -> {
+                if (!link.getRelativePath().equals(key)) bindRestorePath(restorePaths, key, link.getRelativePath());
+            });
+        }
+        if (folders.isEmpty()) return;
+        Set<String> scopes = Set.copyOf(folders);
+        for (var route : restorePaths.entrySet()) {
+            String key = route.getKey();
+            if (key.equals(route.getValue()) || !coveredByFolder(scopes, key)) continue;
+            files.findByConnectionIdAndRelativePath(endpoints.target().getId(), key).ifPresent(file -> {
+                UUID binding = file.getTargetConnection() == null ? null : file.getTargetConnection().getId();
+                if (file.getEntryType() == EntryType.SYMLINK && key.equals(recallKey(endpoints.source(), file.getId(),
+                        binding, file.getSymlinkTarget(), file.getS3Key()))) {
+                    throw new IllegalArgumentException("Select one source symlink per archived object");
+                }
+            });
+        }
+    }
+
+    private boolean visitRecallLinks(TransferJob job, Endpoints endpoints, String folder, boolean aliasesOnly,
+                                     BiConsumer<FileMetadataRepository.RecallLink, String> visitor) {
+        String pattern = JobService.prefixPattern(folder);
         String after = "";
-        List<FileMetadataRepository.RecallLink> batch;
+        List<FileMetadataRepository.RecallLink> page;
         boolean matched = false;
         do {
-            batch = files.recallLinks(endpoints.target().getId(), pattern, after, RECALL_LINK_BATCH);
-            for (var link : batch) {
+            jobs.checkpoint(job);
+            page = files.recallLinks(endpoints.target().getId(), pattern, after, aliasesOnly, RECALL_LINK_BATCH);
+            for (var link : page) {
                 after = link.getRelativePath();
                 if (!after.startsWith(folder)) continue;
                 String key = recallKey(endpoints.source(), link.getId(), link.getTargetId(), link.getSymlinkTarget(), link.getS3Key());
                 if (key == null) continue;
-                bindRestorePath(restorePaths, key, after);
-                exactPaths.add(key);
-                paths.add(key);
+                visitor.accept(link, key);
                 matched = true;
             }
-        } while (batch.size() == RECALL_LINK_BATCH.getPageSize());
+        } while (page.size() == RECALL_LINK_BATCH.getPageSize());
         return matched;
     }
 
@@ -492,7 +599,7 @@ public class FileTransferService {
             String expected = local.getEntryType() == EntryType.SYMLINK && local.getChecksumSha256() != null
                     ? local.getChecksumSha256() : object.getChecksumSha256();
             String checksum = expected == null ? checksum(s3, bucket, key) : expected;
-            try (InputStream stream = verifying(s3.openReadStream(bucket, key), checksum, movement::setSourceChecksum)) {
+            try (InputStream stream = verifying(s3.openTransferStream(bucket, key, found.sizeBytes()), checksum, movement::setSourceChecksum)) {
                 source.restore(mounted, path, stream, found.sizeBytes(), () -> {
                     ScannedFileInfo restored = exact(source, mounted, path)
                             .filter(item -> item.entryType() == EntryType.FILE)
@@ -516,7 +623,7 @@ public class FileTransferService {
 
                             if (deleteFromTarget) {
                                 if (object.getId() != null) files.delete(object);
-                                catalog.clearMissingArchiveCopies(bucket.getId(), key::equals);
+                                catalog.clearArchiveCopiesForKey(bucket.getId(), key);
                             } else {
                                 CatalogScanService.updatePhysical(object, found);
                                 object.setStorageState(StorageState.ARCHIVED);
@@ -573,7 +680,7 @@ public class FileTransferService {
 
     private static Optional<ScannedFileInfo> exact(StorageConnector connector, StorageConnection connection, String path)
             throws IOException {
-        return connector.listFiles(connection, path).stream().filter(item -> path.equals(item.relativePath())).findFirst();
+        return connector.statFile(connection, path);
     }
 
     private static String s3Uri(StorageConnection bucket, String key) {

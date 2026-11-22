@@ -34,6 +34,15 @@
             <includes>
                 <include>init-db.sql</include>
                 <include>koonj-realm.json</include>
+                <include>themes/**</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>../deploy/keycloak</directory>
+            <outputDirectory>on-premise/keycloak</outputDirectory>
+            <includes>
+                <include>koonj-realm.json</include>
+                <include>themes/**</include>
             </includes>
         </fileSet>
         <fileSet>
@@ -125,8 +134,12 @@
             <lineEnding>unix</lineEnding>
         </file>
         <file>
-            <source>../deploy/keycloak/koonj-realm.json</source>
-            <outputDirectory>on-premise/keycloak</outputDirectory>
+            <source>../koonj-ui/public/img/atm-banner-16x9-clean.jpg</source>
+            <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
+        </file>
+        <file>
+            <source>../koonj-ui/public/img/atm-banner-16x9-clean.jpg</source>
+            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
         </file>
     </files>
 

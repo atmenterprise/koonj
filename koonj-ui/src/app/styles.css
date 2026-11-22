@@ -562,24 +562,28 @@ td { font-size: 11px; }
   container-type: inline-size; overflow: auto; max-height: min(68vh, 800px); overscroll-behavior-inline: contain;
 }
 .activity-viewport:focus-visible { outline-offset: -2px; }
-.activity-ledger { table-layout: fixed; min-width: 1020px; border-collapse: separate; border-spacing: 0; }
+.activity-ledger { table-layout: auto; min-width: 1090px; border-collapse: separate; border-spacing: 0; }
 .activity-ledger > thead th { position: sticky; top: 0; z-index: 2; height: 37px; font-size: 11px; }
 .activity-ledger > tbody > tr:not(:has(.details-cell)) { cursor: default; }
 .activity-ledger > tbody > tr > td { height: 57px; vertical-align: middle; }
 .activity-ledger > tbody > tr > .details-cell { height: auto; }
 .activity-disclosure-column { width: 38px; }
 .activity-name-column { width: 132px; }
-.activity-actor-column { width: 145px; }
+.activity-storage-column { width: 30%; }
+.activity-actor-column { width: 170px; }
 .activity-time-column { width: 104px; }
 .activity-progress-column { width: 146px; }
-.activity-status-column { width: 132px; }
+.activity-status-column { width: 158px; }
+.activity-job-controls { display: flex; flex-wrap: wrap; gap: 3px; }
+.activity-job-controls:not(:empty) { margin-top: 4px; }
+.activity-job-controls .button { min-height: 24px; padding: 2px 5px; gap: 3px; font-size: 10px; }
+.activity-job-controls .button svg { width: 12px; height: 12px; }
 .activity-disclosure.button { min-height: 28px; width: 28px; }
 .activity-operation { display: flex; align-items: center; gap: 8px; }
 .activity-operation .icon-tile { width: 29px; height: 29px; flex-shrink: 0; }
-.activity-storage > span, .activity-storage small > span, .activity-actor {
-  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.activity-ledger .activity-storage small { display: flex; align-items: center; gap: 5px; }
+.activity-storage { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.activity-storage-arrow { color: var(--muted); }
+.activity-actor { overflow-wrap: anywhere; }
 .activity-ledger .activity-failure-count { color: var(--error); }
 .activity-progress { width: auto; --job-progress-color: #688ec4; }
 .activity-progress[data-status='COMPLETED'] { --job-progress-color: #4e9a72; }
@@ -588,13 +592,15 @@ td { font-size: 11px; }
 [data-theme='professional'] .activity-ledger .badge.yellow { --tone-bg: #fff5ce; --tone-ink: #745a00; }
 .activity-progress-caption { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .activity-progress-spinner { display: inline-flex; color: var(--job-progress-color); animation: activity-spin 1s linear infinite; }
+.catalog-archive-spinner { display: inline-flex; flex: 0 0 auto; color: var(--catalog-icon); }
+.catalog-archive-spinner svg { animation: activity-spin 1s linear infinite; }
 .activity-progress-meter { height: 6px; background: color-mix(in srgb, var(--job-progress-color) 17%, var(--subtle)); border-radius: 99px; overflow: hidden; }
 .activity-progress-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--job-progress-color); transition: width .25s ease; }
 .activity-progress-meter.indeterminate > span { width: 35%; animation: activity-sweep 1.5s ease-in-out infinite alternate; }
 @keyframes activity-spin { to { transform: rotate(360deg); } }
 @keyframes activity-sweep { to { transform: translateX(185%); } }
 @media (prefers-reduced-motion: reduce) {
-  .activity-progress-spinner, .activity-progress-meter.indeterminate > span { animation: none; }
+  .activity-progress-spinner, .activity-progress-meter.indeterminate > span, .catalog-archive-spinner svg { animation: none; }
   .activity-progress-meter > span { transition: none; }
 }
 .activity-ledger .execution-detail {
@@ -748,6 +754,8 @@ td { font-size: 11px; }
 .catalog-table-tags .catalog-row > [role='cell'] { min-width: 0; }
 .catalog-column-name, .catalog-file-name { padding-inline-start: 32px; }
 .catalog-column-size { text-align: end; font-variant-numeric: tabular-nums; }
+.catalog-modified-time { display: grid; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.catalog-modified-time small { color: var(--muted); font-size: 10px; }
 .catalog-action-cell {
   position: sticky; inset-inline-end: 0; z-index: 1; align-self: stretch;
   display: flex; align-items: center; justify-content: center; gap: 2px; border-inline-start: 1px solid var(--divider);
@@ -980,6 +988,25 @@ body:has(.explorer-fullscreen) .topbar { position: fixed; inset: 0 0 auto; z-ind
 @media (prefers-reduced-motion: reduce) { .api-page-progress::after { animation: none; } }
 
 .auth-gate { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.auth-gate--landing {
+  grid-template-rows: minmax(2rem, 1fr) auto minmax(2rem, 1fr);
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+  background-color: var(--bg);
+  background-image: linear-gradient(180deg,
+    color-mix(in srgb, var(--bg) 28%, transparent),
+    color-mix(in srgb, var(--bg) 38%, transparent) 66%,
+    color-mix(in srgb, var(--bg) 96%, transparent)),
+    url('/img/atm-banner-16x9-clean.jpg');
+  background-position: center, 70% center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+[data-theme='dark'] .auth-gate--landing {
+  background-image: linear-gradient(180deg, #18181ba6, #18181bba 66%, #18181bf5),
+    url('/img/atm-banner-16x9-clean.jpg');
+}
+.auth-gate--landing .auth-card { grid-row: 2; }
+.auth-copyright { grid-row: 3; align-self: end; color: var(--muted); font-size: .875rem; text-align: center; }
 .auth-card { width: min(100%, 460px); padding: clamp(26px, 6vw, 48px); text-align: center; }
 .auth-card .brand-mark { display: inline-grid; margin-bottom: 19px; }
 .auth-card h1 { font-size: clamp(23px, 5vw, 31px); font-weight: 800; letter-spacing: -.04em; }

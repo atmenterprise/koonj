@@ -19,7 +19,7 @@ import java.util.UUID;
 @Setter
 public class TransferJob {
     public enum Operation { ARCHIVE, RECALL, SCAN }
-    public enum Status { PENDING, RUNNING, COMPLETED, PARTIAL_FAILURE, FAILED }
+    public enum Status { PENDING, RUNNING, PAUSING, PAUSED, STOPPING, STOPPED, COMPLETED, PARTIAL_FAILURE, FAILED }
 
     @Id @GeneratedValue
     private UUID id;
@@ -40,6 +40,11 @@ public class TransferJob {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private List<String> requestedPaths = new ArrayList<>();
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private TransferPlan plan;
+    private UUID restartedFrom;
+    private UUID restartedAs;
     @Column(nullable = false)
     @ColumnDefault("5")
     private int priority = 5;
@@ -50,6 +55,8 @@ public class TransferJob {
     private long transferredBytes;
     @Column(columnDefinition = "text")
     private String triggeredBy;
+    @Column(columnDefinition = "text")
+    private String triggeredByName;
     @CreationTimestamp
     private Instant createdAt;
     private Instant startedAt;

@@ -95,7 +95,8 @@ public class ConnectionService {
     }
 
     private void requireIdle(UUID id) {
-        if (jobs.countActive(id, List.of(TransferJob.Status.PENDING, TransferJob.Status.RUNNING)) != 0) {
+        if (jobs.countActive(id, List.of(TransferJob.Status.PENDING, TransferJob.Status.RUNNING, TransferJob.Status.PAUSING,
+                TransferJob.Status.PAUSED, TransferJob.Status.STOPPING)) != 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Connection has an active job");
         }
     }
