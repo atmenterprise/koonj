@@ -119,7 +119,13 @@ jobs:
           unzip -q koonj-assembly/target/koonj-*-deployment.zip -d dist
           cd dist/koonj-*/
           cmp docker/server/koonj-server.jar on-premise/lib/koonj-server.jar
+          cmp docker/fuse/koonj-fuse.jar on-premise/lib/koonj-fuse.jar
           cmp docker/ui/index.html on-premise/web/index.html
+          test -x docker/setup-host-mount.sh
+          test -f docker/samba/smb.conf
+          test -f docker/samba/start.sh
+          test -x on-premise/bin/run-koonj-fuse.sh
+          test -f on-premise/bin/run-koonj-fuse.ps1
           test -x on-premise/install.sh
           test -x on-premise/bin/koonj-server.sh
           test -f on-premise/install.cmd
@@ -127,9 +133,10 @@ jobs:
       - name: Test Building Production Docker Images
         run: |
           cd dist/koonj-*/docker
-          docker compose --env-file .env.example -f docker-compose.yml config -q
+          docker compose --env-file .env.example --profile smb -f docker-compose.yml config -q
           OPENOBSERVE_ROOT_EMAIL=ci@example.com OPENOBSERVE_ROOT_PASSWORD=ci-config-only \
             OPENOBSERVE_AUTHORIZATION='Basic Y2k=' \
             docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.otel.yml config -q
           docker build -t koonj-server:test -f server/Dockerfile.server server/
           docker build -t koonj-ui:test -f ui/Dockerfile.ui ui/
+          docker build -t koonj-fuse:test -f fuse/Dockerfile.fuse fuse/

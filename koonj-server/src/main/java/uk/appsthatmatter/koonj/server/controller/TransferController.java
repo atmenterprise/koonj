@@ -7,9 +7,11 @@ import uk.appsthatmatter.koonj.server.security.KoonjRoles;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
@@ -43,6 +45,15 @@ public class TransferController {
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse recall(@Valid @RequestBody TransferRequest request) {
         return transfers.submit(TransferJob.Operation.RECALL, request);
+    }
+
+    public record SyncRecallRequest(@NotNull UUID fileId, @Min(1) @Max(60) Integer timeoutSeconds) {}
+
+    @PostMapping("/recall/sync")
+    @PreAuthorize(KoonjRoles.OPERATE)
+    public ResponseEntity<FileTransferService.RecallResult> recallSync(@Valid @RequestBody SyncRecallRequest request) {
+        var result = transfers.recallSync(request.fileId(), request.timeoutSeconds() == null ? 60 : request.timeoutSeconds());
+        return ResponseEntity.status(result.estimatedReadyAt() == null ? HttpStatus.OK : HttpStatus.ACCEPTED).body(result);
     }
 
     @GetMapping("/jobs")

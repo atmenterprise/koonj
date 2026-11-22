@@ -18,10 +18,13 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 
 @Component
 public class S3CompatibleStorageConnector implements StorageConnector {
+    private static final Duration RESTORE_REQUEST_TIMEOUT = Duration.ofSeconds(8);
     private static final int PART_BYTES = 8 * 1024 * 1024;
 
     @Override
@@ -89,6 +92,32 @@ public class S3CompatibleStorageConnector implements StorageConnector {
             }
         }
         return files;
+    }
+
+    @Override
+    public Optional<Instant> requestColdRestore(StorageConnection config, String key) {
+        String bucket = config.getBasePathOrBucket();
+        try (S3Client client = client(config)) {
+            var head = client.headObject(request -> request.bucket(bucket).key(key)
+                    .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(RESTORE_REQUEST_TIMEOUT)));
+            StorageClass storageClass = head.storageClass();
+            if (storageClass != StorageClass.GLACIER && storageClass != StorageClass.DEEP_ARCHIVE) return Optional.empty();
+            String restore = head.restore();
+            if (restore != null && restore.contains("ongoing-request=\"false\"")) return Optional.empty();
+            if (restore == null || !restore.contains("ongoing-request=\"true\"")) {
+                try {
+                    client.restoreObject(request -> request.bucket(bucket).key(key)
+                            .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(RESTORE_REQUEST_TIMEOUT))
+                            .restoreRequest(restoreRequest -> restoreRequest.days(2)
+                                    .glacierJobParameters(parameters -> parameters.tier(Tier.STANDARD))));
+                } catch (S3Exception failure) {
+                    if (failure.awsErrorDetails() == null
+                            || !"RestoreAlreadyInProgress".equals(failure.awsErrorDetails().errorCode())) throw failure;
+                }
+            }
+            return Optional.of(Instant.now().plus(Duration.ofHours(
+                    storageClass == StorageClass.DEEP_ARCHIVE ? 12 : 5)));
+        }
     }
 
     @Override

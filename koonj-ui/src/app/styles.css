@@ -653,9 +653,9 @@ td { font-size: 11px; }
 .catalog-location-totals > div { display: grid; gap: 2px; }
 .catalog-location-totals dt { color: var(--muted); font-size: 10px; }
 .catalog-location-totals dd { margin: 0; font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; }
-.catalog-table-tags { min-width: 900px; }
+.catalog-table-tags { min-width: 960px; }
 .catalog-table-tags .catalog-row {
-  grid-template-columns: 36px minmax(168px, 1fr) 74px 143px 83px 118px 76px minmax(150px, 1fr);
+  grid-template-columns: 36px minmax(168px, 1fr) 132px 143px 83px 118px 76px minmax(150px, 1fr);
 }
 .catalog-sort { display: inline-flex; align-items: center; gap: 4px; padding: 3px 0; border: 0; background: transparent; text-align: left; font: inherit; }
 .catalog-sort:hover, [aria-sort] > .catalog-sort { color: var(--accent-ink); }
@@ -804,6 +804,7 @@ body:has(.explorer-fullscreen) .topbar { position: fixed; inset: 0 0 auto; z-ind
 .activity-notice-message p { margin-top: 4px; max-height: 96px; overflow: auto; font-size: 12px; white-space: pre-line; }
 .activity-notice-link { grid-column: 2; justify-self: start; min-height: 28px; padding: 3px 6px; font-size: 11px; }
 
+.catalog-file-state { display: grid; justify-items: start; gap: 4px; }
 .catalog-entry-name { min-width: 0; display: grid; gap: 3px; }
 .symlink-target { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .live-metadata .symlink-target { white-space: normal; overflow-wrap: anywhere; }

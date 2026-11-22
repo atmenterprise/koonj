@@ -21,6 +21,8 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 public class LocalStorageConnector implements StorageConnector {
     private static final String STUB_SUFFIX = ".koonj.symlink";
     private static final String STUB_HEADER = "KOONJ-SYMLINK\n";
+    public static final String ARCHIVE_REFERENCE = "koonj-ref://";
+    private static final String WINDOWS_REFERENCE = ".koonj-ref-";
     private static final String TEMP_PREFIX = ".koonj-transfer-";
 
     @Override
@@ -85,7 +87,12 @@ public class LocalStorageConnector implements StorageConnector {
                 if (attributes.isSymbolicLink()) {
                     Path link = Files.readSymbolicLink(file);
                     String target = link.toString();
-                    if (target.startsWith("s3:/")) {
+                    if (target.startsWith("koonj-ref:/") || target.startsWith(WINDOWS_REFERENCE)) {
+                        String id = target.startsWith(WINDOWS_REFERENCE) ? target.substring(WINDOWS_REFERENCE.length())
+                                : target.substring("koonj-ref:".length()).replaceFirst("^/+", "");
+                        if (id.matches("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) target = ARCHIVE_REFERENCE + id;
+                        else target = file.getParent().resolve(link).normalize().toString();
+                    } else if (target.startsWith("s3:/")) {
                         target = "s3://" + target.substring(4).replaceFirst("^/+", "");
                     } else {
                         target = file.getParent().resolve(link).normalize().toString();
@@ -132,26 +139,12 @@ public class LocalStorageConnector implements StorageConnector {
         if (Files.isDirectory(path, NOFOLLOW_LINKS)) throw new IOException("Cannot replace a directory with a symbolic link");
         try (var temporary = new TemporaryFiles(path.getParent())) {
             Path staged = temporary.reserve();
-            try {
-                Files.createSymbolicLink(staged, Path.of(targetReference));
-            } catch (IOException | UnsupportedOperationException | InvalidPathException unavailable) {
-                if (!targetReference.startsWith("s3://")) throw unavailable;
-                Path marker = stub(path);
-                Path contents = temporary.create();
-                Files.writeString(contents, STUB_HEADER + targetReference, StandardCharsets.UTF_8);
-                Files.move(contents, marker, replaceExistingStub(marker));
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException | RuntimeException failure) {
-                    try {
-                        Files.deleteIfExists(marker);
-                    } catch (IOException cleanup) {
-                        failure.addSuppressed(cleanup);
-                    }
-                    throw failure;
-                }
-                return;
-            }
+            // Windows Path rejects the URI colon. Store a relative UUID marker in the
+            // NTFS reparse point and expose the same canonical reference in the catalog.
+            String nativeTarget = File.separatorChar == '\\' && targetReference.startsWith(ARCHIVE_REFERENCE)
+                    ? WINDOWS_REFERENCE + targetReference.substring(ARCHIVE_REFERENCE.length())
+                    : targetReference;
+            Files.createSymbolicLink(staged, Path.of(nativeTarget));
             Files.move(staged, path, ATOMIC_MOVE, REPLACE_EXISTING);
         }
     }
@@ -177,10 +170,6 @@ public class LocalStorageConnector implements StorageConnector {
                 throw failure;
             }
         }
-    }
-
-    private static CopyOption[] replaceExistingStub(Path marker) throws IOException {
-        return stubTarget(marker) == null ? new CopyOption[0] : new CopyOption[]{REPLACE_EXISTING};
     }
 
     @Override

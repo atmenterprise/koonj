@@ -65,6 +65,10 @@ echo "▸ Copying files …"
 [[ -d "${SCRIPT_DIR}/web" ]] && cp -r "${SCRIPT_DIR}/web/." "${INSTALL_PREFIX}/web/"
 cp "${SCRIPT_DIR}/bin/koonj-server.sh"  "${INSTALL_PREFIX}/bin/"
 cp "${SCRIPT_DIR}/bin/koonj-server.cmd" "${INSTALL_PREFIX}/bin/" 2>/dev/null || true
+if [[ -f "${SCRIPT_DIR}/lib/koonj-fuse.jar" ]]; then
+  cp "${SCRIPT_DIR}/lib/koonj-fuse.jar" "${INSTALL_PREFIX}/lib/"
+  cp "${SCRIPT_DIR}/bin/run-koonj-fuse.sh" "${SCRIPT_DIR}/bin/run-koonj-fuse.ps1" "${INSTALL_PREFIX}/bin/"
+fi
 chmod +x "${INSTALL_PREFIX}/bin/"*.sh
 
 [[ -f "${INSTALL_PREFIX}/config/koonj.env" ]] \

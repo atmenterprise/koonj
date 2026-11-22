@@ -23,6 +23,11 @@
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
+            <artifactId>koonj-fuse</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
             <artifactId>koonj-ui</artifactId>
             <version>${project.version}</version>
             <type>zip</type>

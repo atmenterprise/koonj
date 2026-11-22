@@ -15,6 +15,7 @@
     <modules>
         <module>koonj-ui</module>
         <module>koonj-server</module>
+        <module>koonj-fuse</module>
         <module>koonj-assembly</module>
     </modules>
 

@@ -36,6 +36,25 @@ export function useRecallMutation() {
   return useMutation(recallMutationOptions(useQueryClient(), payload => runJob('Recall', () => transferService.recallFiles(payload))))
 }
 
+export function useRecallNowMutation() {
+  const client = useQueryClient()
+  const { run } = useActivityNotifications()
+  return useMutation({
+    mutationFn: (id: string) => run({
+      started: 'Recalling file',
+      failed: 'Recall did not complete',
+      complete: result => result.status === 'RESTORING_GLACIER'
+        ? { tone: 'info', title: 'S3 is restoring the file',
+            detail: result.estimatedReadyAt ? 'Estimated readiness ' + new Date(result.estimatedReadyAt).toLocaleString() : undefined }
+        : { tone: 'success', title: 'File recalled' },
+    }, () => transferService.recallNow(id)),
+    onSettled: () => Promise.all([
+      client.invalidateQueries({ queryKey: queryKeys.files }),
+      client.invalidateQueries({ queryKey: queryKeys.jobs }),
+    ]),
+  })
+}
+
 export function useScanMutation() {
   const client = useQueryClient()
   const { runJob } = useActivityNotifications()

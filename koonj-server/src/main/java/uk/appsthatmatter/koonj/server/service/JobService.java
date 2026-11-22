@@ -4,7 +4,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.scheduling.annotation.Async;
+import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
@@ -20,13 +20,26 @@ import uk.appsthatmatter.koonj.server.security.JobActor;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.Comparator;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class JobService {
     private final TransferJobRepository jobs;
     private final ObservationRegistry observations;
-    private final ReentrantLock execution = new ReentrantLock(true);
+    public static final int INTERACTIVE = 100;
+    private static final int BACKGROUND = 5;
+
+    private final AtomicLong sequence = new AtomicLong();
+    private final PriorityBlockingQueue<Runnable> pending = new PriorityBlockingQueue<>(11,
+            Comparator.comparingInt((Runnable task) -> ((QueuedJob) task).priority()).reversed()
+                    .thenComparingLong(task -> ((QueuedJob) task).sequence()));
+    private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, pending,
+            Thread.ofPlatform().name("koonj-transfer").factory());
 
     public JobService(TransferJobRepository jobs, ObservationRegistry observations) {
         this.jobs = jobs;
@@ -39,7 +52,13 @@ public class JobService {
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths,
                               ArchiveMode archiveMode, boolean deleteFromTarget) {
+        return create(operation, source, target, paths, archiveMode, deleteFromTarget, BACKGROUND);
+    }
+
+    public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths,
+                              ArchiveMode archiveMode, boolean deleteFromTarget, int priority) {
         TransferJob job = new TransferJob();
+        job.setPriority(priority);
         job.setArchiveMode(archiveMode);
         job.setDeleteFromTarget(deleteFromTarget);
         job.setOperation(operation);
@@ -59,11 +78,39 @@ public class JobService {
         return PageResponse.from(jobs.findAll(pageable).map(JobResponse::from));
     }
 
-    @Async("applicationTaskExecutor")
-    public void execute(TransferJob job, JobWork work) {
+    public CompletableFuture<JobResponse> execute(TransferJob job, JobWork work) {
+        var completion = new CompletableFuture<JobResponse>();
+        worker.execute(new QueuedJob(job.getPriority(), sequence.getAndIncrement(), () -> {
+            try {
+                run(job, work);
+                completion.complete(JobResponse.from(job));
+            } catch (RuntimeException failure) {
+                completion.completeExceptionally(failure);
+            }
+        }));
+        return completion;
+    }
+
+    // Yield only between complete files so another transfer cannot race an atomic replacement.
+    void runWaitingInteractiveJobs() {
+        while (pending.peek() instanceof QueuedJob next && next.priority() == INTERACTIVE && pending.remove(next)) {
+            next.run();
+        }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        worker.shutdownNow();
+    }
+
+    private record QueuedJob(int priority, long sequence, Runnable task) implements Runnable {
+        @Override
+        public void run() { task.run(); }
+    }
+
+    private void run(TransferJob job, JobWork work) {
         Observation activity = Observation.createNotStarted("koonj.job.execution", observations)
                 .lowCardinalityKeyValue("operation", job.getOperation().name());
-        execution.lock();
         try {
             activity.start();
             job.setStatus(Status.RUNNING);
@@ -83,7 +130,6 @@ public class JobService {
             activity.lowCardinalityKeyValue("outcome", "FAILED");
             throw failure;
         } finally {
-            execution.unlock();
             activity.stop();
         }
     }

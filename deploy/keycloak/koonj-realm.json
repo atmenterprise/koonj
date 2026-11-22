@@ -39,6 +39,31 @@
       "fullScopeAllowed": false
     },
     {
+      "clientId": "koonj-agent",
+      "name": "Koonj FUSE Agent",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": false,
+      "protocolMappers": [
+        {
+          "name": "Koonj API audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "koonj-server",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "koonj-ui",
       "name": "Koonj Console",
       "protocol": "openid-connect",
@@ -49,14 +74,14 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:5173/*"
+        "http://localhost:8080/*"
       ],
       "webOrigins": [
         "+"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:5173/*"
+        "post.logout.redirect.uris": "http://localhost:8080/*"
       },
       "protocolMappers": [
         {
@@ -74,6 +99,12 @@
     }
   ],
   "users": [
+    {
+      "username": "service-account-koonj-agent",
+      "serviceAccountClientId": "koonj-agent",
+      "enabled": true,
+      "realmRoles": ["KOONJ_OPERATOR"]
+    },
     {
       "username": "admin@appsthatmatter.uk",
       "email": "admin@appsthatmatter.uk",
@@ -130,6 +161,10 @@
     }
   ],
   "scopeMappings": [
+    {
+      "client": "koonj-agent",
+      "roles": ["KOONJ_OPERATOR"]
+    },
     {
       "client": "koonj-ui",
       "roles": [

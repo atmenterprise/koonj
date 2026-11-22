@@ -40,6 +40,10 @@ public class CatalogController {
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse scan(@PathVariable UUID connectionId) { return catalog.submit(connectionId); }
 
+    @GetMapping("/files/{fileId}")
+    @PreAuthorize(KoonjRoles.READ)
+    public FileResponse get(@PathVariable UUID fileId) { return catalog.get(fileId); }
+
     @GetMapping("/files")
     @Operation(summary = "Browse cataloged files", description = "Filter by physical connection, lifecycle state, and literal relative-path prefix.")
     @PreAuthorize(KoonjRoles.READ)

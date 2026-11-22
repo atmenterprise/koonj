@@ -2,6 +2,8 @@ package uk.appsthatmatter.koonj.server.service;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.appsthatmatter.koonj.server.connector.*;
@@ -53,6 +55,15 @@ public class CatalogScanService {
             for (ScannedFileInfo found : discovered) {
                 FileMetadata file = stale.remove(found.relativePath());
                 if (file == null) file = newEntry(source, found.relativePath());
+                if (file.getId() != null && found.entryType() == EntryType.SYMLINK
+                        && (LocalStorageConnector.ARCHIVE_REFERENCE + file.getId()).equals(found.symlinkTarget())
+                        && file.getTargetConnection() != null && file.getS3Key() != null) {
+                    file.setEntryType(EntryType.SYMLINK);
+                    file.setSymlinkTarget(found.symlinkTarget());
+                    if (file.getStorageState() != StorageState.FAILED) file.setStorageState(StorageState.ARCHIVED_SYMLINK);
+                    files.save(file);
+                    continue;
+                }
                 boolean changed = file.getEntryType() != found.entryType() || file.getSizeBytes() != found.sizeBytes()
                         || !Objects.equals(file.getLastModifiedAt(), found.lastModifiedAt())
                         || !Objects.equals(file.getSymlinkTarget(), found.symlinkTarget());
@@ -122,6 +133,12 @@ public class CatalogScanService {
         file.setSymlinkTarget(found.symlinkTarget());
         file.setSizeBytes(found.sizeBytes());
         file.setLastModifiedAt(found.lastModifiedAt());
+    }
+
+    public FileResponse get(UUID id) {
+        return files.findById(id).map(FileResponse::from).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Catalog entry was not found"));
     }
 
     public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix, Pageable pageable) {

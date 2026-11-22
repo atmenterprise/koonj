@@ -117,7 +117,7 @@ services:
         -XX:InitialRAMPercentage=50.0
         -Djava.security.egd=file:/dev/./urandom
     volumes:
-      - ${KOONJ_DATA_MOUNT:-./data}:/mnt/koonj:rw
+      - ${KOONJ_DATA_MOUNT:-${KOONJ_FUSE_BACKING_DIR:-./data}}:/mnt/koonj:rw
     healthcheck:
       test: ['CMD', 'curl', '-sf', 'http://localhost:8080/actuator/health']
       interval: 15s
@@ -157,6 +157,79 @@ services:
         limits:
           memory: 256M
       # Scale with: docker compose up -d --scale koonj-ui=N
+    networks:
+      - koonj-internal
+
+  # Optional FUSE gateway (Linux hosts)
+  koonj-fuse:
+    profiles: ["fuse", "smb"]
+    restart: unless-stopped
+    build:
+      context: ./fuse
+      dockerfile: Dockerfile.fuse
+    image: koonj-fuse:${KOONJ_VERSION:-latest}
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      KOONJ_FUSE_BACKING_DIR: /mnt/koonj-backing
+      KOONJ_FUSE_MOUNT_POINT: /mnt/koonj-share
+      KOONJ_FUSE_ALLOW_OTHER: ${KOONJ_FUSE_ALLOW_OTHER:-true}
+      KOONJ_FUSE_RECALL_ON_READ: "true"
+      KOONJ_SERVER_URL: http://koonj-server:8080
+      KOONJ_AGENT_TOKEN_URI: ${KOONJ_AGENT_TOKEN_URI:-http://keycloak:8080/realms/koonj/protocol/openid-connect/token}
+      KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
+      KOONJ_AGENT_CLIENT_SECRET: ${KOONJ_AGENT_CLIENT_SECRET:-}
+    volumes:
+      - type: bind
+        source: ${KOONJ_DATA_MOUNT:-${KOONJ_FUSE_BACKING_DIR:-/srv/koonj/backing}}
+        target: /mnt/koonj-backing
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${KOONJ_FUSE_MOUNT_POINT:-/srv/koonj/share}
+        target: /mnt/koonj-share
+        bind:
+          create_host_path: false
+          propagation: rshared
+    healthcheck:
+      test: ["CMD-SHELL", 'test "$$(stat -f -c %t /mnt/koonj-share)" = 65735546']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - koonj-internal
+
+  koonj-smb:
+    profiles: ["smb"]
+    image: quay.io/samba.org/samba-server:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      koonj-fuse:
+        condition: service_healthy
+        restart: true
+    entrypoint: ["/bin/sh", "/etc/koonj-smb/start.sh"]
+    environment:
+      KOONJ_SMB_PASSWORD: ${KOONJ_SMB_PASSWORD:-}
+    ports:
+      - "${KOONJ_SMB_BIND:-127.0.0.1}:${KOONJ_SMB_PORT:-445}:445"
+    volumes:
+      - ./samba:/etc/koonj-smb:ro
+      - type: bind
+        source: ${KOONJ_FUSE_MOUNT_POINT:-/srv/koonj/share}
+        target: /mnt/koonj-share
+        read_only: true
+        bind:
+          create_host_path: false
+          propagation: rslave
     networks:
       - koonj-internal
 

@@ -1,0 +1,11 @@
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+COPY koonj-fuse koonj-fuse
+RUN mvn -B -f koonj-fuse/pom.xml package
+
+FROM eclipse-temurin:21-jre-noble
+RUN apt-get update && apt-get install -y --no-install-recommends fuse3 libfuse2t64 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/koonj-fuse/target/koonj-fuse.jar /app/koonj-fuse.jar
+ENTRYPOINT ["java", "-jar", "/app/koonj-fuse.jar"]

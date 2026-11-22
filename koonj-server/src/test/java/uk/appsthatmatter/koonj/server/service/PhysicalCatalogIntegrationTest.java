@@ -16,6 +16,7 @@ import uk.appsthatmatter.koonj.server.dto.TransferRequest;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
+import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -26,7 +27,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +50,7 @@ class PhysicalCatalogIntegrationTest {
     @Autowired CatalogScanService catalog;
     @Autowired FileTransferService transfers;
     @Autowired JobService jobs;
+    @Autowired TransferJobRepository jobRepository;
     @Autowired BucketFixture bucketFixture;
     private TestBucket s3;
     private StorageConnection source;
@@ -131,10 +135,14 @@ class PhysicalCatalogIntegrationTest {
         completed(transfers.submit(ARCHIVE, request(source, bucket, ArchiveMode.PURGE, false)));
         assertThat(Files.isSymbolicLink(original)).isTrue();
         assertThat(entry(source, "report").storageState()).isEqualTo(StorageState.ARCHIVED_SYMLINK);
-        assertThat(entry(source, "report").symlinkTarget()).isEqualTo("s3://archive/report");
+        UUID linkId = entry(source, "report").id();
+        assertThat(entry(source, "report").symlinkTarget()).isEqualTo("koonj-ref://" + linkId);
+        assertThat(root.toFile().list()).containsExactly("report");
+        assertThat(entry(source, "report").sizeBytes()).isEqualTo(14);
         assertThat(entry(bucket, "report").entryType()).isEqualTo(EntryType.FILE);
         completed(catalog.submit(source.getId()));
-        UUID linkId = entry(source, "report").id();
+        assertThat(catalog.get(linkId).sizeBytes()).isEqualTo(14);
+        assertThat(catalog.get(linkId).checksumSha256()).isNotBlank();
 
         var gate = s3.blockRead("report");
         var recall = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
@@ -159,6 +167,37 @@ class PhysicalCatalogIntegrationTest {
         completed(transfers.submit(RECALL, request(bucket, source, null, true)));
         assertThat(inventory(bucket)).isEmpty();
         assertThat(s3.objects).doesNotContainKey("report");
+    }
+
+    @Test
+    void synchronousRecallReturnsColdEstimateThenWaitsForVerifiedReplacement() throws Exception {
+        Path original = Files.writeString(root.resolve("report"), "original bytes");
+        completed(transfers.submit(ARCHIVE, request(source, bucket, ArchiveMode.PURGE, false)));
+        UUID fileId = entry(source, "report").id();
+        Instant estimate = Instant.now().plus(Duration.ofHours(5));
+        s3.coldReady = estimate;
+        assertThat(transfers.recallSync(fileId, 5))
+                .isEqualTo(new FileTransferService.RecallResult("RESTORING_GLACIER", estimate));
+        assertThat(Files.isSymbolicLink(original)).isTrue();
+
+        s3.coldReady = null;
+        var gate = s3.blockRead("report");
+        var recall = CompletableFuture.supplyAsync(() -> transfers.recallSync(fileId, 10));
+        try {
+            gate.awaitRead();
+            assertThat(recall).isNotDone();
+            assertThat(Files.isSymbolicLink(original)).isTrue();
+        } finally {
+            gate.release.countDown();
+        }
+        assertThat(recall.get(10, TimeUnit.SECONDS).status()).isEqualTo("RECALLED");
+        assertThat(original).hasContent("original bytes");
+        assertThat(catalog.get(fileId).storageState()).isEqualTo(StorageState.LOCAL_ONLY);
+        assertThat(jobRepository.findAll()).anySatisfy(job -> {
+            assertThat(job.getTargetConnectionId()).isEqualTo(source.getId());
+            assertThat(job.getPriority()).isEqualTo(100);
+            assertThat(job.getStatus()).isEqualTo(COMPLETED);
+        });
     }
 
     @Test
@@ -239,12 +278,14 @@ class PhysicalCatalogIntegrationTest {
         private volatile ReadGate gate;
         private volatile String corruptReads;
         private volatile String failDelete;
+        private volatile Instant coldReady;
 
         void reset() {
             objects.clear();
             gate = null;
             corruptReads = null;
             failDelete = null;
+            coldReady = null;
         }
 
         ReadGate blockRead(String pathPrefix) {
@@ -258,6 +299,9 @@ class PhysicalCatalogIntegrationTest {
             return type != ProviderType.LOCAL && type != ProviderType.SMB && type != ProviderType.NAS;
         }
         @Override public boolean objectStorage() { return true; }
+        @Override public Optional<Instant> requestColdRestore(StorageConnection connection, String key) {
+            return Optional.ofNullable(coldReady);
+        }
         @Override public void testConnection(StorageConnection config) {}
 
         @Override

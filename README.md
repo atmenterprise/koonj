@@ -28,3 +28,13 @@ In **Administration → Storage configuration**, select **Add connection**, fill
 Amazon S3 is checked with a read-only `HeadBucket` request. For MinIO, Scality, and other S3-compatible services, supply access keys and add the endpoint URL to the server's comma-separated `KOONJ_CONNECTION_ALLOWED_S3_ENDPOINTS` setting. Docker Compose includes the local LocalStack endpoint by default. Custom endpoint checks use path-style addressing.
 
 The console saves connection settings and the last successful verification in the browser. Entered credentials stay in memory and are sent to the API for a test. A credential reference is saved as a name and requires a backend secret resolver before it can be used for verification.
+
+## Open archived files from a native file manager
+
+See the [Linux gateway and SMB setup](docs/FUSE-RECALL.md) for transparent recall from Windows Explorer, macOS Finder, and Linux file managers.
+
+
+## Code Quality
+
+https://sonarcloud.io/project/overview?id=atmenterprise_koonj
+

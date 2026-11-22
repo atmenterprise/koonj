@@ -5,10 +5,16 @@ import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface StorageConnector {
     boolean supports(ProviderType type);
+    default Optional<Instant> requestColdRestore(StorageConnection config, String key) {
+        return Optional.empty();
+    }
+
     default boolean objectStorage() { return false; }
     void testConnection(StorageConnection config) throws IOException;
     List<ScannedFileInfo> listFiles(StorageConnection config, String subPath) throws IOException;

@@ -1,6 +1,8 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.appsthatmatter.koonj.server.connector.*;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
@@ -18,6 +20,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Service
 public class FileTransferService {
@@ -27,6 +34,7 @@ public class FileTransferService {
     private final CatalogScanService catalog;
     private final JobService jobs;
     private final TransactionTemplate transaction;
+    private final ConcurrentHashMap<UUID, CompletableFuture<JobResponse>> interactiveRecalls = new ConcurrentHashMap<>();
 
     public FileTransferService(ConnectionService connections, StorageConnectorFactory connectors,
                                FileMetadataRepository files, CatalogScanService catalog, JobService jobs,
@@ -56,7 +64,9 @@ public class FileTransferService {
         Set<String> exactPaths = new HashSet<>();
         if (request.fileIds() != null) {
             for (UUID id : request.fileIds()) {
-                String path = resolveFileId(operation, endpoints, id, restorePaths);
+                FileMetadata selected = files.findById(id).orElseThrow(() ->
+                        new IllegalArgumentException("Unknown catalog file ID " + id));
+                String path = resolveFileId(operation, endpoints, selected, restorePaths);
                 exactPaths.add(path);
                 paths.add(path);
             }
@@ -69,14 +79,84 @@ public class FileTransferService {
         return accepted;
     }
 
+    public record RecallResult(String status, Instant estimatedReadyAt) {}
+
+    public RecallResult recallSync(UUID fileId, int timeoutSeconds) {
+        FileMetadata file = file(fileId);
+        if (isLocal(file)) return new RecallResult("RECALLED", null);
+        if (file.getEntryType() != EntryType.SYMLINK || file.getTargetConnection() == null || file.getS3Key() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "File ID has no mounted archive reference");
+        }
+        Endpoints endpoints = endpoints(Operation.RECALL, file.getTargetConnection().getId(), file.getConnection().getId());
+        String key = resolveFileId(Operation.RECALL, endpoints, file, new HashMap<>());
+        CompletableFuture<JobResponse> completion = interactiveRecalls.get(fileId);
+        if (completion != null) return awaitRecall(completion, timeoutSeconds);
+        Optional<Instant> ready;
+        try {
+            ready = endpoints.reader().requestColdRestore(endpoints.source(), key);
+        } catch (software.amazon.awssdk.core.exception.SdkException failure) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, StorageErrors.describe(failure), failure);
+        }
+        if (ready.isPresent()) return new RecallResult("RESTORING_GLACIER", ready.get());
+
+        var submitted = interactiveRecalls.computeIfAbsent(fileId, id -> {
+            TransferJob job = jobs.create(Operation.RECALL, endpoints.source().getId(), endpoints.target().getId(),
+                    List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE);
+            return jobs.execute(job, running -> {
+                FileMetadata current = file(id);
+                if (isLocal(current)) return;
+                String currentKey = resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>());
+                if (!key.equals(currentKey)) throw new IOException("Archive reference changed while recall was queued");
+                ScannedFileInfo found = exact(endpoints.reader(), endpoints.source(), key)
+                        .filter(item -> item.entryType() == EntryType.FILE)
+                        .orElseThrow(() -> new IOException("Archive object was not found"));
+                jobs.totals(running, 1, found.sizeBytes());
+                recall(endpoints, found, current.getRelativePath(), false);
+                jobs.progress(running, found.sizeBytes(), null);
+            });
+        });
+        submitted.whenComplete((result, failure) -> interactiveRecalls.remove(fileId, submitted));
+        return awaitRecall(submitted, timeoutSeconds);
+    }
+
+    private static RecallResult awaitRecall(CompletableFuture<JobResponse> completion, int timeoutSeconds) {
+        try {
+            JobResponse result = completion.get(timeoutSeconds, TimeUnit.SECONDS);
+            if (result.status() != TransferJob.Status.COMPLETED) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Recall failed. See transfer job " + result.id());
+            }
+            return new RecallResult("RECALLED", null);
+        } catch (TimeoutException failure) {
+            throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Recall is still queued or running", failure);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Recall wait interrupted", failure);
+        } catch (ExecutionException failure) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Recall could not complete", failure);
+        }
+    }
+
+    private FileMetadata file(UUID id) {
+        return files.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown file ID"));
+    }
+
+    private static boolean isLocal(FileMetadata file) {
+        return file.getEntryType() == EntryType.FILE && file.getStorageState() == StorageState.LOCAL_ONLY;
+    }
+
+    private static boolean matchesArchiveLink(FileMetadata file, StorageConnection bucket, String key, String target) {
+        return s3Uri(bucket, key).equals(target)
+                || (file.getId() != null && (LocalStorageConnector.ARCHIVE_REFERENCE + file.getId()).equals(target)
+                    && file.getTargetConnection() != null && file.getTargetConnection().getId().equals(bucket.getId())
+                    && key.equals(file.getS3Key()));
+    }
+
     private static String transferPath(String requested) {
         String path = StoragePaths.selection(requested);
         return !path.isEmpty() && requested.endsWith("/") ? path + "/" : path;
     }
 
-    private String resolveFileId(Operation operation, Endpoints endpoints, UUID id, Map<String, String> restorePaths) {
-        FileMetadata file = files.findById(id).orElseThrow(() ->
-                new IllegalArgumentException("Unknown catalog file ID " + id));
+    private String resolveFileId(Operation operation, Endpoints endpoints, FileMetadata file, Map<String, String> restorePaths) {
         if (file.getConnection().getId().equals(endpoints.source().getId()) && file.getEntryType() == EntryType.FILE) {
             return file.getRelativePath();
         }
@@ -84,10 +164,14 @@ public class FileTransferService {
                 && file.getEntryType() == EntryType.SYMLINK && file.getSymlinkTarget() != null) {
             String prefix = s3Uri(endpoints.source(), "");
             String reference = file.getSymlinkTarget();
-            if (reference.startsWith(prefix) && (file.getTargetConnection() == null
+            String key = reference.startsWith(prefix) ? reference.substring(prefix.length()) : file.getS3Key();
+            if (key != null && matchesArchiveLink(file, endpoints.source(), key, reference)
+                    && (file.getTargetConnection() == null
                     || file.getTargetConnection().getId().equals(endpoints.source().getId()))) {
-                String key = reference.substring(prefix.length());
                 StoragePaths.requireSafe(key);
+                if (key.isEmpty() || StoragePaths.isArchiveStagingKey(key)) {
+                    throw new IllegalArgumentException("Invalid archive object key");
+                }
                 String previous = restorePaths.putIfAbsent(key, file.getRelativePath());
                 if (previous != null && !previous.equals(file.getRelativePath())) {
                     throw new IllegalArgumentException("Select one source symlink per archived object");
@@ -138,6 +222,7 @@ public class FileTransferService {
                 selected.values().stream().mapToLong(ScannedFileInfo::sizeBytes).sum());
         unavailable.forEach((path, error) -> jobs.progress(job, 0, path + ": " + error));
         for (ScannedFileInfo found : selected.values()) {
+            jobs.runWaitingInteractiveJobs();
             String error = null;
             try {
                 StoragePaths.requireSafe(found.relativePath());
@@ -214,10 +299,11 @@ public class FileTransferService {
                     .orElseThrow(() -> new IOException("Uploaded archive object could not be found"));
             if (mode == ArchiveMode.PURGE) {
                 if (!checksum.equals(checksum(source, mounted, path))) throw new IOException("Source changed during archive");
-                source.replaceWithSymlink(mounted, path, s3Uri(bucket, path), () -> {
+                source.replaceWithSymlink(mounted, path, LocalStorageConnector.ARCHIVE_REFERENCE + local.getId(), () -> {
                     ScannedFileInfo link = exact(source, mounted, path).filter(item -> item.entryType() == EntryType.SYMLINK)
                             .orElseThrow(() -> new IOException("Archive symbolic link was not created"));
-                    recordArchive(local, bucket, object, link, checksum, mode);
+                    recordArchive(local, bucket, object, new ScannedFileInfo(path, found.sizeBytes(),
+                            found.lastModifiedAt(), null, EntryType.SYMLINK, link.symlinkTarget()), checksum, mode);
                 });
             } else {
                 ScannedFileInfo physical = exact(source, mounted, path).filter(item -> item.entryType() == EntryType.FILE)
@@ -287,15 +373,19 @@ public class FileTransferService {
         StorageConnector s3 = endpoints.reader();
         StorageConnector source = endpoints.writer();
         String key = found.relativePath();
+        if (("GLACIER".equals(found.storageClass()) || "DEEP_ARCHIVE".equals(found.storageClass()))
+                && s3.requestColdRestore(bucket, key).isPresent()) {
+            throw new IOException("S3 restore in progress. Retry recall after the object is available");
+        }
         FileMetadata local = catalog.entry(mounted, path);
         var existing = exact(source, mounted, path);
         if (existing.isPresent()) {
             ScannedFileInfo physical = existing.get();
             if (physical.entryType() == EntryType.DIRECTORY
-                    || (physical.entryType() == EntryType.SYMLINK && !s3Uri(bucket, key).equals(physical.symlinkTarget()))) {
+                    || (physical.entryType() == EntryType.SYMLINK && !matchesArchiveLink(local, bucket, key, physical.symlinkTarget()))) {
                 throw new IOException("Recall destination does not match the archive reference");
             }
-            CatalogScanService.updatePhysical(local, physical);
+            if (physical.entryType() == EntryType.FILE) CatalogScanService.updatePhysical(local, physical);
             local.setStorageState(StorageState.RECALLING);
             local.setErrorMessage(null);
             files.save(local);
@@ -305,7 +395,8 @@ public class FileTransferService {
 
         try {
             FileMetadata object = catalog.entry(bucket, key);
-            String expected = object.getChecksumSha256();
+            String expected = local.getEntryType() == EntryType.SYMLINK && local.getChecksumSha256() != null
+                    ? local.getChecksumSha256() : object.getChecksumSha256();
             String checksum = expected == null ? checksum(s3, bucket, key) : expected;
             try (InputStream stream = verifying(s3.openReadStream(bucket, key), checksum)) {
                 source.restore(mounted, path, stream, found.sizeBytes(), () -> {
@@ -362,7 +453,10 @@ public class FileTransferService {
                 return;
             }
             FileMetadata file = current.orElseGet(() -> catalog.entry(connection, path));
-            CatalogScanService.updatePhysical(file, physical.get());
+            if (file.getEntryType() != EntryType.SYMLINK
+                    || !Objects.equals(file.getSymlinkTarget(), physical.get().symlinkTarget())) {
+                CatalogScanService.updatePhysical(file, physical.get());
+            }
             file.setStorageState(StorageState.FAILED);
             file.setErrorMessage(StorageErrors.describe(failure));
             files.save(file);

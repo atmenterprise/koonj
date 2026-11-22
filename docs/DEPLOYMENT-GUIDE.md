@@ -81,8 +81,11 @@ mvn -pl koonj-assembly -am clean package
 The build writes `koonj-assembly/target/koonj-<version>-deployment.zip`.
 Use `-Ddeployment.version=1.0.0` to set the version in the ZIP name and its
 top-level directory. The ZIP contains `docker/` and `on-premise/`, each
-with the executable server JAR and the compiled UI. The deployment server
-doesn't need Maven, Node.js, or the source checkout.
+with the executable server and FUSE JARs and the compiled UI. The Docker
+package includes the Linux host setup script, the FUSE gateway, and the
+optional Samba sidecar configuration. Follow the
+[transparent recall gateway guide](FUSE-RECALL.md) to provide SMB access to
+[Windows](FUSE-RECALL-WINDOWS.md), [macOS](FUSE-RECALL-MACOS.md), and Linux clients.
 
 ## Prerequisites
 
@@ -155,6 +158,10 @@ This starts all four services in dependency order:
 2. Keycloak (auth) — waits for PostgreSQL
 3. koonj-server (API) — waits for PostgreSQL + Keycloak
 4. koonj-ui (Nginx) — waits for koonj-server
+
+To enable transparent recall from a shared drive, follow the
+[Linux gateway setup](FUSE-RECALL.md). Use the `fuse` profile for a local
+mount on the gateway or the `smb` profile to also export it over the network.
 
 ### 4. Verify
 

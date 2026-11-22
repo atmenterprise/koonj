@@ -3,6 +3,7 @@ package uk.appsthatmatter.koonj.server.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -30,13 +31,18 @@ public class TransferJob {
     private UUID sourceConnectionId;
     private UUID targetConnectionId;
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, columnDefinition = "varchar(16) default 'COPY'")
+    @Column(nullable = false, length = 16)
+    @ColumnDefault("'COPY'")
     private ArchiveMode archiveMode = ArchiveMode.COPY;
-    @Column(nullable = false, columnDefinition = "boolean default false")
+    @Column(nullable = false)
+    @ColumnDefault("false")
     private boolean deleteFromTarget;
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private List<String> requestedPaths = new ArrayList<>();
+    @Column(nullable = false)
+    @ColumnDefault("5")
+    private int priority = 5;
     private int totalFiles;
     private int processedFiles;
     private int failedFiles;

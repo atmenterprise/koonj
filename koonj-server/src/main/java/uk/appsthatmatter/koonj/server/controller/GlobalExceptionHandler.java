@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.controller;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -11,6 +12,7 @@ import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import uk.appsthatmatter.koonj.server.dto.ErrorResponse;
@@ -53,6 +55,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
     ResponseEntity<ErrorResponse> forbidden(org.springframework.security.access.AccessDeniedException failure) {
         return error(HttpStatus.FORBIDDEN, "Insufficient permissions for this action");
+    }
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    void responseUnavailable(AsyncRequestNotUsableException failure, HttpServletResponse response) {
+        LOG.debug("Response stream unavailable: {}", failure.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

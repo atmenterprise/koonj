@@ -38,6 +38,11 @@ if exist "%SCRIPT_DIR%lib\koonj-server.jar" copy /Y "%SCRIPT_DIR%lib\koonj-serve
 if exist "%SCRIPT_DIR%web\" xcopy /E /Q /Y "%SCRIPT_DIR%web\*" "%INSTALL_PREFIX%\web\" >nul
 copy /Y "%SCRIPT_DIR%bin\koonj-server.cmd" "%INSTALL_PREFIX%\bin\" >nul
 copy /Y "%SCRIPT_DIR%bin\koonj-server.sh"  "%INSTALL_PREFIX%\bin\" >nul 2>&1
+if exist "%SCRIPT_DIR%lib\koonj-fuse.jar" (
+  copy /Y "%SCRIPT_DIR%lib\koonj-fuse.jar" "%INSTALL_PREFIX%\lib\" >nul || exit /b 1
+  copy /Y "%SCRIPT_DIR%bin\run-koonj-fuse.ps1" "%INSTALL_PREFIX%\bin\" >nul || exit /b 1
+  copy /Y "%SCRIPT_DIR%bin\run-koonj-fuse.sh" "%INSTALL_PREFIX%\bin\" >nul || exit /b 1
+)
 
 if not exist "%INSTALL_PREFIX%\config\koonj.env" (
   copy /Y "%SCRIPT_DIR%config\koonj.env" "%INSTALL_PREFIX%\config\" >nul

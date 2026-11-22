@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: koonj-fuse
+  main:
+    web-application-type: none
+koonj:
+  server-url: ${KOONJ_SERVER_URL:http://localhost:8080}
+  agent:
+    client-id: ${KOONJ_AGENT_CLIENT_ID:koonj-agent}
+    client-secret: ${KOONJ_AGENT_CLIENT_SECRET:}
+    token-uri: ${KOONJ_AGENT_TOKEN_URI:http://localhost:8180/realms/koonj/protocol/openid-connect/token}
+  fuse:
+    backing-dir: ${KOONJ_FUSE_BACKING_DIR:}
+    mount-point: ${KOONJ_FUSE_MOUNT_POINT:}
+    allow-other: ${KOONJ_FUSE_ALLOW_OTHER:false}
+    recall-on-read: ${KOONJ_FUSE_RECALL_ON_READ:false}
+    recall-timeout-seconds: ${KOONJ_FUSE_RECALL_TIMEOUT_SECONDS:60}

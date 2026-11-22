@@ -1,6 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useMemo, useRef, useState } from 'react'
-import { useScanMutation } from '../../api/hooks/mutations'
+import { useRecallNowMutation, useScanMutation } from '../../api/hooks/mutations'
 import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
 import { folderTree, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
 import type { CatalogMetadataTarget, ProviderType } from '../../api/types'
@@ -12,7 +12,7 @@ import { directMetadataFor, metadataFor, metadataIndex, useCatalogMetadata } fro
 import { catalogColumns, compareCatalogValues, type CatalogColumn, type CatalogSort, type SortValue } from './catalogSort'
 import { BulkMetadataDialog } from './MetadataForm'
 import { folderContents, folderTotals } from './folderContents'
-import { planTransfers, transferTargets } from './transferSelection'
+import { isUuidArchiveLink, linkedBucket, planTransfers, transferTargets } from './transferSelection'
 import { SymlinkTarget } from './SymlinkTarget'
 import { TransferDialog, type CatalogTransferAction } from './TransferDialog'
 
@@ -88,6 +88,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   const [action, setAction] = useState<CatalogTransferAction>()
   const selectedEndpoint = endpoints.find(item => item.id === endpointId) ?? endpoints[0]
   const scan = useScanMutation()
+  const recallNow = useRecallNowMutation()
   const jobs = useTransferJobs(canTransfer)
   const scanning = jobs.data?.some(job => job.operation === 'SCAN' && job.sourceConnectionId === selectedEndpoint?.id
     && (job.status === 'PENDING' || job.status === 'RUNNING'))
@@ -112,7 +113,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
       const file = entry.kind === 'file' ? entry.file : undefined
       switch (column) {
         case 'name': return entry.kind === 'folder' ? entry.node.name : entry.file.fileName
-        case 'size': return entry.kind === 'folder' ? totalsByFolder.get(entry.node.prefix)?.sizeBytes : file?.sizeBytes
+        case 'size': return entry.kind === 'folder' ? totalsByFolder.get(entry.node.prefix)?.sizeBytes : file && (isUuidArchiveLink(file) ? 0 : file.sizeBytes)
         case 'state': return file ? stateLabels[file.storageState] : undefined
         case 'temperature': {
           const temperature = temperatureOf(file?.lastModifiedAt ?? null)
@@ -317,6 +318,8 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   const storageClass = file.s3StorageClass
                   const archived = file.storageState === 'ARCHIVED'
                   const symlink = file.entryType === 'SYMLINK'
+                  const uuidLink = isUuidArchiveLink(file)
+                  const recallPending = recallNow.isPending && recallNow.variables === file.id
                   return <div className={`catalog-row virtual-row ${selection.has(file.id) ? 'checked' : ''}`} role="row" key={file.id}
                     style={position} onClick={() => setInspectedId(file.id)}>
                     <span role="cell" onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={'Select ' + file.fileName} disabled={!canTransfer} checked={canTransfer && selection.has(file.id)}
@@ -328,10 +331,21 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                       </div>
                       {symlink && <SymlinkTarget file={file} locations={endpoints} navigate={navigate} />}
                     </div>
-                    <span role="cell">{bytes(file.sizeBytes)}</span>
-                    <span role="cell"><Badge dot tone={archived || file.storageState === 'ARCHIVED_COPY' ? 'green' : file.storageState === 'FAILED' ? 'red' : 'neutral'}>
+                    <span role="cell" title={uuidLink
+                      ? 'Open this file from the mounted Koonj share or SMB drive to restore it automatically.'
+                      : undefined}>
+                      {uuidLink ? `0 B on disk (Archived · ${bytes(file.sizeBytes)} in S3)` : bytes(file.sizeBytes)}
+                    </span>
+                    <span role="cell" className="catalog-file-state"><Badge dot tone={archived || file.storageState === 'ARCHIVED_COPY' ? 'green' : file.storageState === 'FAILED' ? 'red' : 'neutral'}>
                       {archived && storageClass ? stateLabel + ' · ' + (storageName[storageClass] ?? storageClass) : stateLabel}
-                    </Badge></span>
+                    </Badge>
+                      {canTransfer && uuidLink && linkedBucket(file, endpoints) &&
+                        <button type="button" className="text-button" disabled={recallNow.isPending}
+                          aria-label={'Recall Now: ' + file.fileName}
+                          onClick={event => { event.stopPropagation(); recallNow.mutate(file.id) }}>
+                          {recallPending ? 'Recalling…' : 'Recall Now'}
+                        </button>}
+                    </span>
                     <span role="cell">{temperature ? <Badge tone={temperatureTone[temperature]}>{temperature}</Badge> : '—'}</span>
                     <span role="cell">{file.lastModifiedAt ? date(file.lastModifiedAt) : '—'}</span>
                     <span role="cell">{file.checksumSha256 ? <Badge tone="green">Recorded</Badge> : '—'}</span>

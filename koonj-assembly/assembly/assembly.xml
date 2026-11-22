@@ -20,6 +20,15 @@
             </includes>
         </fileSet>
         <fileSet>
+            <directory>../deploy/samba</directory>
+            <outputDirectory>docker/samba</outputDirectory>
+            <includes>
+                <include>smb.conf</include>
+                <include>start.sh</include>
+            </includes>
+            <lineEnding>unix</lineEnding>
+        </fileSet>
+        <fileSet>
             <directory>../deploy/keycloak</directory>
             <outputDirectory>docker/keycloak</outputDirectory>
             <includes>
@@ -59,6 +68,39 @@
     </fileSets>
 
     <files>
+        <file>
+            <source>../scripts/setup-host-mount.sh</source>
+            <outputDirectory>docker</outputDirectory>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../scripts/run-koonj-fuse.sh</source>
+            <outputDirectory>on-premise/bin</outputDirectory>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../scripts/run-koonj-fuse.ps1</source>
+            <outputDirectory>on-premise/bin</outputDirectory>
+            <lineEnding>dos</lineEnding>
+        </file>
+        <file>
+            <source>../docs/FUSE-RECALL.md</source>
+            <outputDirectory>/</outputDirectory>
+        </file>
+        <file>
+            <source>../docs/FUSE-RECALL-WINDOWS.md</source>
+            <outputDirectory>/</outputDirectory>
+        </file>
+        <file>
+            <source>../docs/FUSE-RECALL-MACOS.md</source>
+            <outputDirectory>/</outputDirectory>
+        </file>
+        <file>
+            <source>../deploy/production/docker/Dockerfile.fuse</source>
+            <outputDirectory>docker/fuse</outputDirectory>
+        </file>
         <file>
             <source>../docs/DEPLOYMENT-GUIDE.md</source>
             <outputDirectory>/</outputDirectory>
@@ -108,6 +150,26 @@
             <useTransitiveDependencies>false</useTransitiveDependencies>
             <useStrictFiltering>true</useStrictFiltering>
             <outputFileNameMapping>koonj-server.jar</outputFileNameMapping>
+        </dependencySet>
+        <dependencySet>
+            <outputDirectory>docker/fuse</outputDirectory>
+            <includes>
+                <include>uk.appsthatmatter:koonj-fuse</include>
+            </includes>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useTransitiveDependencies>false</useTransitiveDependencies>
+            <useStrictFiltering>true</useStrictFiltering>
+            <outputFileNameMapping>koonj-fuse.jar</outputFileNameMapping>
+        </dependencySet>
+        <dependencySet>
+            <outputDirectory>on-premise/lib</outputDirectory>
+            <includes>
+                <include>uk.appsthatmatter:koonj-fuse</include>
+            </includes>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useTransitiveDependencies>false</useTransitiveDependencies>
+            <useStrictFiltering>true</useStrictFiltering>
+            <outputFileNameMapping>koonj-fuse.jar</outputFileNameMapping>
         </dependencySet>
         <dependencySet>
             <outputDirectory>docker/ui</outputDirectory>

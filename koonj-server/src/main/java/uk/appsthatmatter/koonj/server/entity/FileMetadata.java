@@ -3,6 +3,7 @@ package uk.appsthatmatter.koonj.server.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -27,7 +28,8 @@ public class FileMetadata {
     @Column(nullable = false, columnDefinition = "text")
     private String fileName;
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, columnDefinition = "varchar(16) default 'FILE'")
+    @Column(nullable = false, length = 16)
+    @ColumnDefault("'FILE'")
     private EntryType entryType = EntryType.FILE;
     @Column(columnDefinition = "text")
     private String symlinkTarget;

@@ -1,7 +1,15 @@
 import { isObjectStorage, type FolderNode } from '../../api/mappers'
 import type { CatalogLocationDTO, FileMetadataDTO } from '../../api/types'
 
+export function isUuidArchiveLink(file: FileMetadataDTO) {
+  return file.entryType === 'SYMLINK' && file.symlinkTarget === 'koonj-ref://' + file.id
+}
+
 export function linkedBucket(file: FileMetadataDTO, locations: CatalogLocationDTO[]) {
+  if (isUuidArchiveLink(file) && file.s3Key) {
+    return locations.find(location => location.id === file.targetConnectionId
+      && location.active && isObjectStorage(location.providerType))
+  }
   if (!file.symlinkTarget?.startsWith('s3://')) return undefined
   const name = file.symlinkTarget.slice(5).split('/')[0]
   const candidates = locations.filter(location => location.active && isObjectStorage(location.providerType)

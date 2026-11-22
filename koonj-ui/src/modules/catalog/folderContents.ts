@@ -1,4 +1,5 @@
 import type { FolderNode } from '../../api/mappers'
+import { isUuidArchiveLink } from './transferSelection'
 import type { CatalogMetadataTarget, FileMetadataDTO } from '../../api/types'
 
 export function folderTotals(folders: FolderNode[], files: FileMetadataDTO[]) {
@@ -16,7 +17,7 @@ export function folderTotals(folders: FolderNode[], files: FileMetadataDTO[]) {
     if (file.entryType === 'DIRECTORY') continue
     const prefix = file.relativePath.slice(0, file.relativePath.lastIndexOf('/') + 1)
     const total = totalsFor(prefix)
-    total.sizeBytes += file.sizeBytes
+    if (!isUuidArchiveLink(file)) total.sizeBytes += file.sizeBytes
     total.files++
   }
 
