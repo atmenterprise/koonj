@@ -97,7 +97,7 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
         event.preventDefault()
         navigate('/Home')
       }}>
-        <span className="brand-mark"><Icon name="bird" size={24} /></span>
+        <span className="brand-mark" aria-hidden="true" />
         <span className="brand-text"><strong>Koonj</strong><small>APPS THAT MATTER</small></span>
       </a>
       <div className="workspace-nav"><p className="nav-label">Workspace</p><nav id="main-navigation" aria-label="Main navigation">
