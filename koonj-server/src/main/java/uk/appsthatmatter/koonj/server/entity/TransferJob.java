@@ -59,6 +59,11 @@ public class TransferJob {
     private int totalFiles;
     private int processedFiles;
     private int failedFiles;
+    @Column(nullable = false)
+    @ColumnDefault("0")
+    private int skippedFiles;
+    @Transient
+    private Integer scannedFileCount;
     private long totalBytes;
     private long transferredBytes;
     @Column(columnDefinition = "text")
@@ -67,6 +72,8 @@ public class TransferJob {
     private String triggeredByName;
     @Column(length = 255)
     private String ownerSubject;
+    @Column(length = 320)
+    private String ownerEmail;
     @CreationTimestamp
     private Instant createdAt;
     private Instant startedAt;

@@ -19,16 +19,15 @@
 
 ## Overview
 
-Koonj is a data catalog and explorer application consisting of two independently
-deployable components:
+Koonj is a data catalog and explorer application with independently deployable components.
 
 | Component        | Technology             | Purpose                              |
 | ---------------- | ---------------------- | ------------------------------------ |
 | **koonj-server** | Spring Boot 3.5 / JDK 21 | REST API, catalog engine, job runner |
+| **koonj-notification-worker** | Spring Boot 3.5 / JDK 21 | Notification routing, RabbitMQ publishing, and delivery |
 | **koonj-ui**     | React SPA / Nginx      | Web console served as static files   |
 
-Both components can be **scaled independently** — run multiple API server
-instances behind a load balancer and multiple Nginx instances for the UI.
+Scale API replicas, notification workers, and Nginx independently.
 
 ### External dependencies
 
@@ -36,6 +35,7 @@ instances behind a load balancer and multiple Nginx instances for the UI.
 | -------------- | ------- | -------------------------- |
 | PostgreSQL     | 15+     | Catalog metadata store     |
 | Keycloak       | 24+     | Identity & access management |
+| RabbitMQ       | 4.2     | Durable notification queues and a shared broker for future tasks |
 
 ---
 
@@ -68,6 +68,11 @@ instances behind a load balancer and multiple Nginx instances for the UI.
            └───────────────────────────────┘
 ```
 
+The API writes notification events to a PostgreSQL outbox in the job transaction.
+The notification worker reads the outbox, records each pending delivery, and
+publishes its ID to RabbitMQ. Separate RabbitMQ queues feed SMTP consumers and
+webhook consumers. SMTP and HTTP connections run in the worker process.
+
 ---
 
 ## Build the Deployment ZIP
@@ -81,7 +86,7 @@ mvn -pl koonj-assembly -am clean package
 The build writes `koonj-assembly/target/koonj-<version>-deployment.zip`.
 Use `-Ddeployment.version=1.0.0` to set the version in the ZIP name and its
 top-level directory. The ZIP contains `docker/` and `on-premise/`, each
-with the executable server and FUSE JARs and the compiled UI. The Docker
+with the executable server, notification worker, and FUSE JARs and the compiled UI. The Docker
 package includes the Linux host setup script, the FUSE gateway, and the
 optional Samba sidecar configuration. Follow the
 [transparent recall gateway guide](FUSE-RECALL.md) to provide SMB access to
@@ -129,6 +134,7 @@ Edit `.env` and set **all `CHANGE_ME` values**:
 KOONJ_DB_PASSWORD=your_secure_db_password
 KEYCLOAK_DB_PASSWORD=your_secure_kc_db_password
 KEYCLOAK_ADMIN_PASSWORD=your_secure_kc_admin_password
+KOONJ_RABBITMQ_PASSWORD=your_secure_broker_password
 
 # REQUIRED — external Keycloak URL (as seen by browsers)
 KOONJ_KEYCLOAK_EXTERNAL_URL=https://auth.yourcompany.com
@@ -153,11 +159,12 @@ console URL in the realm template.
 docker compose up -d --build --wait
 ```
 
-This starts all four services in dependency order:
-1. PostgreSQL (database)
-2. Keycloak (auth) — waits for PostgreSQL
-3. koonj-server (API) — waits for PostgreSQL + Keycloak
-4. koonj-ui (Nginx) — waits for koonj-server
+Compose starts PostgreSQL and RabbitMQ, then Keycloak and the API. The UI
+waits for the API. The notification worker waits for the API and RabbitMQ.
+RabbitMQ is reachable within the Docker network and stores its data in the
+`koonj_rabbitmq_data` volume. Compose provisions its user and virtual host on
+initial startup. To use an external cluster, set the worker's broker host,
+port, username, password, virtual host and TLS mode in `.env`.
 
 To enable transparent recall from a shared drive, follow the
 [Linux gateway setup](FUSE-RECALL.md). Use the `fuse` profile for a local
@@ -502,6 +509,113 @@ UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
 | `KOONJ_BASIC_AUTH_ROLE` | `KOONJ_VIEWER` | Role for basic auth user |
 | `JAVA_OPTS` | `-Xms512m -Xmx2g` | JVM options |
 | `SPRING_PROFILES_ACTIVE` | `production` | Active Spring profiles |
+
+### Notifications and alerts
+
+On an existing PostgreSQL installation using `KOONJ_DDL_AUTO=validate` or
+`none`, apply the [notification migration](../deploy/migrations/notifications.sql)
+before starting the new server. Run
+`psql -v ON_ERROR_STOP=1 -f deploy/migrations/notifications.sql` against the
+Koonj database. Hibernate applies the schema changes with `KOONJ_DDL_AUTO=update`.
+
+The API owns schema updates. Start the updated API or apply the SQL migration
+before starting the worker with its default schema validation. Set the
+following variables in the production Docker `.env` or the on-premise
+`koonj.env`. SMTP and webhook defaults belong to the worker. Quota and
+license monitoring remains in the API.
+
+For an on-premise install, provision the configured RabbitMQ user and virtual
+host with permission to declare, publish to, and consume the notification
+queues. After the API and RabbitMQ are running, run
+`sudo systemctl enable --now koonj-notification-worker` with the supplied
+systemd unit. Without systemd, launch `java -jar lib/koonj-notification-worker.jar`
+with the worker environment exported. For development, start the broker with
+`docker compose -f deploy/docker-compose.yml --profile notifications up -d rabbitmq`
+and use the broker settings in `deploy/.env.example` when launching the worker.
+Point the worker at the same database as the API using `KOONJ_DB_URL`,
+`KOONJ_DB_USERNAME`, and `KOONJ_DB_PASSWORD`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KOONJ_RABBITMQ_HOST` | `rabbitmq` in Compose, `localhost` otherwise | Broker host |
+| `KOONJ_RABBITMQ_PORT` | `5672` | AMQP port |
+| `KOONJ_RABBITMQ_USERNAME` | `koonj` | Broker user |
+| `KOONJ_RABBITMQ_PASSWORD` | required in production Compose | Broker password |
+| `KOONJ_RABBITMQ_VHOST` | `koonj` | Broker virtual host |
+| `KOONJ_RABBITMQ_SSL` | `false` | Enable AMQP over TLS |
+| `KOONJ_NOTIFICATION_DB_POOL_SIZE` | `4` | Worker PostgreSQL connection pool limit |
+| `KOONJ_NOTIFICATION_EMAIL_CONCURRENCY` | `2` | SMTP consumers per worker instance |
+| `KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY` | `2` | Webhook consumers per worker instance |
+| `KOONJ_NOTIFICATION_POLL_INTERVAL` | `1s` | Interval for scanning outbox events and deliveries due to publish |
+| `KOONJ_MAIL_MAX_ATTEMPTS` | `3` | SMTP attempts for transient connection errors and SMTP 4xx replies (1–10) |
+| `KOONJ_MAIL_RETRY_DELAY` | `30s` | Initial SMTP retry delay |
+| `KOONJ_MAIL_HOST` | empty | SMTP relay hostname |
+| `KOONJ_MAIL_PORT` | `587` | SMTP relay port |
+| `KOONJ_MAIL_USERNAME` | empty | SMTP authentication username |
+| `KOONJ_MAIL_PASSWORD` | empty | SMTP authentication password |
+| `KOONJ_MAIL_FROM` | empty | Sender mailbox |
+| `KOONJ_MAIL_TLS` | `STARTTLS` | Required STARTTLS, implicit TLS (`SSL`), or plaintext (`NONE`) |
+| `KOONJ_MAIL_TIMEOUT` | `10s` | SMTP connect, read, and write timeout |
+| `KOONJ_WEBHOOK_CONNECT_TIMEOUT` | `5s` | HTTP connection timeout |
+| `KOONJ_WEBHOOK_REQUEST_TIMEOUT` | `10s` | HTTP timeout per attempt |
+| `KOONJ_WEBHOOK_MAX_ATTEMPTS` | `3` | Total attempts, including the first one. Supported range is 1–10. |
+| `KOONJ_WEBHOOK_RETRY_DELAY` | `1s` | Initial delay for network failures, timeouts, and HTTP 5xx responses. Retries use exponential backoff with jitter. |
+| `KOONJ_QUOTA_CATALOGED_FILES` | `0` | Cataloged regular-file limit across projects |
+| `KOONJ_QUOTA_STORAGE_CONNECTIONS` | `0` | Registered storage connection limit across projects |
+| `KOONJ_QUOTA_TRANSFER_CONCURRENCY` | `0` | Peak simultaneous file transfers per server instance |
+| `KOONJ_LICENSE_EXPIRES_AT` | empty | License expiry as a UTC timestamp such as `2027-06-30T23:59:59Z` |
+| `KOONJ_LICENSE_GRACE_ENDS_AT` | empty | Optional UTC timestamp when the grace period ends |
+| `KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL` | `1m` | Quota and license sampling interval |
+
+A quota value of zero disables that metric. The server reports usage and expiry
+from the limits and dates configured for the deployment. Rules default to an
+80% quota warning, a separate limit alert at 100%, and a 30-day license warning.
+Grace and expired states have separate cooldowns.
+
+In **Administration → Notifications & alerts**, a `KOONJ_ADMIN` can add and
+test channels, assign them to enabled rules, and inspect delivery history.
+A batch rule defaults to 1,000 files or 10 GB (10,000,000,000 bytes). Enter one
+threshold to use it on its own. Transfer failure rules match failed transfer
+jobs and can also alert when file failures reach a configured count.
+The default cooldown is 60 minutes per rule, channel, and event key.
+Each batch-completion rule delivers at most once per channel for a job.
+Settings and delivery history apply across the Koonj installation.
+
+- Generic webhooks receive a JSON POST. Custom headers can supply authorization.
+  To verify the optional `X-Koonj-Signature`, compute HMAC-SHA256 over the exact
+  request body and compare it to the hex value after `sha256=`. The
+  `deliveryId` is stable across retries.
+- Slack uses an incoming webhook and Block Kit. Teams uses an incoming webhook
+  or a Power Automate webhook that accepts an Adaptive Card message envelope.
+  [Slack incoming webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/) ·
+  [Teams Workflows webhooks](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)
+- SMTP channels inherit worker settings and can override the relay, TLS mode,
+  credentials, sender, and templates. A custom relay host uses the channel's
+  credentials. Templates support `{title}`, `{eventType}`, and `{summary}`.
+  Quota and license rules use the configured admin recipients. A test uses
+  that list when present or the requesting admin's verified sign-in address.
+- Activity email goes to the initiating user's verified OIDC address recorded
+  when the job is created. It requires the `email` and `email_verified` token
+  claims. Older jobs and jobs without a verified address have no email recipient.
+  From the profile menu, select **Settings → Email notifications** to control global email
+  delivery, category mutes, and snooze. Dispatch checks the latest preferences
+  before sending and records `SUPPRESSED_OPT_OUT` when applicable.
+
+The settings API accepts endpoint URLs, header values, signing secrets, and
+SMTP passwords as write-only fields. These values are stored in the server
+database. Delivery history records outcomes and retry counts. Pending outbox
+events and delivery tasks survive process restarts. The worker retries broker
+publishes when confirmation fails and acknowledges RabbitMQ messages after
+recording a delivery outcome or scheduling a retry. It rechecks email
+preferences before every SMTP attempt. A retry after an interrupted SMTP
+exchange can produce a duplicate if the relay already accepted the email.
+
+RabbitMQ uses two durable quorum queues, `koonj.notifications.email.v1` and
+`koonj.notifications.webhook.v1`. Invalid queue messages are dead-lettered to
+`koonj.notifications.invalid.v1`. Terminal transport failures appear in the
+delivery history. The broker is shared infrastructure and future tasks can
+declare their own exchanges and queues. For node-level broker redundancy,
+connect the worker to a multi-node RabbitMQ cluster.
 
 ### Role permissions
 

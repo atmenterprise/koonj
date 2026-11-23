@@ -83,6 +83,16 @@ jobs:
             ghcr.io/${{ github.repository }}/server:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository }}/server:latest
 
+      - name: Build & Push Notification Worker Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: dist/koonj-${{ steps.meta.outputs.version }}/docker/notification-worker
+          file: dist/koonj-${{ steps.meta.outputs.version }}/docker/notification-worker/Dockerfile.notification-worker
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/notification-worker:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}/notification-worker:latest
+
       - name: Build & Push UI Docker Image
         uses: docker/build-push-action@v5
         with:

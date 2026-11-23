@@ -15,8 +15,20 @@ jobs:
   # Backend Validation (koonj-server)
   # ---------------------------------------------------------------------------
   server-ci:
-    name: Build & Test Server
+    name: Build & Test Server and Notification Worker
     runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4.2-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: koonj
+          RABBITMQ_DEFAULT_PASS: koonj_worker_test
+          RABBITMQ_DEFAULT_VHOST: koonj
+        ports:
+          - 5672/tcp
+        options: >-
+          --health-cmd "su-exec rabbitmq rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 10s --health-timeout 8s --health-retries 12
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,15 +42,19 @@ jobs:
 
       - name: Verify & Compile Server
         run: |
-          mvn -B -ntp clean test-compile -pl koonj-server -am
+          mvn -B -ntp clean test-compile -pl koonj-server,koonj-notification-worker -am
 
-      - name: Run Unit Tests
+      - name: Run Backend Tests
+        env:
+          KOONJ_TEST_RABBITMQ: 'true'
+          KOONJ_RABBITMQ_PORT: ${{ job.services.rabbitmq.ports[5672] }}
+          KOONJ_RABBITMQ_PASSWORD: koonj_worker_test
         run: |
-          mvn -B -ntp test -pl koonj-server
+          mvn -B -ntp test -pl koonj-server,koonj-notification-worker -am
 
       - name: Package Server JAR
         run: |
-          mvn -B -ntp package -DskipTests -pl koonj-server
+          mvn -B -ntp package -DskipTests -pl koonj-server,koonj-notification-worker -am
 
       - name: Upload Server JAR Artifact
         uses: actions/upload-artifact@v4
@@ -119,6 +135,7 @@ jobs:
           unzip -q koonj-assembly/target/koonj-*-deployment.zip -d dist
           cd dist/koonj-*/
           cmp docker/server/koonj-server.jar on-premise/lib/koonj-server.jar
+          cmp docker/notification-worker/koonj-notification-worker.jar on-premise/lib/koonj-notification-worker.jar
           cmp docker/fuse/koonj-fuse.jar on-premise/lib/koonj-fuse.jar
           cmp docker/ui/index.html on-premise/web/index.html
           test -x docker/setup-host-mount.sh
@@ -138,5 +155,6 @@ jobs:
             OPENOBSERVE_AUTHORIZATION='Basic Y2k=' \
             docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.otel.yml config -q
           docker build -t koonj-server:test -f server/Dockerfile.server server/
+          docker build -t koonj-notification-worker:test -f notification-worker/Dockerfile.notification-worker notification-worker/
           docker build -t koonj-ui:test -f ui/Dockerfile.ui ui/
           docker build -t koonj-fuse:test -f fuse/Dockerfile.fuse fuse/

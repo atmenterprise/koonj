@@ -26,6 +26,9 @@ import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
 import uk.appsthatmatter.koonj.server.repository.JobEventRepository;
 import uk.appsthatmatter.koonj.server.repository.FileMovementRepository;
 
+import uk.appsthatmatter.koonj.server.notification.JobNotification;
+import uk.appsthatmatter.koonj.server.notification.NotificationOutboxWriter;
+import uk.appsthatmatter.koonj.notification.NotificationEvent;
 import uk.appsthatmatter.koonj.server.security.JobActor;
 
 import java.nio.file.FileSystemException;
@@ -51,6 +54,8 @@ public class JobService {
     private final FileMovementRepository movements;
     private final ObservationRegistry observations;
     private final TransactionTemplate transaction;
+    private final NotificationOutboxWriter notificationEvents;
+    private final AtomicLong peakTransferConcurrency = new AtomicLong();
     public static final int INTERACTIVE = 100;
     static final int BACKGROUND = 5;
     public enum Action { PAUSE, RESUME, STOP, RESTART }
@@ -65,12 +70,13 @@ public class JobService {
             Thread.ofPlatform().name("koonj-transfer").factory());
 
     public JobService(TransferJobRepository jobs, JobEventRepository events, FileMovementRepository movements,
-                      ObservationRegistry observations, TransactionTemplate transaction) {
+                      ObservationRegistry observations, TransactionTemplate transaction, NotificationOutboxWriter notificationEvents) {
         this.jobs = jobs;
         this.events = events;
         this.movements = movements;
         this.observations = observations;
         this.transaction = transaction;
+        this.notificationEvents = notificationEvents;
     }
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths) {
@@ -104,6 +110,7 @@ public class JobService {
         job.setTriggeredBy(Objects.requireNonNullElse(JobActor.current(), "System"));
         job.setTriggeredByName(JobActor.displayName());
         job.setOwnerSubject(JobActor.subject());
+        job.setOwnerEmail(JobActor.verifiedEmail());
         job.setSourceConnectionId(source);
         job.setTargetConnectionId(target);
         job.setRequestedPaths(paths);
@@ -188,6 +195,15 @@ public class JobService {
     public void beginFile(TransferJob job, String path) {
         checkpoint(job);
         activeFiles.computeIfAbsent(job.getId(), ignored -> ConcurrentHashMap.newKeySet()).add(path);
+        peakTransferConcurrency.accumulateAndGet(activeTransferCount(), Math::max);
+    }
+
+    public long sampleTransferConcurrency() {
+        return Math.max(peakTransferConcurrency.getAndSet(0), activeTransferCount());
+    }
+
+    private long activeTransferCount() {
+        return activeFiles.values().stream().mapToLong(Set::size).sum();
     }
 
     void endFile(TransferJob job, String path) {
@@ -208,7 +224,14 @@ public class JobService {
 
         Set<String> sourcePaths(List<String> paths) {
             if (history.isEmpty() || paths.isEmpty()) return Set.of();
-            return new HashSet<>(movements.handledSourcePaths(job.getSourceConnectionId(), paths, history, job.getId()));
+            var handled = new HashSet<>(movements.handledSourcePaths(job.getSourceConnectionId(), paths, history, job.getId()));
+            if (job.getRestartedFrom() != null && !handled.isEmpty()) {
+                int alreadyCounted = history.contains(job.getId())
+                        ? new HashSet<>(movements.handledSourcePaths(job.getSourceConnectionId(), handled, Set.of(job.getId()), job.getId())).size()
+                        : 0;
+                skipped(job, handled.size() - alreadyCounted);
+            }
+            return handled;
         }
 
         boolean hasSourceFolder(String folder) {
@@ -335,6 +358,7 @@ public class JobService {
             TransferJob current = locked(id);
             if (current.getStatus() != Status.PENDING) return null;
             current.setStatus(Status.RUNNING);
+            current.setSkippedFiles(0);
             Instant now = Instant.now();
             boolean resumed = current.getStartedAt() != null;
             if (!resumed) current.setStartedAt(now);
@@ -384,6 +408,14 @@ public class JobService {
                 interruptions.remove(id);
                 activeFiles.remove(id);
                 log(id, now, next == Status.FAILED || next == Status.PARTIAL_FAILURE ? Level.WARNING : Level.INFO, null, result);
+                if (next == Status.COMPLETED || next == Status.PARTIAL_FAILURE || (next == Status.FAILED && error == null)) {
+                    current.setScannedFileCount(job.getScannedFileCount());
+                    publishNotification(NotificationEvent.Type.LARGE_BATCH_COMPLETED, current, null, null);
+                }
+                if (next == Status.FAILED && current.getOperation() != Operation.SCAN) {
+                    publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, path,
+                            error == null ? current.getDetails() : error);
+                }
                 return next;
             });
             activity.lowCardinalityKeyValue("outcome", outcome.name());
@@ -395,8 +427,17 @@ public class JobService {
         }
     }
 
+    void publishNotification(NotificationEvent.Type type, TransferJob job, String path, String reason) {
+        notificationEvents.enqueue(JobNotification.job(type, job, path, reason));
+    }
+
     public void progress(TransferJob job, long successfulBytes, String error) {
-        update(job, current -> increment(current, successfulBytes, error));
+        update(job, current -> {
+            increment(current, successfulBytes, error);
+            if (error != null && current.getOperation() != Operation.SCAN) {
+                publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, null, error);
+            }
+        });
         activeFiles.remove(job.getId());
     }
 
@@ -407,6 +448,10 @@ public class JobService {
         });
     }
 
+    void skipped(TransferJob job, int count) {
+        if (count > 0) update(job, current -> current.setSkippedFiles(current.getSkippedFiles() + count));
+    }
+
     void initializeTransferTotals(TransferJob job) {
         update(job, current -> {
             current.setTotalFiles(current.getProcessedFiles());
@@ -415,13 +460,14 @@ public class JobService {
         });
     }
 
-    void transferProgress(TransferJob job, int processed, long bytes, long byteAdjustment, List<String> errors) {
+    void transferProgress(TransferJob job, int processed, long bytes, long byteAdjustment, List<String> errors, String failedPath, String failureReason) {
         update(job, current -> {
             current.setTotalBytes(current.getTotalBytes() + byteAdjustment);
             current.setProcessedFiles(current.getProcessedFiles() + processed);
             current.setTransferredBytes(current.getTransferredBytes() + bytes);
             current.setFailedFiles(current.getFailedFiles() + errors.size());
             errors.forEach(error -> appendError(current, error));
+            if (!errors.isEmpty()) publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, failedPath, failureReason);
         });
     }
 
@@ -447,11 +493,15 @@ public class JobService {
         update(job, current -> {
             increment(current, 0, path + ": " + reason);
             log(job.getId(), Instant.now(), Level.ERROR, path, reason);
+            if (current.getOperation() != Operation.SCAN) {
+                publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, path, reason);
+            }
         });
     }
 
-    public void scanned(TransferJob job, int count) {
-        update(job, current -> current.setProcessedFiles(count));
+    public void scanned(TransferJob job, int entries, int files) {
+        update(job, current -> current.setProcessedFiles(entries));
+        job.setScannedFileCount(files);
     }
 
     private void appendError(TransferJob job, String error) {

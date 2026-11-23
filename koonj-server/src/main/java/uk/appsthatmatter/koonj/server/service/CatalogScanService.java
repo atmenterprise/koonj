@@ -137,7 +137,7 @@ public class CatalogScanService {
             files.deleteAll(stale.values());
             if (connector.objectStorage()) clearMissingArchiveCopies(source.getId(), key -> !objects.contains(key));
         });
-        jobs.scanned(job, discovered.size());
+        jobs.scanned(job, discovered.size(), Math.toIntExact(discovered.stream().filter(item -> item.entryType() == EntryType.FILE).count()));
     }
 
     void clearMissingArchiveCopies(UUID bucketId, Predicate<String> missing) {

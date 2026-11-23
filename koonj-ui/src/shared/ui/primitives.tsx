@@ -35,6 +35,7 @@ const paths = {
   clock: 'M12 7v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
   retry: 'M20 11a8 8 0 1 0-2 6m2-11v5h-5',
   menu: 'M4 6h16M4 12h16M4 18h16',
+  settings: 'M4 6h5m4 0h7M4 12h9m4 0h3M4 18h3m4 0h9M13 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM17 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM11 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z',
   sidebar: 'M3 4h18v16H3z M9 4v16',
   maximize: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
   minimize: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',

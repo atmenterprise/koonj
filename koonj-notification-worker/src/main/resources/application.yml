@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: koonj-notification-worker
+  main:
+    web-application-type: none
+    keep-alive: true
+  datasource:
+    url: "${KOONJ_DB_URL:jdbc:postgresql://localhost:5432/koonj}"
+    username: "${KOONJ_DB_USERNAME:koonj}"
+    password: "${KOONJ_DB_PASSWORD:koonj_password}"
+    hikari:
+      maximum-pool-size: ${KOONJ_NOTIFICATION_DB_POOL_SIZE:4}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: ${KOONJ_NOTIFICATION_DDL_AUTO:validate}
+  task:
+    scheduling:
+      pool:
+        size: 3
+  rabbitmq:
+    host: "${KOONJ_RABBITMQ_HOST:localhost}"
+    port: ${KOONJ_RABBITMQ_PORT:5672}
+    username: "${KOONJ_RABBITMQ_USERNAME:koonj}"
+    password: "${KOONJ_RABBITMQ_PASSWORD:}"
+    virtual-host: "${KOONJ_RABBITMQ_VHOST:koonj}"
+    ssl:
+      enabled: ${KOONJ_RABBITMQ_SSL:false}
+    connection-timeout: 5s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: auto
+        prefetch: 1
+
+koonj:
+  worker:
+    poll-interval: ${KOONJ_NOTIFICATION_POLL_INTERVAL:1s}
+    email-concurrency: ${KOONJ_NOTIFICATION_EMAIL_CONCURRENCY:2}
+    webhook-concurrency: ${KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY:2}
+    mail:
+      host: "${KOONJ_MAIL_HOST:}"
+      port: ${KOONJ_MAIL_PORT:587}
+      username: "${KOONJ_MAIL_USERNAME:}"
+      password: "${KOONJ_MAIL_PASSWORD:}"
+      from: "${KOONJ_MAIL_FROM:}"
+      tls: "${KOONJ_MAIL_TLS:STARTTLS}"
+      timeout: ${KOONJ_MAIL_TIMEOUT:10s}
+      max-attempts: ${KOONJ_MAIL_MAX_ATTEMPTS:3}
+      retry-delay: ${KOONJ_MAIL_RETRY_DELAY:30s}
+    webhook:
+      connect-timeout: ${KOONJ_WEBHOOK_CONNECT_TIMEOUT:5s}
+      request-timeout: ${KOONJ_WEBHOOK_REQUEST_TIMEOUT:10s}
+      max-attempts: ${KOONJ_WEBHOOK_MAX_ATTEMPTS:3}
+      retry-delay: ${KOONJ_WEBHOOK_RETRY_DELAY:1s}
