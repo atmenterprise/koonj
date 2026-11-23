@@ -1,9 +1,12 @@
 import { apiClient } from '../client'
-import type { ConnectionHealthDTO, CreateConnectionRequest, StorageConnectionDTO, StorageUsageDTO } from '../types'
+import type { ConnectionHealthDTO, CreateConnectionRequest, StorageConnectionDTO, StorageLocationStatusDTO, StorageUsageDTO } from '../types'
 
 export const connectionService = {
   async getConnections(signal?: AbortSignal) {
     return (await apiClient.get<StorageConnectionDTO[]>('/connections', { signal })).data
+  },
+  async getStatusLocations(signal?: AbortSignal) {
+    return (await apiClient.get<StorageLocationStatusDTO[]>('/connections/locations', { signal })).data
   },
   async getStatus(id: string, signal?: AbortSignal) {
     return (await apiClient.get<ConnectionHealthDTO>(`/connections/${id}/status`, { signal })).data

@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import uk.appsthatmatter.koonj.server.entity.IntegrationEndpoint;
 import uk.appsthatmatter.koonj.server.repository.IntegrationEndpointRepository;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
+import uk.appsthatmatter.koonj.server.security.PermissionRules;
 
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 
@@ -21,7 +21,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/admin/integrations")
-@PreAuthorize(KoonjRoles.ADMIN_ONLY)
+@PreAuthorize(PermissionRules.INTEGRATIONS_MANAGE)
 public class IntegrationController {
     private final IntegrationEndpointRepository endpoints;
 

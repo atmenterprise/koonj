@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS project_membership (
 
 CREATE INDEX IF NOT EXISTS idx_project_member_account ON project_membership (account_subject);
 
+CREATE TABLE IF NOT EXISTS role_permission_settings (
+    role varchar(40) PRIMARY KEY,
+    permissions jsonb NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS project_temperature_settings (
     project_id uuid PRIMARY KEY,
     hot_days integer NOT NULL,

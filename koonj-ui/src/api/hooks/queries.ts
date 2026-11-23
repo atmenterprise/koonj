@@ -20,6 +20,14 @@ export function useConnections() {
     queryFn: ({ signal }) => connectionService.getConnections(signal) })
 }
 
+export function useStorageLocations() {
+  return useQuery({
+    queryKey: ['connections', 'status-locations'],
+    queryFn: ({ signal }) => connectionService.getStatusLocations(signal),
+    meta: { errorTitle: 'Could not load storage locations' },
+  })
+}
+
 export function useTemperaturePolicy() {
   return useQuery({ queryKey: queryKeys.temperaturePolicy,
     queryFn: ({ signal }) => managementService.getTemperaturePolicy(signal),
@@ -43,8 +51,8 @@ export function useStorageUsage() {
   })
 }
 
-export function useCatalogLocations() {
-  return useQuery({ queryKey: queryKeys.catalogLocations, meta: { errorTitle: 'Could not load catalog locations' },
+export function useCatalogLocations(enabled = true) {
+  return useQuery({ queryKey: queryKeys.catalogLocations, enabled, meta: { errorTitle: 'Could not load catalog locations' },
     queryFn: ({ signal }) => catalogService.getLocations(signal) })
 }
 

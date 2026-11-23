@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useDeleteConnection, useScanSourcesMutation } from '../../api/hooks/mutations'
 import { useConnections } from '../../api/hooks/queries'
 import { providerTypes, type ProviderType, type StorageConnectionDTO } from '../../api/types'
-import { useAuth } from '../../auth/AuthProvider'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { Dialog, type Navigate } from '../../shared/ui/feedback'
 import { Button, Icon, count } from '../../shared/ui/primitives'
@@ -29,8 +29,8 @@ function filterConnections(connections: StorageConnectionDTO[], search: string, 
 }
 
 export function StorageConnectionsPage({ navigate }: { navigate: Navigate }) {
-  const { hasRole } = useAuth()
-  const canManage = hasRole('KOONJ_ADMIN')
+  const { can } = usePermissions()
+  const canManage = can('STORAGE_MANAGE')
   const connections = useConnections()
   const [search, setSearch] = useState('')
   const [role, setRole] = useState<RoleFilter>('all')

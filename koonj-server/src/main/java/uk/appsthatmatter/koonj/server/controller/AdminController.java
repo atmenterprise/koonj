@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import uk.appsthatmatter.koonj.server.dto.ServerTelemetryResponse;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
+import uk.appsthatmatter.koonj.server.security.PermissionRules;
 
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
@@ -30,7 +30,7 @@ public class AdminController {
 
     @GetMapping("/telemetry")
     @Operation(summary = "Read server telemetry", description = "Administrator view of service health, uptime and current JVM measurements.")
-    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    @PreAuthorize(PermissionRules.OBSERVABILITY_VIEW)
     public ServerTelemetryResponse telemetry() {
         var runtime = ManagementFactory.getRuntimeMXBean();
         var heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
@@ -46,7 +46,7 @@ public class AdminController {
     }
 
     @GetMapping("/observability")
-    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    @PreAuthorize(PermissionRules.OBSERVABILITY_VIEW)
     public Observability observability() {
         String url = environment.getProperty("koonj.observability.openobserve-url", "");
         String organization = environment.getProperty("koonj.observability.openobserve-organization", "default");

@@ -9,7 +9,7 @@ import uk.appsthatmatter.koonj.server.entity.ProjectTemperatureSettings;
 import uk.appsthatmatter.koonj.server.repository.ProjectTemperatureSettingsRepository;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import uk.appsthatmatter.koonj.server.repository.TemperatureSettingsRepository;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
+import uk.appsthatmatter.koonj.server.security.PermissionRules;
 
 @RestController
 @RequestMapping("/api/v1/management")
@@ -26,7 +26,7 @@ public class ManagementController {
     public record TemperaturePolicy(@Min(1) @Max(36500) int hotDays, @Min(2) @Max(36500) int coldDays) {}
 
     @GetMapping("/temperature-policy")
-    @PreAuthorize(KoonjRoles.READ)
+    @PreAuthorize(PermissionRules.POLICY_READ)
     public TemperaturePolicy temperaturePolicy() {
         var projectId = ProjectScope.id();
         return settings.findById(projectId).map(policy -> new TemperaturePolicy(policy.getHotDays(), policy.getColdDays()))
@@ -36,7 +36,7 @@ public class ManagementController {
     }
 
     @PutMapping("/temperature-policy")
-    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    @PreAuthorize(PermissionRules.POLICY_MANAGE)
     public TemperaturePolicy updateTemperaturePolicy(@Valid @RequestBody TemperaturePolicy policy) {
         if (policy.hotDays() >= policy.coldDays()) throw new IllegalArgumentException("Cold must start after the hot threshold");
         var stored = new ProjectTemperatureSettings();

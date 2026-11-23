@@ -52,6 +52,10 @@ public class ConnectionService {
         return connections.findByProjectIdOrderByNameAsc(ProjectScope.id()).stream().map(ConnectionResponse::from).toList();
     }
 
+    public List<StorageLocationStatus> statusLocations() {
+        return connections.findByProjectIdOrderByNameAsc(ProjectScope.id()).stream().map(StorageLocationStatus::from).toList();
+    }
+
     public List<CatalogLocationResponse> catalogLocations() {
         return connections.findByProjectIdOrderByNameAsc(ProjectScope.id()).stream().map(connection -> {
             boolean objectStorage = connectors.resolve(connection.getProviderType()).objectStorage();

@@ -4,7 +4,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.parameters.P;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
+import uk.appsthatmatter.koonj.server.security.PermissionRules;
+import uk.appsthatmatter.koonj.server.security.Permission;
+import uk.appsthatmatter.koonj.server.security.RolePermissions;
+import org.springframework.security.access.AccessDeniedException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -29,7 +32,11 @@ public class TransferController {
     private final JobService jobs;
     private final CatalogScanService catalog;
 
-    public TransferController(FileTransferService transfers, JobService jobs, CatalogScanService catalog) {
+    private final RolePermissions permissions;
+
+    public TransferController(FileTransferService transfers, JobService jobs, CatalogScanService catalog,
+                              RolePermissions permissions) {
+        this.permissions = permissions;
         this.transfers = transfers;
         this.jobs = jobs;
         this.catalog = catalog;
@@ -38,7 +45,7 @@ public class TransferController {
     @PostMapping("/archive")
     @ResponseStatus(HttpStatus.ACCEPTED)
     @Operation(summary = "Queue an archive", description = "Verify an S3 archive and keep the original file in COPY mode or replace it with a symbolic link in PURGE mode.")
-    @PreAuthorize(KoonjRoles.ARCHIVE)
+    @PreAuthorize(PermissionRules.ARCHIVE)
     public JobResponse archive(@P("request") @Valid @RequestBody TransferRequest request) {
         return transfers.submit(TransferJob.Operation.ARCHIVE, request);
     }
@@ -46,7 +53,7 @@ public class TransferController {
     @PostMapping("/recall")
     @ResponseStatus(HttpStatus.ACCEPTED)
     @Operation(summary = "Queue a recall", description = "Restore verified objects from an S3 bucket to mounted storage and optionally remove the S3 copies.")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.TRANSFER_RUN)
     public JobResponse recall(@Valid @RequestBody TransferRequest request) {
         return transfers.submit(TransferJob.Operation.RECALL, request);
     }
@@ -54,7 +61,7 @@ public class TransferController {
     public record SyncRecallRequest(@NotNull UUID fileId, @Min(1) @Max(60) Integer timeoutSeconds) {}
 
     @PostMapping("/recall/sync")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.TRANSFER_RUN)
     public ResponseEntity<FileTransferService.RecallResult> recallSync(@Valid @RequestBody SyncRecallRequest request) {
         var result = transfers.recallSync(request.fileId(), request.timeoutSeconds() == null ? 60 : request.timeoutSeconds());
         return ResponseEntity.status(result.estimatedReadyAt() == null ? HttpStatus.OK : HttpStatus.ACCEPTED).body(result);
@@ -62,7 +69,7 @@ public class TransferController {
 
     @GetMapping("/jobs")
     @Operation(summary = "List jobs", description = "Browse your archive, recall and scan jobs in this project in reverse creation order.")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.ACTIVITY_VIEW)
     public PageResponse<JobResponse> list(@RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size) {
         return jobs.list(PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt", "id")));
@@ -70,18 +77,25 @@ public class TransferController {
 
     @GetMapping("/jobs/{jobId}")
     @Operation(summary = "Read job progress", description = "Return status, file and byte counters, completion time, and any recorded errors.")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.ACTIVITY_VIEW)
     public JobResponse get(@PathVariable UUID jobId) { return jobs.get(jobId); }
 
     public record ControlRequest(@NotNull JobService.Action action) {}
 
     @PostMapping("/jobs/{jobId}/control")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.JOB_CONTROL)
     public JobResponse control(@PathVariable UUID jobId, @Valid @RequestBody ControlRequest request, Authentication authentication) {
-        boolean administrator = authentication.getAuthorities().stream()
-                .anyMatch(authority -> authority.getAuthority().equals("ROLE_" + KoonjRoles.ADMIN));
-        var job = jobs.control(jobId, request.action(), administrator);
-        if (request.action() == JobService.Action.RESUME || request.action() == JobService.Action.RESTART) {
+        boolean startsWork = request.action() == JobService.Action.RESUME || request.action() == JobService.Action.RESTART;
+        var grants = permissions.effective(authentication);
+        if (startsWork) {
+            var operation = jobs.get(jobId).operation();
+            boolean allowed = operation == TransferJob.Operation.SCAN
+                    ? grants.contains(Permission.CATALOG_OPERATE) || grants.contains(Permission.STORAGE_MANAGE)
+                    : grants.contains(Permission.TRANSFER_RUN);
+            if (!allowed) throw new AccessDeniedException("Required job permission is missing");
+        }
+        var job = jobs.control(jobId, request.action(), grants.contains(Permission.TRANSFER_PURGE));
+        if (startsWork) {
             if (job.getOperation() == TransferJob.Operation.SCAN) catalog.execute(job);
             else transfers.execute(job);
         }
@@ -89,7 +103,7 @@ public class TransferController {
     }
 
     @GetMapping("/jobs/{jobId}/events")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.ACTIVITY_VIEW)
     public PageResponse<JobEventResponse> events(@PathVariable UUID jobId,
             @RequestParam(defaultValue = "false") boolean errorsOnly,
             @RequestParam(defaultValue = "0") @Min(0) int page,
@@ -98,7 +112,7 @@ public class TransferController {
     }
 
     @GetMapping("/jobs/{jobId}/files")
-    @PreAuthorize(KoonjRoles.OPERATE)
+    @PreAuthorize(PermissionRules.ACTIVITY_VIEW)
     public PageResponse<FileMovementResponse> fileResults(@PathVariable UUID jobId,
             @RequestParam(defaultValue = "false") boolean failedOnly,
             @RequestParam(defaultValue = "0") @Min(0) int page,

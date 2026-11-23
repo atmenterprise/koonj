@@ -1,4 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
+import { usePermissions } from '../../auth/WorkspacePermissions'
+import { RolePermissionSettings } from './RolePermissionSettings'
 import { adminService, type TelemetrySignal } from '../../api/services/adminService'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import type { Navigate } from '../../shared/ui/feedback'
@@ -7,11 +9,12 @@ import { IntegrationSettings } from './IntegrationSettings'
 import { ProjectSettings } from './ProjectSettings'
 
 const sections = [
-  { id: 'servers', title: 'Servers', icon: 'server' },
-  { id: 'telemetry', title: 'Observability', icon: 'activity' },
-  { id: 'api', title: 'APIs', icon: 'link' },
-  { id: 'mcp', title: 'MCP servers', icon: 'layers' },
-  { id: 'projects', title: 'Projects', icon: 'folder' },
+  { id: 'servers', title: 'Servers', icon: 'server', permission: 'OBSERVABILITY_VIEW' },
+  { id: 'telemetry', title: 'Observability', icon: 'activity', permission: 'OBSERVABILITY_VIEW' },
+  { id: 'api', title: 'APIs', icon: 'link', permission: 'INTEGRATIONS_MANAGE' },
+  { id: 'mcp', title: 'MCP servers', icon: 'layers', permission: 'INTEGRATIONS_MANAGE' },
+  { id: 'projects', title: 'Projects', icon: 'folder', permission: 'PROJECTS_MANAGE' },
+  { id: 'permissions', title: 'Permissions', icon: 'check', permission: 'PERMISSIONS_MANAGE' },
 ] as const
 
 const componentLabels: Record<string, string> = {
@@ -95,11 +98,14 @@ function Observability() {
 export default function AdminPage({ section, navigate, projectId, refreshMemberships }: {
   section: string | null; navigate: Navigate; projectId: string; refreshMemberships: () => void
 }) {
-  const active = sections.find(item => item.id === section) ?? sections[0]
+  const { can } = usePermissions()
+  const available = sections.filter(item => can(item.permission))
+  const active = available.find(item => item.id === section) ?? available[0]
+  if (!active) return null
   return <>
     <div className="page-heading"><div><h1>Administration</h1><p>Monitor server health, investigate telemetry, and manage projects and integrations.</p></div></div>
     <nav className="admin-tabs filters" aria-label="Administration sections">
-      {sections.map(item => <button key={item.id} type="button" aria-pressed={item.id === active.id}
+      {available.map(item => <button key={item.id} type="button" aria-pressed={item.id === active.id}
         onClick={() => navigate(item.id === 'servers' ? '/admin' : '/admin?section=' + item.id)}>
         <Icon name={item.icon} size={15} />{item.title}
       </button>)}
@@ -107,6 +113,7 @@ export default function AdminPage({ section, navigate, projectId, refreshMembers
     {active.id === 'servers' && <ServerOverview />}
     {active.id === 'telemetry' && <Observability />}
     {active.id === 'api' && <IntegrationSettings key="api" kind="API" />}
+    {active.id === 'permissions' && <RolePermissionSettings />}
     {active.id === 'projects' && <ProjectSettings projectId={projectId} refreshMemberships={refreshMemberships} />}
     {active.id === 'mcp' && <IntegrationSettings key="mcp" kind="MCP" />}
   </>

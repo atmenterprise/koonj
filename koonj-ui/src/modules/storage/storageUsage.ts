@@ -1,5 +1,5 @@
 import { isObjectStorage } from '../../api/mappers'
-import type { StorageConnectionDTO, StorageUsageDTO } from '../../api/types'
+import type { StorageLocationStatusDTO, StorageUsageDTO } from '../../api/types'
 
 export const savingsRate = 0.02
 export const currency = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2 })
@@ -7,7 +7,7 @@ export const monthlySavings = (sizeBytes: number) => sizeBytes / 1e9 * savingsRa
 
 type Totals = { fileCount: number; sizeBytes: number }
 export type LocationUsage = {
-  connection: StorageConnectionDTO
+  connection: StorageLocationStatusDTO
   stored: Totals
   reclaimed: Totals
   classes: Map<string, Totals>
@@ -20,7 +20,7 @@ function addTotals(target: Totals, value: Totals) {
   target.sizeBytes += value.sizeBytes
 }
 
-export function summarizeUsage(connections: StorageConnectionDTO[], usage: StorageUsageDTO) {
+export function summarizeUsage(connections: StorageLocationStatusDTO[], usage: StorageUsageDTO) {
   const locations = new Map<string, LocationUsage>()
   const mounted = emptyTotals()
   const object = emptyTotals()

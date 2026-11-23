@@ -28,6 +28,9 @@ export interface CatalogLocationDTO extends ConnectionIdentity {
   bucket: string | null
 }
 
+export type StorageLocationStatusDTO = Pick<StorageConnectionDTO,
+  'id' | 'name' | 'providerType' | 'role' | 'basePathOrBucket' | 'endpointUrl' | 'region' | 'active'>
+
 export interface StorageConnectionDTO extends ConnectionIdentity {
   basePathOrBucket: string
   endpointUrl: string | null

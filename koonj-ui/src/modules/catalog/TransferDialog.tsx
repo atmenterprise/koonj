@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useArchiveMutation, useRecallMutation } from '../../api/hooks/mutations'
 import type { ArchiveMode, CatalogLocationDTO, CatalogMetadataTarget } from '../../api/types'
-import { useAuth } from '../../auth/AuthProvider'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { Dialog } from '../../shared/ui/feedback'
 import { Button, Icon, count } from '../../shared/ui/primitives'
 import { transferTargets, type TransferPlan } from './transferSelection'
@@ -56,8 +56,8 @@ export function TransferDialog({ action, plans, selectedItems, selectedLocation,
   action: CatalogTransferAction; plans: TransferPlan[]; selectedItems: CatalogMetadataTarget[]; selectedLocation: string; locations: CatalogLocationDTO[]
   onClose: () => void; onSubmitted: () => void
 }) {
-  const { hasRole } = useAuth()
-  const canPurge = hasRole('KOONJ_ADMIN')
+  const { can } = usePermissions()
+  const canPurge = can('TRANSFER_PURGE')
   const [mode, setMode] = useState<ArchiveMode>('COPY')
   const [sourceId, setSourceId] = useState(plans[0].source.id)
   const plan = plans.find(candidate => candidate.source.id === sourceId) ?? plans[0]

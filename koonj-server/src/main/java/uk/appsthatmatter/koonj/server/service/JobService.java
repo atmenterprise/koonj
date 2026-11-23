@@ -116,15 +116,15 @@ public class JobService {
         });
     }
 
-    public TransferJob control(UUID id, Action action, boolean administrator) {
+    public TransferJob control(UUID id, Action action, boolean canPurge) {
         return transaction.execute(transactionStatus -> {
             TransferJob job = locked(id);
             ProjectScope.require(job.getProjectId(), "Transfer job was not found");
             if (!Objects.equals(job.getOwnerSubject(), JobActor.subject())) throw missingJob();
             if (job.getOperation() != Operation.SCAN && job.getPlan() == null) throw conflict("This job has no saved execution plan");
             if ((action == Action.RESUME || action == Action.RESTART) && job.getOperation() == Operation.ARCHIVE
-                    && job.getArchiveMode() == ArchiveMode.PURGE && !administrator) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only an administrator can resume or restart a purge archive");
+                    && job.getArchiveMode() == ArchiveMode.PURGE && !canPurge) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Resuming or restarting a purge archive requires the purge permission");
             }
             Status previous = job.getStatus();
             if (action == Action.RESTART) {

@@ -4,6 +4,7 @@ import { apiClient, projectHeader } from '../api/client'
 import { projectService, type Project } from '../api/services/projectService'
 import { AuthGate } from '../auth/AuthGate'
 import { useAuth } from '../auth/AuthProvider'
+import { WorkspacePermissions } from '../auth/WorkspacePermissions'
 import { ActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { ApiPageState } from '../shared/ui/ApiPageState'
 import { AppProviders } from './AppProviders'
@@ -20,7 +21,9 @@ function ActiveProject({ project, projects, onSwitch, refreshMemberships }: {
   }, [project.id])
   if (!configured) return null
   return <ActivityNotifications><AppProviders>
-    <Console project={project} projects={projects} onProjectSwitch={onSwitch} refreshMemberships={refreshMemberships} />
+    <WorkspacePermissions>
+      <Console project={project} projects={projects} onProjectSwitch={onSwitch} refreshMemberships={refreshMemberships} />
+    </WorkspacePermissions>
   </AppProviders></ActivityNotifications>
 }
 

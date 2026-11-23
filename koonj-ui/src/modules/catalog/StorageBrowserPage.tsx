@@ -4,7 +4,7 @@ import { useScanMutation } from '../../api/hooks/mutations'
 import { useActiveArchives, useCatalogSnapshot, useCatalogLocations, useTemperaturePolicy, useTransferJobs } from '../../api/hooks/queries'
 import { folderTree, isActiveJob, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
 import type { CatalogMetadataTarget, ProviderType } from '../../api/types'
-import { useAuth } from '../../auth/AuthProvider'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { Badge, Button, Icon, bytes, count, date, storageName, temperatureTone, time } from '../../shared/ui/primitives'
 import { FileInspector } from './FileInspector'
@@ -87,8 +87,11 @@ function MetadataButton({ name, onClick }: { name: string; onClick: () => void }
 export default function StorageBrowserPage({ initialConnection, initialEntry, initialPath, navigate }: {
   initialConnection: string | null; initialEntry: string | null; initialPath: string | null; navigate: (path: string) => void
 }) {
-  const { hasRole } = useAuth()
-  const canTransfer = hasRole('KOONJ_ADMIN') || hasRole('KOONJ_OPERATOR')
+  const { can } = usePermissions()
+  const canTransfer = can('TRANSFER_RUN')
+  const canEdit = can('CATALOG_OPERATE')
+  const canScan = canEdit || can('STORAGE_MANAGE')
+  const canSelect = canTransfer || canEdit
   const connections = useCatalogLocations()
   const temperaturePolicy = useTemperaturePolicy().data
   const endpoints = connections.data ?? []
@@ -112,7 +115,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   }>()
   const selectedEndpoint = endpoints.find(item => item.id === endpointId) ?? endpoints[0]
   const scan = useScanMutation()
-  const jobs = useTransferJobs(canTransfer)
+  const jobs = useTransferJobs(can('ACTIVITY_VIEW'))
   const scanJob = jobs.data?.find(job => job.operation === 'SCAN' && job.sourceConnectionId === selectedEndpoint?.id
     && (isActiveJob(job) || job.status === 'PAUSED'))
   const snapshot = useCatalogSnapshot(selectedEndpoint?.id, !!selectedEndpoint)
@@ -373,7 +376,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   <div><dt>Files</dt><dd>{count(locationTotals.files)}</dd></div>
                   <div><dt>Folders</dt><dd>{count(locationTotals.folders)}</dd></div>
                 </dl>}
-                {canTransfer && <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || !!scanJob}
+                {canScan && <Button icon="scan" disabled={!selectedEndpoint.active || scan.isPending || !!scanJob}
                   onClick={() => scan.mutate(selectedEndpoint.id)}>{scanJob?.status === 'PAUSED' ? 'Scan paused' : scanJob ? 'Scanning…' : 'Scan'}</Button>}
                 {folder && <MetadataButton name={locationName} onClick={() => setInspectedId(folder)} />}
               </div>
@@ -386,7 +389,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                 <span role="columnheader"><input type="checkbox" aria-label="Select all files and folders in this location"
                   title="Select all items, including other pages and subfolders"
                   ref={input => { if (input) input.indeterminate = !wholeFolderSelected && selection.size > 0 }}
-                  disabled={!canTransfer || !total} checked={wholeFolderSelected}
+                  disabled={!canSelect || !total} checked={wholeFolderSelected}
                   onChange={event => setSelection(event.target.checked ? new Set([folder]) : new Set())} /></span>
                 {(Object.keys(catalogColumns) as CatalogColumn[]).map(column => {
                   const direction = sort?.column === column ? sort.direction : undefined
@@ -417,7 +420,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                     return <div className={`catalog-row virtual-row catalog-folder-row${rowState}`}
                       role="row" aria-rowindex={item.index + 2} key={node.prefix} style={position}>
                       <span role="cell"><input type="checkbox" aria-label={'Select folder ' + node.name}
-                        disabled={!canTransfer || wholeFolderSelected} checked={canTransfer && (wholeFolderSelected || selection.has(node.prefix))}
+                        disabled={!canSelect || wholeFolderSelected} checked={canSelect && (wholeFolderSelected || selection.has(node.prefix))}
                         onChange={event => toggle(node.prefix, event.target.checked)} /></span>
                       <div role="cell" className="catalog-name catalog-folder-name" style={indent}>
                         {expandable ? <button type="button" className="catalog-disclosure" aria-expanded={expanded}
@@ -447,7 +450,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   const archived = file.storageState === 'ARCHIVED'
                   const symlink = file.entryType === 'SYMLINK'
                   return <div className={`catalog-row virtual-row${rowState}`} role="row" aria-rowindex={item.index + 2} key={file.id} style={position}>
-                    <span role="cell"><input type="checkbox" aria-label={'Select ' + file.fileName} disabled={!canTransfer || wholeFolderSelected} checked={canTransfer && (wholeFolderSelected || selection.has(file.id))}
+                    <span role="cell"><input type="checkbox" aria-label={'Select ' + file.fileName} disabled={!canSelect || wholeFolderSelected} checked={canSelect && (wholeFolderSelected || selection.has(file.id))}
                       onChange={event => toggle(file.id, event.target.checked)} /></span>
                     <div className="catalog-entry-name" role="cell" style={indent}>
                       <div className="catalog-file-name">
@@ -498,24 +501,24 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
           </div>
         </section>
       </div>}
-    {canTransfer && selectedTargets.length > 0 && <div className="bulk-bar" aria-label="Selection actions">
+    {canSelect && selectedTargets.length > 0 && <div className="bulk-bar" aria-label="Selection actions">
       <strong>{wholeFolderSelected ? 'All files and folders selected' : `${count(selectedTargets.length)} selected`}</strong>
       <Button icon="close" aria-label="Clear selection" onClick={() => setSelection(new Set())} />
-      {(!wholeFolderSelected || folder) && <Button variant="primary" icon="layers" onClick={() => setEditingSelection(true)}>Edit metadata</Button>}
-      {archivePlan && <Button icon="upload" onClick={() => startTransfer('archive', [archivePlan], selectedTargets)}>Archive to S3</Button>}
-      {plans.recall.length > 0 && <Button icon="download" onClick={() => startTransfer('recall', plans.recall, selectedTargets)}>Recall to Source</Button>}
-      {!archivePlan && !plans.recall.length && <span>No eligible files for archive or recall</span>}
+      {canEdit && (!wholeFolderSelected || folder) && <Button variant="primary" icon="layers" onClick={() => setEditingSelection(true)}>Edit metadata</Button>}
+      {canTransfer && archivePlan && <Button icon="upload" onClick={() => startTransfer('archive', [archivePlan], selectedTargets)}>Archive to S3</Button>}
+      {canTransfer && plans.recall.length > 0 && <Button icon="download" onClick={() => startTransfer('recall', plans.recall, selectedTargets)}>Recall to Source</Button>}
+      {canTransfer && !archivePlan && !plans.recall.length && <span>No eligible files for archive or recall</span>}
     </div>}
     {selectedEndpoint && inspectedTarget && <FileInspector key={inspectedId} file={inspected} target={inspectedTarget}
       favoriteControl={favoriteButton(inspectedTarget, inspected?.fileName ?? inspectedFolder?.name ?? inspectedTarget.path)}
       folderDetails={inspectedFolder ? folderSummary(totalsByFolder.get(inspectedFolder.prefix)) : undefined}
       location={selectedEndpoint} connections={endpoints} navigate={navigate} temperaturePolicy={temperaturePolicy}
       metadata={annotations.data ? metadataFor(index, inspectedTarget) : undefined}
-      metadataError={annotations.error} onRetry={() => void annotations.refetch()} writable={canTransfer}
+      metadataError={annotations.error} onRetry={() => void annotations.refetch()} writable={canEdit}
       onClose={() => setInspectedId(undefined)} onOpen={inspectedFolder && inspectedFolder.prefix !== folder ? () => openFolder(inspectedFolder.prefix) : undefined}
       onArchive={canTransfer && inspectorArchivePlan ? () => startTransfer('archive', [inspectorArchivePlan], [inspectedTarget]) : undefined}
       onRecall={canTransfer && inspectorPlans.recall.length > 0 ? () => startTransfer('recall', inspectorPlans.recall, [inspectedTarget]) : undefined} />}
-    {canTransfer && selectedEndpoint && editingSelection && selectedTargets.length > 0 &&
+    {canEdit && selectedEndpoint && editingSelection && selectedTargets.length > 0 &&
       <BulkMetadataDialog connectionId={selectedEndpoint.id} targets={selectedTargets} onClose={() => setEditingSelection(false)}
         onSaved={() => { setEditingSelection(false); setSelection(new Set()) }} />}
     {canTransfer && transferRequest && <TransferDialog action={transferRequest.action} plans={transferRequest.plans}

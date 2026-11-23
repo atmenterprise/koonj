@@ -5,6 +5,7 @@ import { isActiveJob, jobLabels, operationLabels } from '../../api/mappers'
 import type { JobAction, TransferJobDTO } from '../../api/types'
 import { transferService } from '../../api/services/transferService'
 import { useAuth } from '../../auth/AuthProvider'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { useActivityNotifications } from '../../shared/notifications/ActivityNotifications'
 import { errorDetail } from '../../shared/notifications/activity'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
@@ -23,9 +24,10 @@ const controls = {
   RESTART: { label: 'Restart', icon: 'retry' },
 } as const
 
-function actionsFor(job: TransferJobDTO, isAdmin: boolean): JobAction[] {
-  if (!job.controllable) return []
-  const canRun = job.operation !== 'ARCHIVE' || job.archiveMode !== 'PURGE' || isAdmin
+function actionsFor(job: TransferJobDTO, can: ReturnType<typeof usePermissions>['can']): JobAction[] {
+  if (!job.controllable || !can('ACTIVITY_CONTROL')) return []
+  const canRun = job.operation === 'SCAN' ? can('CATALOG_OPERATE') || can('STORAGE_MANAGE')
+    : can('TRANSFER_RUN') && (job.operation !== 'ARCHIVE' || job.archiveMode !== 'PURGE' || can('TRANSFER_PURGE'))
   if (job.status === 'RUNNING' || job.status === 'PENDING') return ['PAUSE', 'STOP']
   if (job.status === 'PAUSING') return ['STOP']
   if (job.status === 'PAUSED') return canRun ? ['RESUME', 'STOP'] : ['STOP']
@@ -52,11 +54,13 @@ function JobProgress({ job }: { job: TransferJobDTO }) {
 }
 
 export default function AuditLogPage({ initialJob }: { initialJob: string | null }) {
-  const { hasRole, user } = useAuth()
+  const { user } = useAuth()
+  const { can } = usePermissions()
+  const canBrowse = can('CATALOG_VIEW')
   const { notify } = useActivityNotifications()
   const client = useQueryClient()
   const jobs = useTransferJobs(true, true)
-  const connections = useCatalogLocations()
+  const connections = useCatalogLocations(canBrowse)
   const [filter, setFilter] = useState<typeof filters[number]>('All activity')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState<number>()
@@ -85,6 +89,7 @@ export default function AuditLogPage({ initialJob }: { initialJob: string | null
   })
   const nameOf = (id: string | null) => {
     if (!id) return '—'
+    if (!canBrowse) return id
     return connections.data?.find(item => item.id === id)?.name
       ?? (connections.isPending ? 'Loading connection…' : 'Unknown connection')
   }
@@ -158,7 +163,7 @@ export default function AuditLogPage({ initialJob }: { initialJob: string | null
               <td><JobProgress job={job} /></td>
               <td><JobStatusBadge status={job.status} />
                 {job.failedFiles > 0 && <small className="activity-failure-count">{count(job.failedFiles)} {job.failedFiles === 1 ? 'failure' : 'failures'}</small>}
-                <div className="activity-job-controls">{actionsFor(job, hasRole('KOONJ_ADMIN')).map(action =>
+                <div className="activity-job-controls">{actionsFor(job, can).map(action =>
                   <Button key={action} variant="quiet" icon={controls[action].icon} disabled={control.isPending}
                     aria-label={`${controls[action].label} ${operationLabels[job.operation].toLowerCase()} job ${job.id}`}
                     title={action === 'PAUSE' || action === 'STOP' ? 'Takes effect at the next safe checkpoint' : undefined}

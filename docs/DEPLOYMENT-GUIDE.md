@@ -503,6 +503,18 @@ UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
 | `JAVA_OPTS` | `-Xms512m -Xmx2g` | JVM options |
 | `SPRING_PROFILES_ACTIVE` | `production` | Active Spring profiles |
 
+### Role permissions
+
+Open **Administration → Permissions** to change Operator and Viewer permissions
+across projects. Keycloak assigns roles to users. Koonj combines the grants from
+all roles on the signed-in account and still enforces project membership.
+Administrator permissions are fixed. Operators can view Storage status by
+default. Storage management is a separate permission.
+
+For a deployment that already has projects and manages its schema manually,
+reapply the project workspace migration to create the role permission settings
+table before starting the new server.
+
 ### Keycloak roles
 
 | Role | Access |

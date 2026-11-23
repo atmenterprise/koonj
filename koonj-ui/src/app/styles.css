@@ -1244,3 +1244,15 @@ body:has(.explorer-fullscreen) .topbar { position: fixed; inset: 0 0 auto; z-ind
 .project-form label { display: grid; min-width: 0; gap: 5px; font-size: 12px; font-weight: 650; }
 .project-form label :is(select, input) { width: min(270px, 100%); min-width: 0; }
 .project-form .ops-error { flex-basis: 100%; }
+
+.permission-table-scroll { overflow-x: auto; margin-top: 14px; }
+.permission-table { width: 100%; min-width: 580px; border-collapse: collapse; color: var(--ink); font-size: 13px; }
+.permission-table th, .permission-table td { padding: 9px 12px; border-bottom: 1px solid var(--divider); }
+.permission-table thead { background: var(--table-head); }
+.permission-table :is(th, td):first-child { text-align: left; width: 50%; }
+.permission-table :is(th, td):not(:first-child) { text-align: center; }
+.permission-table small { display: block; margin-top: 3px; color: var(--muted); font-weight: 500; }
+.permission-table input { appearance: auto; accent-color: var(--accent-detail); width: 16px; height: 16px; vertical-align: middle; cursor: pointer; }
+.permission-table input:disabled { cursor: default; }
+.permission-table tfoot td { border-bottom: 0; white-space: nowrap; }
+.permission-feedback { margin: 8px 12px 0; font-size: 12px; }

@@ -8,14 +8,14 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.bind.annotation.*;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteRequest;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteResponse;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
+import uk.appsthatmatter.koonj.server.security.PermissionRules;
 import uk.appsthatmatter.koonj.server.service.CatalogFavoriteService;
 
 import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/catalog/favorites")
-@PreAuthorize(KoonjRoles.READ)
+@PreAuthorize(PermissionRules.CATALOG_VIEW)
 public class CatalogFavoriteController {
     private final CatalogFavoriteService favorites;
 

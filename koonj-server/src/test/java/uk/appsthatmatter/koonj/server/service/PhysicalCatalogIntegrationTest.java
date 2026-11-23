@@ -40,6 +40,7 @@ import uk.appsthatmatter.koonj.server.dto.TransferRequest;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
+import uk.appsthatmatter.koonj.server.repository.RolePermissionSettingsRepository;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
 
 import java.io.ByteArrayInputStream;
@@ -88,6 +89,7 @@ class PhysicalCatalogIntegrationTest {
     @Autowired FileTransferService transfers;
     @Autowired JobService jobs;
     @Autowired TransferJobRepository jobRepository;
+    @Autowired RolePermissionSettingsRepository roleSettings;
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired ProjectTestTokens serverTokens;
@@ -105,6 +107,58 @@ class PhysicalCatalogIntegrationTest {
         s3.reset();
         source = connection(ProviderType.LOCAL, root.toString());
         bucket = connection(ProviderType.MINIO, "archive");
+    }
+
+    @Test
+    void configurableRoleGrantsProtectStorageApisAndPermissionEditing() throws Exception {
+        String admin = token("permission-admin", "KOONJ_ADMIN");
+        String operator = token("permission-operator", "KOONJ_OPERATOR");
+        String viewer = token("permission-viewer", "KOONJ_VIEWER");
+        String combined = token("permission-combined", "KOONJ_OPERATOR", "KOONJ_VIEWER");
+        String project = ProjectScope.LEGACY.toString();
+        firstProject(admin);
+        for (String account : List.of(operator, viewer, combined)) {
+            firstProject(account);
+            request(put("/api/v1/projects/{id}/members", project).contentType(MediaType.APPLICATION_JSON)
+                    .content(json.writeValueAsBytes(Map.of("subject", "oidc:" + account))), admin, null)
+                    .andExpect(status().isNoContent());
+        }
+
+        request(get("/api/v1/connections/locations"), operator, project).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].accessKeyOrUsername").doesNotHaveJsonPath());
+        request(get("/api/v1/connections/usage"), operator, project).andExpect(status().isOk());
+        request(get("/api/v1/connections/{id}/status", source.getId()), operator, project).andExpect(status().isOk());
+        request(get("/api/v1/connections"), operator, project).andExpect(status().isForbidden());
+        request(post("/api/v1/connections/{id}/test", source.getId()), operator, project).andExpect(status().isForbidden());
+        request(get("/api/v1/connections/locations"), viewer, project).andExpect(status().isForbidden());
+
+        request(get("/api/v1/admin/permissions"), admin, project).andExpect(status().isOk())
+                .andExpect(jsonPath("$.roles[0].editable").value(false));
+        request(get("/api/v1/admin/permissions"), operator, project).andExpect(status().isForbidden());
+        request(put("/api/v1/admin/permissions/KOONJ_OPERATOR").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"permissions\":[]}"), operator, project).andExpect(status().isForbidden());
+        request(put("/api/v1/admin/permissions/KOONJ_ADMIN").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"permissions\":[]}"), admin, project).andExpect(status().isBadRequest());
+        request(put("/api/v1/admin/permissions/KOONJ_VIEWER").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"permissions\":[\"PERMISSIONS_MANAGE\"]}"), admin, project).andExpect(status().isBadRequest());
+
+        try {
+            request(put("/api/v1/admin/permissions/KOONJ_OPERATOR").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"permissions\":[\"CATALOG_OPERATE\"]}"), admin, project).andExpect(status().isOk());
+            request(put("/api/v1/admin/permissions/KOONJ_VIEWER").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"permissions\":[\"STORAGE_VIEW\"]}"), admin, project).andExpect(status().isOk());
+
+            request(get("/api/v1/permissions/me"), combined, project).andExpect(jsonPath("$").value(
+                    org.hamcrest.Matchers.containsInAnyOrder("CATALOG_OPERATE", "STORAGE_VIEW")));
+            request(get("/api/v1/connections/locations"), operator, project).andExpect(status().isForbidden());
+            request(get("/api/v1/connections/locations"), viewer, project).andExpect(status().isOk());
+            request(get("/api/v1/connections/{id}/status", source.getId()), combined, project).andExpect(status().isOk());
+            request(get("/api/v1/catalog/locations"), combined, project).andExpect(status().isForbidden());
+            request(get("/api/v1/transfers/jobs"), combined, project).andExpect(status().isForbidden());
+        } finally {
+            roleSettings.deleteById("KOONJ_OPERATOR");
+            roleSettings.deleteById("KOONJ_VIEWER");
+        }
     }
 
     @Test
@@ -586,7 +640,7 @@ class PhysicalCatalogIntegrationTest {
         assertThat(Files.isSymbolicLink(third)).isFalse();
         assertThatThrownBy(() -> jobs.control(job.id(), JobService.Action.RESTART, false))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
-                .hasMessageContaining("Only an administrator");
+                .hasMessageContaining("requires the purge permission");
         var replacement = jobs.control(job.id(), JobService.Action.RESTART, true);
         transfers.execute(replacement);
         completed(JobResponse.from(replacement));

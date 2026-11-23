@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import { connectionStatusOptions, useConnections, useStorageUsage, useTransferJobs } from '../../api/hooks/queries'
+import { connectionStatusOptions, useStorageLocations, useStorageUsage, useTransferJobs } from '../../api/hooks/queries'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { isActiveJob, isObjectStorage } from '../../api/mappers'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { Icon, Metric, bytes, count, percent, storageName } from '../../shared/ui/primitives'
@@ -8,7 +9,8 @@ import { ConnectionStatus, currentCapacity, providers, roles, type ConnectionPro
 import { currency, monthlySavings, savingsRate, summarizeUsage, type LocationUsage } from './storageUsage'
 
 export default function StorageStatusPage() {
-  const connections = useConnections()
+  const { can } = usePermissions()
+  const connections = useStorageLocations()
   const usage = useStorageUsage()
   const [locationId, setLocationId] = useState('')
   const locationSelect = useRef<HTMLSelectElement>(null)
@@ -60,7 +62,7 @@ export default function StorageStatusPage() {
         </table>
       </div> : <p className="empty compact">No storage locations configured.</p>}
     </section>}
-    <TransferActivity locationId={scope} />
+    {can('ACTIVITY_VIEW') && <TransferActivity locationId={scope} />}
   </>
 }
 

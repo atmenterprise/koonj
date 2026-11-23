@@ -2,6 +2,7 @@ import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../
 import { dashboardSummary, isActiveJob, operationLabels } from '../../api/mappers'
 import type { TransferJobDTO } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { JobStatusBadge, type Navigate } from '../../shared/ui/feedback'
 import { Button, Icon, Metric, Progress, bytes, count, date, percent, time } from '../../shared/ui/primitives'
@@ -39,8 +40,10 @@ function RecentActivity({ jobs, navigate }: { jobs: TransferJobDTO[]; navigate: 
 }
 
 export default function DashboardPage({ navigate }: { navigate: Navigate }) {
-  const { user, hasRole } = useAuth()
-  const canOperate = hasRole('KOONJ_ADMIN') || hasRole('KOONJ_OPERATOR')
+  const { user } = useAuth()
+  const { can } = usePermissions()
+  const canBrowse = can('CATALOG_VIEW')
+  const canViewActivity = can('ACTIVITY_VIEW')
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
@@ -48,29 +51,31 @@ export default function DashboardPage({ navigate }: { navigate: Navigate }) {
     <div className="page-heading personal-heading dashboard-welcome">
       <div>
         <h1>{user?.name ? `${greeting}, ${user.name}` : greeting}</h1>
-        <p>{canOperate ? 'Explore your storage catalog and see how recent scans, archives and recalls are progressing.'
-          : 'Browse files and folders in your catalog.'}</p>
+        {canBrowse && <p>{canViewActivity ? 'Explore your storage catalog and see how recent scans, archives and recalls are progressing.'
+          : 'Browse files and folders in your catalog.'}</p>}
       </div>
-      <Button variant="primary" icon="folder" onClick={() => navigate('/explorer')}>
+      {canBrowse && <Button variant="primary" icon="folder" onClick={() => navigate('/explorer')}>
         Open explorer <Icon name="arrow" size={15} />
-      </Button>
+      </Button>}
     </div>
-    <QuickAccess navigate={navigate} />
-    <DashboardOverview navigate={navigate} canOperate={canOperate} />
+    {canBrowse && <QuickAccess navigate={navigate} />}
+    {(canBrowse || canViewActivity) && <DashboardOverview navigate={navigate} canBrowse={canBrowse} canViewActivity={canViewActivity} />}
   </>
 }
 
-function DashboardOverview({ navigate, canOperate }: {
-  navigate: Navigate; canOperate: boolean
+function DashboardOverview({ navigate, canBrowse, canViewActivity }: {
+  navigate: Navigate; canBrowse: boolean; canViewActivity: boolean
 }) {
-  const connections = useCatalogLocations()
-  const jobs = useTransferJobs(canOperate)
-  const catalog = useCatalogSnapshot()
+  const connections = useCatalogLocations(canBrowse && canViewActivity)
+  const jobs = useTransferJobs(canViewActivity)
+  const catalog = useCatalogSnapshot(undefined, canBrowse)
   const active = jobs.data?.filter(job => job.operation !== 'SCAN' && isActiveJob(job))
   const summary = dashboardSummary(catalog.data ?? [], jobs.data ?? [])
-  const nameOf = (id: string | null) => connections.data?.find(item => item.id === id)?.name ?? id ?? '—'
+  const nameOf = (id: string | null) =>
+    (canBrowse ? connections.data?.find(item => item.id === id)?.name : undefined) ?? id ?? '—'
 
-  const queries = [catalog, ...(canOperate ? [connections, jobs] : [])]
+  const queries = [...(canBrowse ? [catalog] : []), ...(canViewActivity ? [jobs] : []),
+    ...(canBrowse && canViewActivity ? [connections] : [])]
   const failed = queries.find(query => query.isError)
   if (failed?.error) return <ApiPageState loadingLabel="Loading dashboard" error={failed.error}
     retry={() => { for (const query of queries) if (query.isError) void query.refetch() }}
@@ -79,12 +84,12 @@ function DashboardOverview({ navigate, canOperate }: {
 
   return <>
     <div className="metrics live-metrics">
-      <Metric icon="drive" tone="green" title="Reclaimed local storage" value={catalog.data ? bytes(summary.reclaimedLocalBytes) : '—'} />
+      {canBrowse && <><Metric icon="drive" tone="green" title="Reclaimed local storage" value={catalog.data ? bytes(summary.reclaimedLocalBytes) : '—'} />
       <Metric icon="cloud" tone="blue" title="Cataloged S3 archive" value={catalog.data ? bytes(summary.s3ArchivedBytes) : '—'} />
-      <Metric icon="files" tone="yellow" title="Cataloged files" value={catalog.data ? count(summary.totalCatalogedFiles) : '—'} />
-      {canOperate && <Metric icon="activity" tone="blue" title="Active transfers" value={jobs.data ? count(summary.activeTransferCount) : '—'} />}
+      <Metric icon="files" tone="yellow" title="Cataloged files" value={catalog.data ? count(summary.totalCatalogedFiles) : '—'} /></>}
+      {canViewActivity && <Metric icon="activity" tone="blue" title="Active transfers" value={jobs.data ? count(summary.activeTransferCount) : '—'} />}
     </div>
-    {canOperate && <div className="home-grid dashboard-work">
+    {canViewActivity && <div className="home-grid dashboard-work">
       <RecentActivity jobs={jobs.data ?? []} navigate={navigate} />
       <section className="panel home-list" aria-labelledby="active-transfers-heading">
         <div className="panel-heading"><h2 id="active-transfers-heading">Active transfers</h2></div>

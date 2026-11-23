@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import { useScanMutation, useTestConnection } from '../../api/hooks/mutations'
 import { isObjectStorage } from '../../api/mappers'
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import type { StorageConnectionDTO } from '../../api/types'
 import type { Navigate } from '../../shared/ui/feedback'
 import { Badge, Button, Icon } from '../../shared/ui/primitives'
@@ -13,6 +14,7 @@ export function ConnectionRow({ connection, navigate, expanded, onToggle, onEdit
   const detailsId = useId()
   const scan = useScanMutation()
   const test = useTestConnection()
+  const { can } = usePermissions()
   const cloud = isObjectStorage(connection.providerType)
 
   return <>
@@ -42,7 +44,7 @@ export function ConnectionRow({ connection, navigate, expanded, onToggle, onEdit
             <div><dt>Credentials</dt><dd>{connection.accessKeyOrUsername || connection.secretKeyOrPassword ? 'Configured' : '—'}</dd></div>
           </dl>}
           <div className="row-actions">
-            <Button onClick={() => navigate('/explorer?' + new URLSearchParams({ endpoint: connection.id }))}>Browse Catalog</Button>
+            {can('CATALOG_VIEW') && <Button onClick={() => navigate('/explorer?' + new URLSearchParams({ endpoint: connection.id }))}>Browse Catalog</Button>}
             {onEdit && <>
               <Button icon="scan" disabled={scan.isPending || !connection.active} onClick={() => scan.mutate(connection.id)}>
                 {scan.isPending ? 'Submitting…' : 'Scan Now'}</Button>

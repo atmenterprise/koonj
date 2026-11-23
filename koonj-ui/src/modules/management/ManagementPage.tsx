@@ -1,3 +1,4 @@
+import { usePermissions } from '../../auth/WorkspacePermissions'
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys, useTemperaturePolicy } from '../../api/hooks/queries'
@@ -64,13 +65,16 @@ function TemperaturePolicies() {
 }
 
 export default function ManagementPage({ section, navigate }: { section: string | null; navigate: Navigate }) {
-  const policies = section === 'policies'
+  const { can } = usePermissions()
+  const storage = can('STORAGE_MANAGE')
+  const editPolicies = can('POLICY_MANAGE')
+  const policies = editPolicies && (section === 'policies' || !storage)
   return <>
     <div className="page-heading"><div><h1>Management</h1><p>Manage storage connections and workspace policies.</p></div></div>
     <nav className="admin-tabs filters" aria-label="Management sections">
-      <button type="button" aria-pressed={!policies} onClick={() => navigate('/management')}><Icon name="server" size={15} />Storage connections</button>
-      <button type="button" aria-pressed={policies} onClick={() => navigate('/management?section=policies')}><Icon name="layers" size={15} />Rules &amp; policies</button>
+      {storage && <button type="button" aria-pressed={!policies} onClick={() => navigate('/management')}><Icon name="server" size={15} />Storage connections</button>}
+      {editPolicies && <button type="button" aria-pressed={policies} onClick={() => navigate('/management?section=policies')}><Icon name="layers" size={15} />Rules &amp; policies</button>}
     </nav>
-    {policies ? <TemperaturePolicies /> : <StorageConnectionsPage navigate={navigate} />}
+    {policies ? <TemperaturePolicies /> : storage && <StorageConnectionsPage navigate={navigate} />}
   </>
 }

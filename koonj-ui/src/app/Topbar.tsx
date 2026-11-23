@@ -6,6 +6,7 @@ import type { TransferJobDTO } from '../api/types'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { notificationPresentation } from '../shared/notifications/NotificationPopup'
 import { useAuth } from '../auth/AuthProvider'
+import { usePermissions } from '../auth/WorkspacePermissions'
 import type { KoonjRole } from '../auth/keycloak'
 import type { Navigate } from '../shared/ui/feedback'
 import { useQueries } from '@tanstack/react-query'
@@ -38,10 +39,12 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(-1)
   const term = query.trim().replace(/^\/+/, '').toLowerCase()
+  const { can } = usePermissions()
+  const browseCatalog = can('CATALOG_VIEW')
   const searching = open && !!term
-  const locations = useCatalogLocations()
-  const files = useCatalogSnapshot(undefined, searching)
-  const endpoints = locations.data ?? []
+  const locations = useCatalogLocations(browseCatalog)
+  const files = useCatalogSnapshot(undefined, searching && browseCatalog)
+  const endpoints = browseCatalog ? locations.data ?? [] : []
   const metadata = useQueries({
     queries: searching ? endpoints.map(endpoint => catalogMetadataOptions(endpoint.id)) : [],
     combine: queries => ({
@@ -51,13 +54,13 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
     }),
   })
   const catalog = useMemo(() => {
-    if (!searching) return { files: [], folders: [] }
+    if (!searching || !browseCatalog) return { files: [], folders: [] }
     const entries = new Map(endpoints.flatMap((endpoint, index) => {
       const values = metadata.entries[index]
       return values ? [[endpoint.id, values] as const] : []
     }))
     return catalogSearchResults(files.data ?? [], endpoints, entries, value => value.toLowerCase().includes(term))
-  }, [searching, endpoints, files.data, metadata.entries, term])
+  }, [searching, browseCatalog, endpoints, files.data, metadata.entries, term])
   const match = (value: string) => value.toLowerCase().includes(term)
   const groups = open ? [
     { title: 'Workspace pages', results: pages.filter(page => match(page.title + ' Workspace Koonj')).map(page => ({
@@ -79,8 +82,8 @@ function GlobalSearch({ pages, navigate, jobs }: { pages: SearchPage[]; navigate
   const resultLimit = 25
   const visibleGroups = groups.map(group => ({ ...group, results: group.results.slice(0, resultLimit) }))
   const results = visibleGroups.flatMap(group => group.results)
-  const loading = searching && (locations.isPending || files.isPending || metadata.loading)
-  const incomplete = searching && (locations.isError || files.isError || metadata.failed)
+  const loading = searching && browseCatalog && (locations.isPending || files.isPending || metadata.loading)
+  const incomplete = searching && browseCatalog && (locations.isError || files.isError || metadata.failed)
   const active = results[selected]
 
   useEffect(() => {
@@ -252,16 +255,16 @@ function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t
   </ToolbarPopover>
 }
 
-export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperate, project, projects, onProjectSwitch }: {
-  title: string; pages: SearchPage[]; navigate: Navigate; theme: Theme; onThemeChange: (theme: Theme) => void; canOperate: boolean
+export function Topbar({ title, pages, navigate, theme, onThemeChange, canViewActivity, project, projects, onProjectSwitch }: {
+  title: string; pages: SearchPage[]; navigate: Navigate; theme: Theme; onThemeChange: (theme: Theme) => void; canViewActivity: boolean
   project: Project; projects: Project[]; onProjectSwitch: (id: string) => void
 }) {
-  const jobHistory = useTransferJobs(canOperate)
+  const jobHistory = useTransferJobs(canViewActivity)
   const { notices, markRead, syncJobs } = useActivityNotifications()
   useEffect(() => {
-    if (canOperate && jobHistory.data) syncJobs(jobHistory.data)
-  }, [canOperate, jobHistory.data, syncJobs])
-  const jobs = canOperate ? jobHistory.data ?? [] : []
+    if (canViewActivity && jobHistory.data) syncJobs(jobHistory.data)
+  }, [canViewActivity, jobHistory.data, syncJobs])
+  const jobs = canViewActivity ? jobHistory.data ?? [] : []
   const unread = notices.filter(notice => !notice.read).length
   const alerts = notices.slice().reverse()
   return <header className="topbar">
@@ -280,7 +283,7 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperat
         {close => <><h2>Notifications</h2><div className="notifications">
           {alerts.length ? alerts.map(notice => {
             const { icon, tile, label } = notificationPresentation[notice.tone]
-            const jobId = canOperate ? notice.jobId : undefined
+            const jobId = canViewActivity ? notice.jobId : undefined
             const detailId = notice.detail ? `notification-detail-${notice.id}` : undefined
             return <button type="button" className={notice.read ? 'notification' : 'notification notification-unread'} key={notice.id}
               aria-label={`${notice.read ? '' : 'Unread. '}${label}: ${notice.title}. ${jobId ? 'View activity' : 'View notification'}`}

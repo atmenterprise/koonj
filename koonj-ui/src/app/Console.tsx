@@ -5,7 +5,7 @@ import { Topbar, themes, type Theme } from './Topbar'
 import type { Project } from '../api/services/projectService'
 import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
-import { useAuth } from '../auth/AuthProvider'
+import { usePermissions } from '../auth/WorkspacePermissions'
 import { Button, Icon } from '../shared/ui/primitives'
 import { LoadingRows } from '../shared/ui/feedback'
 
@@ -15,12 +15,12 @@ const AdminPage = lazy(() => import('../modules/admin/AdminPage'))
 const ManagementPage = lazy(() => import('../modules/management/ManagementPage'))
 
 const pages = [
-  { path: '/Home', title: 'Home', icon: 'home', access: 'read' },
-  { path: '/explorer', title: 'Catalog', icon: 'folder', access: 'read' },
-  { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: 'operate' },
-  { path: '/storage', title: 'Storage status', shortTitle: 'Storage', icon: 'drive', access: 'admin' },
-  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: 'admin' },
-  { path: '/management', title: 'Management', icon: 'server', access: 'admin' },
+  { path: '/Home', title: 'Home', icon: 'home', access: [] },
+  { path: '/explorer', title: 'Catalog', icon: 'folder', access: ['CATALOG_VIEW'] },
+  { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: ['ACTIVITY_VIEW'] },
+  { path: '/storage', title: 'Storage status', shortTitle: 'Storage', icon: 'drive', access: ['STORAGE_VIEW'] },
+  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'INTEGRATIONS_MANAGE', 'PROJECTS_MANAGE', 'PERMISSIONS_MANAGE'] },
+  { path: '/management', title: 'Management', icon: 'server', access: ['STORAGE_MANAGE', 'POLICY_MANAGE'] },
 ] as const
 const browserLocation = () => window.location.pathname + window.location.search
 function currentLocation() {
@@ -42,13 +42,11 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
     const preference = localStorage.getItem('koonj-theme')
     return themes.find(option => option.id === preference)?.id ?? 'classic'
   })
-  const { hasRole } = useAuth()
+  const { can } = usePermissions()
   const { notify } = useActivityNotifications()
   const deniedLocation = useRef<string | undefined>(undefined)
-  const canAdminister = hasRole('KOONJ_ADMIN')
-  const canOperate = canAdminister || hasRole('KOONJ_OPERATOR')
-  const canView = (item: typeof pages[number]) =>
-    item.access === 'read' || (item.access === 'operate' ? canOperate : canAdminister)
+  const canViewActivity = can('ACTIVITY_VIEW')
+  const canView = (item: typeof pages[number]) => !item.access.length || item.access.some(can)
   const [path, query] = location.split('?')
   const params = new URLSearchParams(query)
   const page = pages.find(item => item.path.toLowerCase() === path.toLowerCase().replace(/\/+$/, '')) ?? pages[0]
@@ -120,7 +118,7 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
     </aside>
     <div className="app-body">
       <Topbar title={page.title} pages={pages.filter(canView)} navigate={navigate} theme={theme}
-        onThemeChange={setTheme} canOperate={canOperate} project={project} projects={projects} onProjectSwitch={onProjectSwitch} />
+        onThemeChange={setTheme} canViewActivity={canViewActivity} project={project} projects={projects} onProjectSwitch={onProjectSwitch} />
       <main id="main-content" className="main-content" tabIndex={-1}>
         {!pageAllowed ? null : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
             initialPath={params.get('path')} navigate={navigate} />
@@ -140,6 +138,6 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
       </main>
       <footer className="app-footer"><span>© 2026 Apps that Matter</span><span>Version 1.0</span></footer>
     </div>
-    <NotificationPopup navigate={canOperate ? navigate : undefined} />
+    <NotificationPopup navigate={canViewActivity ? navigate : undefined} />
   </div>
 }

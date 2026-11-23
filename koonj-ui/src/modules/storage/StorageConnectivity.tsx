@@ -1,18 +1,18 @@
-import type { StorageConnectionDTO, ConnectionHealthDTO } from '../../api/types'
+import type { StorageLocationStatusDTO, ConnectionHealthDTO } from '../../api/types'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { Badge } from '../../shared/ui/primitives'
 
 export const providers = {
   LOCAL: 'Local storage', SMB: 'SMB share', NAS: 'NAS', AWS_S3: 'Amazon S3',
   MINIO: 'MinIO', RUSTFS: 'RustFS', SCALITY: 'Scality', CUSTOM_S3: 'S3-compatible storage',
-} satisfies Record<StorageConnectionDTO['providerType'], string>
+} satisfies Record<StorageLocationStatusDTO['providerType'], string>
 
 export const roles = { SOURCE: 'Source', TARGET: 'Target', BOTH: 'Source and target' }
 export type ConnectionProbe = UseQueryResult<ConnectionHealthDTO>
 const checkedTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
 export function ConnectionStatus({ connection, probe, detailed = false }: {
-  connection: StorageConnectionDTO; probe?: ConnectionProbe; detailed?: boolean
+  connection: StorageLocationStatusDTO; probe?: ConnectionProbe; detailed?: boolean
 }) {
   const status = !connection.active ? { label: 'Inactive', tone: 'neutral', detail: 'Connectivity checks are disabled.' }
     : probe?.isFetching ? { label: 'Checking…', tone: 'blue', detail: 'Checking access from Koonj Server.' }
@@ -29,6 +29,6 @@ export function ConnectionStatus({ connection, probe, detailed = false }: {
   </div>
 }
 
-export function currentCapacity(connection: StorageConnectionDTO, probe?: ConnectionProbe) {
+export function currentCapacity(connection: StorageLocationStatusDTO, probe?: ConnectionProbe) {
   if (connection.active && probe?.fetchStatus === 'idle' && probe.isSuccess && probe.data.healthy) return probe.data.capacity
 }
