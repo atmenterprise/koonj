@@ -7,6 +7,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
@@ -72,14 +73,16 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     public boolean objectStorage() { return true; }
 
     private S3Client client(StorageConnection config) {
-        return clients.computeIfAbsent(ClientConfig.from(config), settings -> {
-            var builder = S3Client.builder().region(Region.of(settings.region())).forcePathStyle(settings.pathStyle())
-                    .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-                    .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED);
-            if (settings.endpoint() != null) builder.endpointOverride(URI.create(settings.endpoint()));
-            if (settings.accessKey() != null) builder.credentialsProvider(settings.credentials());
-            return builder.build();
-        });
+        return clients.computeIfAbsent(ClientConfig.from(config), S3CompatibleStorageConnector::buildClient);
+    }
+
+    private static S3Client buildClient(ClientConfig settings) {
+        var builder = S3Client.builder().region(Region.of(settings.region())).forcePathStyle(settings.pathStyle())
+                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED);
+        if (settings.endpoint() != null) builder.endpointOverride(URI.create(settings.endpoint()));
+        if (settings.accessKey() != null) builder.credentialsProvider(settings.credentials());
+        return builder.build();
     }
 
     private S3TransferManager transferManager(StorageConnection config) {
@@ -111,8 +114,13 @@ public class S3CompatibleStorageConnector implements StorageConnector {
 
     @Override
     public void testConnection(StorageConnection config) throws IOException {
+        try (var client = buildClient(ClientConfig.from(config))) {
+            testAccess(config, client);
+        }
+    }
+
+    private static void testAccess(StorageConnection config, S3Client client) throws IOException {
         String bucket = config.getBasePathOrBucket();
-        S3Client client = client(config);
         client.headBucket(request -> request.bucket(bucket));
         var sample = client.listObjectsV2(request -> request.bucket(bucket).maxKeys(1)).contents();
         if (config.getRole() != StorageRole.TARGET && !sample.isEmpty()
@@ -124,12 +132,12 @@ public class S3CompatibleStorageConnector implements StorageConnector {
         }
         if (config.getRole() != StorageRole.SOURCE) {
             String key = StoragePaths.ARCHIVE_STAGING_PREFIX + UUID.randomUUID();
-            byte[] probe = {42};
-            writeStream(config, key, new java.io.ByteArrayInputStream(probe), probe.length, "STANDARD");
-            try (InputStream stream = openReadStream(config, key)) {
+            client.putObject(request -> request.bucket(bucket).key(key).storageClass(StorageClass.STANDARD),
+                    RequestBody.fromBytes(new byte[]{42}));
+            try (InputStream stream = client.getObject(request -> request.bucket(bucket).key(key))) {
                 if (stream.read() != 42 || stream.read() != -1) throw new IOException("S3 probe readback failed");
             } finally {
-                deleteFile(config, key);
+                client.deleteObject(request -> request.bucket(bucket).key(key));
             }
         }
     }

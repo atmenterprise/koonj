@@ -26,4 +26,7 @@ export const connectionService = {
   async testConnection(id: string, signal?: AbortSignal) {
     return (await apiClient.post<ConnectionHealthDTO>(`/connections/${id}/test`, undefined, { signal })).data
   },
+  async testDraft(payload: CreateConnectionRequest, signal?: AbortSignal) {
+    return (await apiClient.post<ConnectionHealthDTO>('/connections/test', payload, { signal })).data
+  },
 }

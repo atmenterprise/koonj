@@ -43,7 +43,7 @@ export interface StorageConnectionDTO extends ConnectionIdentity {
 }
 
 export interface ConnectionHealthDTO {
-  connectionId: string
+  connectionId: string | null
   healthy: boolean
   message: string
   capacity?: { totalBytes: number; usedBytes: number; availableBytes: number } | null

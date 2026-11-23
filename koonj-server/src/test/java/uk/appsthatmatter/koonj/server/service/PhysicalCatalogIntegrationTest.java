@@ -130,6 +130,9 @@ class PhysicalCatalogIntegrationTest {
         request(get("/api/v1/connections/{id}/status", source.getId()), operator, project).andExpect(status().isOk());
         request(get("/api/v1/connections"), operator, project).andExpect(status().isForbidden());
         request(post("/api/v1/connections/{id}/test", source.getId()), operator, project).andExpect(status().isForbidden());
+        request(post("/api/v1/connections/test").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("name", "Draft", "providerType", "LOCAL", "role", "BOTH",
+                        "basePathOrBucket", root.toString()))), operator, project).andExpect(status().isForbidden());
         request(get("/api/v1/connections/locations"), viewer, project).andExpect(status().isForbidden());
 
         request(get("/api/v1/admin/permissions"), admin, project).andExpect(status().isOk())
@@ -352,6 +355,26 @@ class PhysicalCatalogIntegrationTest {
             previouslyActive.forEach(connection -> connection.setActive(true));
             connections.saveAllAndFlush(previouslyActive);
         }
+    }
+
+    @Test
+    void testsSubmittedConnectionSettingsWithoutRegisteringAConnection() throws Exception {
+        String admin = token("draft-connection-admin", "KOONJ_ADMIN");
+        firstProject(admin);
+        String project = ProjectScope.LEGACY.toString();
+        long registered = connections.count();
+
+        request(post("/api/v1/connections/test").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("name", "Draft", "providerType", "LOCAL", "role", "BOTH",
+                        "basePathOrBucket", root.toString()))), admin, project)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.healthy").value(true));
+        request(post("/api/v1/connections/test").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("name", "Draft", "providerType", "LOCAL", "role", "BOTH",
+                        "basePathOrBucket", root.resolve("missing").toString()))), admin, project)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.healthy").value(false));
+
+        assertThat(connections.count()).isEqualTo(registered);
+        assertThat(root).isEmptyDirectory();
     }
 
     @Test

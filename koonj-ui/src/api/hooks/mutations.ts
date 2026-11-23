@@ -116,10 +116,10 @@ export function useDeleteConnection() {
 
 export function useTestConnection() {
   const { run } = useActivityNotifications()
-  return useMutation({ mutationFn: (id: string) => run({
+  return useMutation({ mutationFn: (settings: string | CreateConnectionRequest) => run({
     started: 'Testing connection',
     failed: 'Connection test failed',
     complete: health => ({ tone: health.healthy ? 'success' : 'error',
       title: health.healthy ? 'Connection test passed' : 'Connection test failed', detail: health.message }),
-  }, () => connectionService.testConnection(id)) })
+  }, () => typeof settings === 'string' ? connectionService.testConnection(settings) : connectionService.testDraft(settings)) })
 }

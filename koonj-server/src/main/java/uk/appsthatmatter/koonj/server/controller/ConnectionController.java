@@ -29,6 +29,13 @@ public class ConnectionController {
         return connections.create(request);
     }
 
+    @PostMapping("/test")
+    @Operation(summary = "Test a new storage connection", description = "Probe the submitted settings before registering a connection.")
+    @PreAuthorize(PermissionRules.STORAGE_MANAGE)
+    public ConnectionHealth testDraft(@Valid @RequestBody ConnectionRequest request) {
+        return connections.testDraft(request);
+    }
+
     @GetMapping({"", "/"})
     @Operation(summary = "List storage connections", description = "Return configured connections in name order with credential values masked.")
     @PreAuthorize(PermissionRules.STORAGE_MANAGE)

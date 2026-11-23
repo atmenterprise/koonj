@@ -136,16 +136,31 @@ public class ConnectionService {
     }
 
     public ConnectionHealth testConnection(UUID id) {
-        StorageConnection connection = get(id);
+        return probe(get(id));
+    }
+
+    public ConnectionHealth testDraft(ConnectionRequest request) {
+        var connection = new StorageConnection();
+        connection.setProjectId(ProjectScope.id());
+        applySettings(connection, request);
+        return probe(connection);
+    }
+
+    private ConnectionHealth probe(StorageConnection connection) {
         try {
             connectors.resolve(connection.getProviderType()).testConnection(connection);
-            return new ConnectionHealth(id, true, "Storage access verified");
+            return new ConnectionHealth(connection.getId(), true, "Storage access verified");
         } catch (IOException | RuntimeException failure) {
-            return new ConnectionHealth(id, false, StorageErrors.describe(failure));
+            return new ConnectionHealth(connection.getId(), false, StorageErrors.describe(failure));
         }
     }
 
     private ConnectionResponse save(StorageConnection connection, ConnectionRequest request) {
+        applySettings(connection, request);
+        return ConnectionResponse.from(connections.saveAndFlush(connection));
+    }
+
+    private void applySettings(StorageConnection connection, ConnectionRequest request) {
         ProviderType provider = request.providerType();
         String endpoint = optional(request.endpointUrl());
         String access = credential(request.accessKeyOrUsername(), connection.getAccessKeyOrUsername());
@@ -173,7 +188,6 @@ public class ConnectionService {
         connection.setSecretKeyOrPassword(secret);
         if (request.pathStyleAccessEnabled() != null) connection.setPathStyleAccessEnabled(request.pathStyleAccessEnabled());
         if (request.active() != null) connection.setActive(request.active());
-        return ConnectionResponse.from(connections.saveAndFlush(connection));
     }
 
     private static void validateEndpoint(String endpoint) {
