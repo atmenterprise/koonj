@@ -34,7 +34,8 @@ if ${UNINSTALL}; then
   echo "Uninstalling Koonj …"
   systemctl is-active --quiet koonj-server 2>/dev/null && systemctl stop koonj-server
   systemctl disable koonj-server 2>/dev/null || true
-  rm -f /etc/systemd/system/koonj-server.service /etc/nginx/conf.d/koonj.conf
+  systemctl disable --now koonj-notification-worker 2>/dev/null || true
+  rm -f /etc/systemd/system/koonj-server.service /etc/systemd/system/koonj-notification-worker.service /etc/nginx/conf.d/koonj.conf
   systemctl daemon-reload 2>/dev/null || true
   echo "Done. ${INSTALL_PREFIX} was NOT removed — delete manually if needed."
   exit 0
@@ -62,6 +63,7 @@ mkdir -p "${INSTALL_PREFIX}"/{bin,config,lib,web,logs,keycloak}
 
 echo "▸ Copying files …"
 [[ -f "${SCRIPT_DIR}/lib/koonj-server.jar" ]] && cp "${SCRIPT_DIR}/lib/koonj-server.jar" "${INSTALL_PREFIX}/lib/"
+[[ -f "${SCRIPT_DIR}/lib/koonj-notification-worker.jar" ]] && cp "${SCRIPT_DIR}/lib/koonj-notification-worker.jar" "${INSTALL_PREFIX}/lib/"
 [[ -d "${SCRIPT_DIR}/web" ]] && cp -r "${SCRIPT_DIR}/web/." "${INSTALL_PREFIX}/web/"
 cp "${SCRIPT_DIR}/bin/koonj-server.sh"  "${INSTALL_PREFIX}/bin/"
 cp "${SCRIPT_DIR}/bin/koonj-server.cmd" "${INSTALL_PREFIX}/bin/" 2>/dev/null || true
@@ -86,9 +88,9 @@ chown -R "${KOONJ_USER}:${KOONJ_GROUP}" "${INSTALL_PREFIX}" 2>/dev/null \
 
 if ${INSTALL_SYSTEMD}; then
   echo "▸ Installing systemd service …"
-  cp "${SCRIPT_DIR}/systemd/koonj-server.service" /etc/systemd/system/
+  cp "${SCRIPT_DIR}/systemd/koonj-server.service" "${SCRIPT_DIR}/systemd/koonj-notification-worker.service" /etc/systemd/system/
   [[ "${INSTALL_PREFIX}" != "/opt/koonj" ]] && \
-    sed -i "s|/opt/koonj|${INSTALL_PREFIX}|g" /etc/systemd/system/koonj-server.service
+    sed -i "s|/opt/koonj|${INSTALL_PREFIX}|g" /etc/systemd/system/koonj-server.service /etc/systemd/system/koonj-notification-worker.service
   systemctl daemon-reload; systemctl enable koonj-server
   echo "  ✓ Enabled. Start with: sudo systemctl start koonj-server"
 fi

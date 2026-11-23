@@ -139,7 +139,10 @@ public class FileTransferService {
                     List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE, plan, null);
             return jobs.execute(job, running -> {
                 FileMetadata current = file(id);
-                if (isLocal(current)) return;
+                if (isLocal(current)) {
+                    jobs.skipped(running, 1);
+                    return;
+                }
                 String currentKey = resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>());
                 if (!key.equals(currentKey)) throw new IOException("Archive reference changed while recall was queued");
                 ScannedFileInfo found = exact(endpoints.reader(), endpoints.source(), key)
@@ -248,7 +251,10 @@ public class FileTransferService {
         TransferPlan plan = job.getPlan();
         if (plan.interactiveFileId() != null) {
             FileMetadata current = file(plan.interactiveFileId());
-            if (isLocal(current)) return;
+            if (isLocal(current)) {
+                jobs.skipped(job, 1);
+                return;
+            }
             String key = plan.sourcePaths().getFirst();
             if (!key.equals(resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>()))
                     || !current.getRelativePath().equals(plan.restorePaths().get(key))) {

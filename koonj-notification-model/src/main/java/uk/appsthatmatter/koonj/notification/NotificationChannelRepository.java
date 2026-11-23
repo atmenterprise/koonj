@@ -1,0 +1,7 @@
+package uk.appsthatmatter.koonj.notification;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.UUID;
+
+public interface NotificationChannelRepository extends JpaRepository<NotificationChannel, UUID> {}

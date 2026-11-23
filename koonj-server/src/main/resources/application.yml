@@ -71,3 +71,11 @@ koonj:
       username: "${KOONJ_BASIC_AUTH_USERNAME:}"
       password: "${KOONJ_BASIC_AUTH_PASSWORD:}"
       role: "${KOONJ_BASIC_AUTH_ROLE:KOONJ_VIEWER}"
+  notifications:
+    limits:
+      cataloged-files: ${KOONJ_QUOTA_CATALOGED_FILES:0}
+      storage-connections: ${KOONJ_QUOTA_STORAGE_CONNECTIONS:0}
+      transfer-concurrency: ${KOONJ_QUOTA_TRANSFER_CONCURRENCY:0}
+      license-expires-at: "${KOONJ_LICENSE_EXPIRES_AT:}"
+      license-grace-ends-at: "${KOONJ_LICENSE_GRACE_ENDS_AT:}"
+      check-interval: ${KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL:1m}

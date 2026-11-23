@@ -6,22 +6,17 @@ import type { TransferJobDTO } from '../api/types'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { notificationPresentation } from '../shared/notifications/NotificationPopup'
 import { useAuth } from '../auth/AuthProvider'
+import { ProfileRoles } from '../auth/ProfileRoles'
+import { SettingsDialog } from '../modules/settings/SettingsDialog'
 import { usePermissions } from '../auth/WorkspacePermissions'
-import type { KoonjRole } from '../auth/keycloak'
 import type { Navigate } from '../shared/ui/feedback'
 import { useQueries } from '@tanstack/react-query'
 import { catalogMetadataOptions } from '../modules/catalog/catalogMetadata'
 import { catalogSearchResults } from '../modules/catalog/catalogSearchResults'
-import { Badge, Button, Icon, type IconName } from '../shared/ui/primitives'
+import { Button, Icon, type IconName } from '../shared/ui/primitives'
 
 type SearchPage = { path: string; title: string; icon: IconName }
 type Result = { title: string; detail: string; icon: IconName; href: string }
-
-const roleLabels: Record<KoonjRole, string> = {
-  KOONJ_ADMIN: 'Admin',
-  KOONJ_OPERATOR: 'Operator',
-  KOONJ_VIEWER: 'Viewer',
-}
 
 export const themes = [
   { id: 'classic', label: 'Classic', background: '#fcfcfc', accent: '#ffde59' },
@@ -229,7 +224,9 @@ function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (theme: Them
   </div>
 }
 
-function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
+function ProfileMenu({ theme, onThemeChange, onSettings }: {
+  theme: Theme; onThemeChange: (theme: Theme) => void; onSettings: () => void
+}) {
   const { user, logout } = useAuth()
   const { notify } = useActivityNotifications()
   const [pending, setPending] = useState(false)
@@ -237,15 +234,18 @@ function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t
   return <ToolbarPopover label="User profile" triggerClass="profile-trigger" panelClass="profile-popover"
     triggerContent={<><span className="profile-avatar"><Icon name="user" size={18} /></span>
       <span className="profile-name">{user.name}</span><Icon name="down" size={13} /></>}>
-    {() => <>
+    {close => <>
       <strong>{user.name}</strong>
       {user.email && <p>{user.email}</p>}
       <div className="profile-roles">
         <span className="popover-label">Workspace roles</span>
-        {user.roles.length ? <div>{user.roles.map(role => <Badge key={role} tone="yellow">{roleLabels[role]}</Badge>)}</div>
-          : <p>No roles assigned</p>}
+        <div><ProfileRoles roles={user.roles} /></div>
       </div>
       <ThemePicker theme={theme} onChange={onThemeChange} />
+      <Button variant="quiet" icon="settings" aria-haspopup="dialog" onClick={() => {
+        close()
+        onSettings()
+      }}>Settings</Button>
       <Button variant="quiet" icon="logout" disabled={pending} onClick={() => {
         setPending(true)
         void logout().catch(() => notify({ tone: 'error', title: 'Logout failed', detail: 'Try again.' }))
@@ -259,6 +259,7 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canViewAc
   title: string; pages: SearchPage[]; navigate: Navigate; theme: Theme; onThemeChange: (theme: Theme) => void; canViewActivity: boolean
   project: Project; projects: Project[]; onProjectSwitch: (id: string) => void
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const jobHistory = useTransferJobs(canViewActivity)
   const { notices, markRead, syncJobs } = useActivityNotifications()
   useEffect(() => {
@@ -267,7 +268,7 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canViewAc
   const jobs = canViewActivity ? jobHistory.data ?? [] : []
   const unread = notices.filter(notice => !notice.read).length
   const alerts = notices.slice().reverse()
-  return <header className="topbar">
+  return <><header className="topbar">
     <nav className="topbar-path" aria-label="Breadcrumb">
       <span title={project.name}>{project.name}</span><Icon name="chevron" size={14} />
       <strong aria-current="page">{title}</strong>
@@ -301,7 +302,9 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canViewAc
           }) : <p className="empty compact">No notifications yet.</p>}
         </div></>}
       </ToolbarPopover>
-      <ProfileMenu theme={theme} onThemeChange={onThemeChange} />
+      <ProfileMenu theme={theme} onThemeChange={onThemeChange} onSettings={() => setSettingsOpen(true)} />
     </div>
   </header>
+    {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+  </>
 }

@@ -17,6 +17,19 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    profiles: ["notifications"]
+    image: rabbitmq:4.2-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${KOONJ_RABBITMQ_USERNAME:-koonj}
+      RABBITMQ_DEFAULT_PASS: ${KOONJ_RABBITMQ_PASSWORD:-koonj_dev_password}
+      RABBITMQ_DEFAULT_VHOST: ${KOONJ_RABBITMQ_VHOST:-koonj}
+    ports:
+      - "127.0.0.1:${KOONJ_RABBITMQ_PORT:-5672}:5672"
+    volumes:
+      - koonj_rabbitmq_data:/var/lib/rabbitmq
+
   keycloak:
     build:
       context: ..
@@ -136,5 +149,6 @@ services:
           propagation: rslave
 
 volumes:
+  koonj_rabbitmq_data:
   koonj_pgdata18:
   localstack_data:

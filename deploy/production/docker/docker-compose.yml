@@ -4,7 +4,9 @@
 # Deploys the full Koonj stack:
 #   - PostgreSQL   (database)
 #   - Keycloak     (identity & access management)
+#   - RabbitMQ     (shared task broker)
 #   - koonj-server (API)
+#   - koonj-notification-worker (delivery)
 #   - koonj-ui     (Nginx + React SPA)
 #
 # Usage:
@@ -108,6 +110,12 @@ services:
       KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
       KOONJ_PROJECTS_AGENT_IDS: ${KOONJ_PROJECTS_AGENT_IDS:-00000000-0000-0000-0000-000000000001}
       KOONJ_DDL_AUTO: ${KOONJ_DDL_AUTO:-update}
+      KOONJ_QUOTA_CATALOGED_FILES: "${KOONJ_QUOTA_CATALOGED_FILES:-0}"
+      KOONJ_QUOTA_STORAGE_CONNECTIONS: "${KOONJ_QUOTA_STORAGE_CONNECTIONS:-0}"
+      KOONJ_QUOTA_TRANSFER_CONCURRENCY: "${KOONJ_QUOTA_TRANSFER_CONCURRENCY:-0}"
+      KOONJ_LICENSE_EXPIRES_AT: "${KOONJ_LICENSE_EXPIRES_AT:-}"
+      KOONJ_LICENSE_GRACE_ENDS_AT: "${KOONJ_LICENSE_GRACE_ENDS_AT:-}"
+      KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL: "${KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL:-1m}"
       KOONJ_AUTH_ISSUER_URI: "${KOONJ_KEYCLOAK_EXTERNAL_URL:?Set KOONJ_KEYCLOAK_EXTERNAL_URL in .env}/realms/koonj"
       KOONJ_AUTH_JWK_SET_URI: "http://keycloak:8080/realms/koonj/protocol/openid-connect/certs"
       KOONJ_CORS_ALLOWED_ORIGINS: ${KOONJ_CORS_ALLOWED_ORIGINS:-http://localhost}
@@ -133,6 +141,70 @@ services:
         limits:
           memory: ${KOONJ_SERVER_MEMORY:-2G}
       # Scale with: docker compose up -d --scale koonj-server=N
+    networks:
+      - koonj-internal
+
+  rabbitmq:
+    image: rabbitmq:4.2-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${KOONJ_RABBITMQ_USERNAME:-koonj}
+      RABBITMQ_DEFAULT_PASS: ${KOONJ_RABBITMQ_PASSWORD:?Set KOONJ_RABBITMQ_PASSWORD in .env}
+      RABBITMQ_DEFAULT_VHOST: ${KOONJ_RABBITMQ_VHOST:-koonj}
+    volumes:
+      - koonj_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+    networks:
+      - koonj-internal
+
+  koonj-notification-worker:
+    build:
+      context: ./notification-worker
+      dockerfile: Dockerfile.notification-worker
+    image: koonj-notification-worker:${KOONJ_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      KOONJ_DB_URL: "jdbc:postgresql://postgres:5432/${KOONJ_DB_NAME:-koonj}"
+      KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
+      KOONJ_DB_PASSWORD: ${KOONJ_DB_PASSWORD}
+      KOONJ_RABBITMQ_HOST: ${KOONJ_RABBITMQ_HOST:-rabbitmq}
+      KOONJ_RABBITMQ_PORT: ${KOONJ_RABBITMQ_PORT:-5672}
+      KOONJ_RABBITMQ_USERNAME: ${KOONJ_RABBITMQ_USERNAME:-koonj}
+      KOONJ_RABBITMQ_PASSWORD: ${KOONJ_RABBITMQ_PASSWORD}
+      KOONJ_RABBITMQ_VHOST: ${KOONJ_RABBITMQ_VHOST:-koonj}
+      KOONJ_RABBITMQ_SSL: ${KOONJ_RABBITMQ_SSL:-false}
+      KOONJ_NOTIFICATION_DB_POOL_SIZE: ${KOONJ_NOTIFICATION_DB_POOL_SIZE:-4}
+      KOONJ_NOTIFICATION_EMAIL_CONCURRENCY: ${KOONJ_NOTIFICATION_EMAIL_CONCURRENCY:-2}
+      KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY: ${KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY:-2}
+      KOONJ_NOTIFICATION_POLL_INTERVAL: ${KOONJ_NOTIFICATION_POLL_INTERVAL:-1s}
+      KOONJ_MAIL_MAX_ATTEMPTS: ${KOONJ_MAIL_MAX_ATTEMPTS:-3}
+      KOONJ_MAIL_RETRY_DELAY: ${KOONJ_MAIL_RETRY_DELAY:-30s}
+      KOONJ_MAIL_HOST: "${KOONJ_MAIL_HOST:-}"
+      KOONJ_MAIL_PORT: "${KOONJ_MAIL_PORT:-587}"
+      KOONJ_MAIL_USERNAME: "${KOONJ_MAIL_USERNAME:-}"
+      KOONJ_MAIL_PASSWORD: "${KOONJ_MAIL_PASSWORD:-}"
+      KOONJ_MAIL_FROM: "${KOONJ_MAIL_FROM:-}"
+      KOONJ_MAIL_TLS: "${KOONJ_MAIL_TLS:-STARTTLS}"
+      KOONJ_MAIL_TIMEOUT: "${KOONJ_MAIL_TIMEOUT:-10s}"
+      KOONJ_WEBHOOK_CONNECT_TIMEOUT: "${KOONJ_WEBHOOK_CONNECT_TIMEOUT:-5s}"
+      KOONJ_WEBHOOK_REQUEST_TIMEOUT: "${KOONJ_WEBHOOK_REQUEST_TIMEOUT:-10s}"
+      KOONJ_WEBHOOK_MAX_ATTEMPTS: "${KOONJ_WEBHOOK_MAX_ATTEMPTS:-3}"
+      KOONJ_WEBHOOK_RETRY_DELAY: "${KOONJ_WEBHOOK_RETRY_DELAY:-1s}"
+    deploy:
+      resources:
+        limits:
+          memory: ${KOONJ_NOTIFICATION_WORKER_MEMORY:-512M}
     networks:
       - koonj-internal
 
@@ -239,6 +311,7 @@ services:
       - koonj-internal
 
 volumes:
+  koonj_rabbitmq_data:
   koonj_pgdata:
     driver: local
 

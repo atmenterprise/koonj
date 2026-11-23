@@ -71,6 +71,7 @@
                 <include>config/application-production.yml</include>
                 <include>nginx/koonj.conf</include>
                 <include>systemd/koonj-server.service</include>
+                <include>systemd/koonj-notification-worker.service</include>
             </includes>
             <lineEnding>unix</lineEnding>
         </fileSet>
@@ -116,12 +117,21 @@
             <lineEnding>unix</lineEnding>
         </file>
         <file>
+            <source>../deploy/migrations/notifications.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
             <source>../docs/DEPLOYMENT-GUIDE.md</source>
             <outputDirectory>/</outputDirectory>
         </file>
         <file>
             <source>../deploy/production/docker/Dockerfile.server</source>
             <outputDirectory>docker/server</outputDirectory>
+        </file>
+        <file>
+            <source>../deploy/production/docker/Dockerfile.notification-worker</source>
+            <outputDirectory>docker/notification-worker</outputDirectory>
         </file>
         <file>
             <source>../deploy/production/docker/Dockerfile.ui</source>
@@ -149,6 +159,26 @@
     </files>
 
     <dependencySets>
+        <dependencySet>
+            <outputDirectory>docker/notification-worker</outputDirectory>
+            <includes>
+                <include>uk.appsthatmatter:koonj-notification-worker</include>
+            </includes>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useTransitiveDependencies>false</useTransitiveDependencies>
+            <useStrictFiltering>true</useStrictFiltering>
+            <outputFileNameMapping>koonj-notification-worker.jar</outputFileNameMapping>
+        </dependencySet>
+        <dependencySet>
+            <outputDirectory>on-premise/lib</outputDirectory>
+            <includes>
+                <include>uk.appsthatmatter:koonj-notification-worker</include>
+            </includes>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useTransitiveDependencies>false</useTransitiveDependencies>
+            <useStrictFiltering>true</useStrictFiltering>
+            <outputFileNameMapping>koonj-notification-worker.jar</outputFileNameMapping>
+        </dependencySet>
         <dependencySet>
             <outputDirectory>docker/server</outputDirectory>
             <includes>

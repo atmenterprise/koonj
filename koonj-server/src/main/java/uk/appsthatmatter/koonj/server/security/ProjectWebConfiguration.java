@@ -43,6 +43,8 @@ public class ProjectWebConfiguration implements WebMvcConfigurer {
             @Override
             public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
                 if (!(request.getUserPrincipal() instanceof Authentication auth) || "OPTIONS".equals(request.getMethod())) return true;
+                String path = request.getRequestURI().substring(request.getContextPath().length());
+                if (path.startsWith("/api/v1/notifications/") && !isAgent(auth)) return true;
                 UUID requested = parse(request.getHeader(ProjectScope.HEADER));
                 UUID project;
                 if (request.getAttribute(ProjectScope.ATTRIBUTE) instanceof UUID) return true;

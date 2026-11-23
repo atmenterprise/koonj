@@ -6,6 +6,7 @@ import type { Project } from '../api/services/projectService'
 import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { usePermissions } from '../auth/WorkspacePermissions'
+import { useAuth } from '../auth/AuthProvider'
 import { Button, Icon } from '../shared/ui/primitives'
 import { LoadingRows } from '../shared/ui/feedback'
 
@@ -43,10 +44,11 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
     return themes.find(option => option.id === preference)?.id ?? 'classic'
   })
   const { can } = usePermissions()
+  const { hasRole } = useAuth()
   const { notify } = useActivityNotifications()
   const deniedLocation = useRef<string | undefined>(undefined)
   const canViewActivity = can('ACTIVITY_VIEW')
-  const canView = (item: typeof pages[number]) => !item.access.length || item.access.some(can)
+  const canView = (item: typeof pages[number]) => !item.access.length || item.access.some(can) || (item.path === '/admin' && hasRole('KOONJ_ADMIN'))
   const [path, query] = location.split('?')
   const params = new URLSearchParams(query)
   const page = pages.find(item => item.path.toLowerCase() === path.toLowerCase().replace(/\/+$/, '')) ?? pages[0]

@@ -14,13 +14,17 @@
     <url>https://github.com/atmenterprise/koonj</url>
     <modules>
         <module>koonj-ui</module>
+        <module>koonj-notification-model</module>
         <module>koonj-server</module>
+        <module>koonj-notification-worker</module>
         <module>koonj-fuse</module>
         <module>koonj-assembly</module>
     </modules>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
+        <spring-boot.version>3.5.5</spring-boot.version>
+        <lombok.version>1.18.40</lombok.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>
     </properties>

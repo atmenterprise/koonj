@@ -27,6 +27,8 @@ final class TransferBatch implements AutoCloseable {
     private int active;
     private long activeBytes;
     private int processed;
+    private String firstFailedPath;
+    private String firstFailureReason;
     private long transferred;
     private long byteAdjustment;
 
@@ -92,7 +94,13 @@ final class TransferBatch implements AutoCloseable {
             if (result.error() == null) {
                 transferred += result.bytes();
                 byteAdjustment += result.bytes() - result.estimatedBytes();
-            } else errors.add(result.path() + ": " + result.error());
+            } else {
+                if (errors.isEmpty()) {
+                    firstFailedPath = result.path();
+                    firstFailureReason = result.error();
+                }
+                errors.add(result.path() + ": " + result.error());
+            }
             if (processed == PROGRESS_BATCH || active == 0) saveProgress();
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
@@ -105,11 +113,13 @@ final class TransferBatch implements AutoCloseable {
 
     private void saveProgress() {
         if (processed == 0) return;
-        jobs.transferProgress(job, processed, transferred, byteAdjustment, errors);
+        jobs.transferProgress(job, processed, transferred, byteAdjustment, errors, firstFailedPath, firstFailureReason);
         processed = 0;
         transferred = 0;
         byteAdjustment = 0;
         errors.clear();
+        firstFailedPath = null;
+        firstFailureReason = null;
     }
 
     private void drain() {

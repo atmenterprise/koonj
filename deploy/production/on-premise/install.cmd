@@ -35,6 +35,7 @@ echo ============================================================
 for %%d in (bin config lib web logs keycloak) do if not exist "%INSTALL_PREFIX%\%%d" mkdir "%INSTALL_PREFIX%\%%d"
 
 if exist "%SCRIPT_DIR%lib\koonj-server.jar" copy /Y "%SCRIPT_DIR%lib\koonj-server.jar" "%INSTALL_PREFIX%\lib\" >nul
+if exist "%SCRIPT_DIR%lib\koonj-notification-worker.jar" copy /Y "%SCRIPT_DIR%lib\koonj-notification-worker.jar" "%INSTALL_PREFIX%\lib\" >nul
 if exist "%SCRIPT_DIR%web\" xcopy /E /Q /Y "%SCRIPT_DIR%web\*" "%INSTALL_PREFIX%\web\" >nul
 copy /Y "%SCRIPT_DIR%bin\koonj-server.cmd" "%INSTALL_PREFIX%\bin\" >nul
 copy /Y "%SCRIPT_DIR%bin\koonj-server.sh"  "%INSTALL_PREFIX%\bin\" >nul 2>&1

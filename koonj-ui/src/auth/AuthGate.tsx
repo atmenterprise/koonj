@@ -4,6 +4,7 @@ import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { ApiPageState } from '../shared/ui/ApiPageState'
 import { Button, Icon } from '../shared/ui/primitives'
 import { useAuth } from './AuthProvider'
+import { EmailNotificationPreferencesDisclosure } from './EmailNotificationPreferences'
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const auth = useAuth()
@@ -43,6 +44,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <span className="brand-mark"><Icon name="bird" size={28} /></span>
       <h1 id="auth-title">Welcome to Koonj</h1>
       {!issue && <p>Sign in to browse storage, archive files, and track transfers.</p>}
+      {awaitingRole && <EmailNotificationPreferencesDisclosure subject={auth.user.id} />}
       <div className="row-actions auth-actions">
         {unavailable ? <Button variant="primary" icon="retry" onClick={() => window.location.reload()}>Try again</Button>
           : awaitingRole ? <Button icon="logout" disabled={redirecting} onClick={() => void redirect(auth.logout)}>Logout</Button>

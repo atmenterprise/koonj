@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import uk.appsthatmatter.koonj.server.dto.StorageUsage;
+import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.FileMetadata;
 import uk.appsthatmatter.koonj.server.entity.StorageState;
 
@@ -15,6 +16,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface FileMetadataRepository extends JpaRepository<FileMetadata, UUID>, JpaSpecificationExecutor<FileMetadata> {
+    long countByEntryType(EntryType entryType);
+
     @Modifying
     @Query("update FileMetadata f set f.storageState = :state, f.errorMessage = :error where f.storageState in :active")
     int failInterrupted(StorageState state, String error, Collection<StorageState> active);

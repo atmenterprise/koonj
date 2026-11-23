@@ -8,7 +8,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import uk.appsthatmatter.koonj.server.entity.StorageState;
 import uk.appsthatmatter.koonj.server.entity.JobEvent.Level;
+import uk.appsthatmatter.koonj.server.entity.TransferJob;
 import uk.appsthatmatter.koonj.server.entity.TransferJob.Status;
+import uk.appsthatmatter.koonj.notification.NotificationEvent;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.TransferJobRepository;
 
@@ -36,8 +38,11 @@ public class InterruptedJobRecovery implements ApplicationRunner {
         String reason = "Interrupted by server restart. Resubmit to retry.";
         Instant finished = Instant.now();
         var active = List.of(Status.PENDING, Status.RUNNING, Status.PAUSING, Status.STOPPING);
-        for (var jobId : jobs.idsWithStatus(active)) jobService.log(jobId, finished, Level.ERROR, null, reason);
+        var interrupted = jobs.idsWithStatus(active);
+        for (var jobId : interrupted) jobService.log(jobId, finished, Level.ERROR, null, reason);
         jobs.finishInterrupted(Status.FAILED, finished, reason, active);
+        jobs.findAllById(interrupted).stream().filter(job -> job.getOperation() != TransferJob.Operation.SCAN)
+                .forEach(job -> jobService.publishNotification(NotificationEvent.Type.TRANSFER_FAILED, job, null, reason));
         String legacyReason = "Paused job has no verified owner. Resubmit to retry.";
         for (var job : jobs.findByStatusAndOwnerSubjectIsNull(Status.PAUSED)) {
             job.setStatus(Status.FAILED);

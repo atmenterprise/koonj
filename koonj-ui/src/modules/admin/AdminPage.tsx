@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { usePermissions } from '../../auth/WorkspacePermissions'
+import { useAuth } from '../../auth/AuthProvider'
 import { RolePermissionSettings } from './RolePermissionSettings'
 import { adminService, type TelemetrySignal } from '../../api/services/adminService'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
@@ -7,6 +8,7 @@ import type { Navigate } from '../../shared/ui/feedback'
 import { Badge, Icon, Metric, bytes, count, duration, time } from '../../shared/ui/primitives'
 import { IntegrationSettings } from './IntegrationSettings'
 import { ProjectSettings } from './ProjectSettings'
+import { NotificationSettings } from './NotificationSettings'
 
 const sections = [
   { id: 'servers', title: 'Servers', icon: 'server', permission: 'OBSERVABILITY_VIEW' },
@@ -15,6 +17,7 @@ const sections = [
   { id: 'mcp', title: 'MCP servers', icon: 'layers', permission: 'INTEGRATIONS_MANAGE' },
   { id: 'projects', title: 'Projects', icon: 'folder', permission: 'PROJECTS_MANAGE' },
   { id: 'permissions', title: 'Permissions', icon: 'check', permission: 'PERMISSIONS_MANAGE' },
+  { id: 'notifications', title: 'Notifications & alerts', icon: 'bell', permission: null },
 ] as const
 
 const componentLabels: Record<string, string> = {
@@ -99,7 +102,8 @@ export default function AdminPage({ section, navigate, projectId, refreshMembers
   section: string | null; navigate: Navigate; projectId: string; refreshMemberships: () => void
 }) {
   const { can } = usePermissions()
-  const available = sections.filter(item => can(item.permission))
+  const { hasRole } = useAuth()
+  const available = sections.filter(item => item.permission ? can(item.permission) : hasRole('KOONJ_ADMIN'))
   const active = available.find(item => item.id === section) ?? available[0]
   if (!active) return null
   return <>
@@ -114,6 +118,7 @@ export default function AdminPage({ section, navigate, projectId, refreshMembers
     {active.id === 'telemetry' && <Observability />}
     {active.id === 'api' && <IntegrationSettings key="api" kind="API" />}
     {active.id === 'permissions' && <RolePermissionSettings />}
+    {active.id === 'notifications' && <NotificationSettings />}
     {active.id === 'projects' && <ProjectSettings projectId={projectId} refreshMemberships={refreshMemberships} />}
     {active.id === 'mcp' && <IntegrationSettings key="mcp" kind="MCP" />}
   </>

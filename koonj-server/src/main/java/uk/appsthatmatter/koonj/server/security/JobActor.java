@@ -24,6 +24,14 @@ public final class JobActor {
         return "basic:" + authentication.getName();
     }
 
+    public static String verifiedEmail() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken token)
+                || !Boolean.TRUE.equals(token.getToken().getClaims().get("email_verified"))) return null;
+        Object email = token.getToken().getClaims().get("email");
+        return email instanceof String value && value.length() <= 320 && !value.isBlank() ? value : null;
+    }
+
     public static String current() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken token) {
