@@ -1,7 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 const paths = {
-  bird: 'M2 5c5 0 8 2 10 5l3-4 7-2-3 5 3 3-5 1-4 5-6 2 2-5C6 13 3 10 2 5Z',
   home: 'm3 10 9-7 9 7v10H3z M9 20v-7h6v7',
   folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
   activity: 'M3 12h4l3-8 4 16 3-8h4',

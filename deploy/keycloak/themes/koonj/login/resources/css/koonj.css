@@ -68,8 +68,8 @@
 
 #kc-header-wrapper::before {
   display: block;
-  width: 39px;
-  height: 39px;
+  width: 56px;
+  height: 56px;
   margin: 0 auto 10px;
   background: url('../img/koonj-mark.svg') center / contain no-repeat;
   content: '';
