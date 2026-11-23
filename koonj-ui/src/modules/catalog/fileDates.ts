@@ -1,10 +1,13 @@
-const millisecondsPerDay = 86_400_000
+import type { TemperaturePolicy } from '../../api/services/managementService'
 
-export function temperatureOf(modified?: string | null) {
+const millisecondsPerDay = 86_400_000
+const defaultTemperaturePolicy: TemperaturePolicy = { hotDays: 15, coldDays: 30 }
+
+export function temperatureOf(modified?: string | null, policy = defaultTemperaturePolicy, now = Date.now()) {
   const time = Date.parse(modified ?? '')
   if (!Number.isFinite(time)) return undefined
-  const age = (Date.now() - time) / millisecondsPerDay
-  return age < 15 ? 'HOT' : age < 30 ? 'WARM' : 'COLD'
+  const age = (now - time) / millisecondsPerDay
+  return age < policy.hotDays ? 'HOT' : age < policy.coldDays ? 'WARM' : 'COLD'
 }
 
 export function fileAge(created?: string | null, modified?: string | null, now = Date.now()) {

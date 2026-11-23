@@ -11,7 +11,7 @@ import java.util.UUID;
 
 public interface CatalogFavoriteRepository extends JpaRepository<CatalogFavorite, UUID> {
     @EntityGraph(attributePaths = "connection")
-    List<CatalogFavorite> findByAccountSubjectOrderByCreatedAtDescIdDesc(String accountSubject);
+    List<CatalogFavorite> findByAccountSubjectAndConnectionProjectIdOrderByCreatedAtDescIdDesc(String accountSubject, UUID projectId);
 
     Optional<CatalogFavorite> findByAccountSubjectAndConnectionIdAndScopeAndPath(
             String accountSubject, UUID connectionId, Scope scope, String path);

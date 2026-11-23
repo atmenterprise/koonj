@@ -1,6 +1,8 @@
 package uk.appsthatmatter.koonj.server.repository;
 
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -14,12 +16,22 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface TransferJobRepository extends JpaRepository<TransferJob, UUID> {
+    Page<TransferJob> findByProjectIdAndOwnerSubject(UUID projectId, String ownerSubject, Pageable page);
+    Optional<TransferJob> findByIdAndProjectId(UUID id, UUID projectId);
+    Optional<TransferJob> findByIdAndProjectIdAndOwnerSubject(UUID id, UUID projectId, String ownerSubject);
+    boolean existsByIdAndProjectIdAndOwnerSubject(UUID id, UUID projectId, String ownerSubject);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select j from TransferJob j where j.id = :id")
     Optional<TransferJob> lock(UUID id);
 
     List<TransferJob> findBySourceConnectionIdAndOperationAndStatusIn(UUID id, TransferJob.Operation operation,
                                                                      Collection<TransferJob.Status> statuses);
+
+    boolean existsBySourceConnectionIdAndOperationAndStatusIn(UUID id, TransferJob.Operation operation,
+                                                               Collection<TransferJob.Status> statuses);
+
+    List<TransferJob> findByStatusAndOwnerSubjectIsNull(TransferJob.Status status);
 
     @Query("select j.id from TransferJob j where j.status in :statuses")
     List<UUID> idsWithStatus(Collection<TransferJob.Status> statuses);

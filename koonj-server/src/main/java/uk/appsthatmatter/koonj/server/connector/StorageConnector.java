@@ -17,6 +17,10 @@ public interface StorageConnector {
     }
 
     default boolean objectStorage() { return false; }
+    void checkConnectivity(StorageConnection config) throws IOException;
+    default Optional<StorageCapacity> capacity(StorageConnection config) throws IOException {
+        return Optional.empty();
+    }
     void testConnection(StorageConnection config) throws IOException;
     List<ScannedFileInfo> listFiles(StorageConnection config, String subPath) throws IOException;
     default void visitFiles(StorageConnection config, String subPath, Consumer<ScannedFileInfo> visitor) throws IOException {

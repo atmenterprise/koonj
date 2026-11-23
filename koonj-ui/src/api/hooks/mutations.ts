@@ -4,11 +4,13 @@ import { catalogService } from '../services/catalogService'
 import { connectionService } from '../services/connectionService'
 import { transferService } from '../services/transferService'
 import type { CreateConnectionRequest, TransferJobDTO } from '../types'
+import { count } from '../../shared/ui/primitives'
 import { jobHistoryKey, queryKeys } from './queries'
 
-async function invalidateJobAndCatalog(client: QueryClient, accepted: TransferJobDTO) {
+async function invalidateJobsAndCatalog(client: QueryClient, accepted: TransferJobDTO[]) {
+  const ids = new Set(accepted.map(job => job.id))
   client.setQueryData<TransferJobDTO[]>(jobHistoryKey, previous =>
-    [accepted, ...(previous ?? []).filter(job => job.id !== accepted.id)])
+    [...accepted, ...(previous ?? []).filter(job => !ids.has(job.id))])
 
   await Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.files }),
@@ -19,12 +21,12 @@ async function invalidateJobAndCatalog(client: QueryClient, accepted: TransferJo
 
 export const archiveMutationOptions = (client: QueryClient, submit = transferService.archiveFiles) => mutationOptions({
   mutationFn: (payload: Parameters<typeof transferService.archiveFiles>[0]) => submit(payload),
-  onSuccess: job => invalidateJobAndCatalog(client, job),
+  onSuccess: job => invalidateJobsAndCatalog(client, [job]),
 })
 
 export const recallMutationOptions = (client: QueryClient, submit = transferService.recallFiles) => mutationOptions({
   mutationFn: (payload: Parameters<typeof transferService.recallFiles>[0]) => submit(payload),
-  onSuccess: job => invalidateJobAndCatalog(client, job),
+  onSuccess: job => invalidateJobsAndCatalog(client, [job]),
 })
 
 export function useArchiveMutation() {
@@ -60,7 +62,26 @@ export function useScanMutation() {
   const client = useQueryClient()
   const { runJob } = useActivityNotifications()
   return useMutation({ mutationFn: (id: string) => runJob('Scan', () => catalogService.triggerScan(id)),
-    onSuccess: job => invalidateJobAndCatalog(client, job) })
+    onSuccess: job => invalidateJobsAndCatalog(client, [job]) })
+}
+
+export function useScanSourcesMutation() {
+  const client = useQueryClient()
+  const { run } = useActivityNotifications()
+  return useMutation({
+    mutationFn: () => run({
+      started: 'Queuing source scans',
+      failed: 'Could not queue source scans',
+      complete: ({ jobs, existingScanCount }) => ({
+        tone: jobs.length ? 'success' : 'info',
+        title: jobs.length ? `${count(jobs.length)} source ${jobs.length === 1 ? 'scan' : 'scans'} queued`
+          : existingScanCount ? 'Source scans are already queued or active' : 'No active sources to scan',
+        detail: jobs.length && existingScanCount ? `${count(existingScanCount)} already queued or active.` : undefined,
+      }),
+    }, () => catalogService.scanSources()),
+    onSuccess: ({ jobs }) => jobs.length ? invalidateJobsAndCatalog(client, jobs)
+      : client.invalidateQueries({ queryKey: queryKeys.jobs }),
+  })
 }
 
 export function useSaveConnection() {

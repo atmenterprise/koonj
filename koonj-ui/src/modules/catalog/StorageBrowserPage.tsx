@@ -1,7 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useScanMutation } from '../../api/hooks/mutations'
-import { useActiveArchives, useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../../api/hooks/queries'
+import { useActiveArchives, useCatalogSnapshot, useCatalogLocations, useTemperaturePolicy, useTransferJobs } from '../../api/hooks/queries'
 import { folderTree, isActiveJob, isObjectStorage, stateLabels, type FolderNode } from '../../api/mappers'
 import type { CatalogMetadataTarget, ProviderType } from '../../api/types'
 import { useAuth } from '../../auth/AuthProvider'
@@ -15,7 +15,7 @@ import { catalogColumns, compareCatalogValues, type CatalogColumn, type CatalogS
 import { BulkMetadataDialog } from './MetadataForm'
 import { folderTotals, indexFolderContents } from './folderContents'
 import { temperatureOf } from './fileDates'
-import { planTransfers, transferTargets, type TransferPlan } from './transferSelection'
+import { planTransfers, type TransferPlan } from './transferSelection'
 import { SymlinkTarget } from './SymlinkTarget'
 import { TransferDialog, type CatalogTransferAction } from './TransferDialog'
 
@@ -90,6 +90,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   const { hasRole } = useAuth()
   const canTransfer = hasRole('KOONJ_ADMIN') || hasRole('KOONJ_OPERATOR')
   const connections = useCatalogLocations()
+  const temperaturePolicy = useTemperaturePolicy().data
   const endpoints = connections.data ?? []
   const [endpointId, setEndpointId] = useState(initialConnection)
   const [requestedFolder, setFolder] = useState<string>()
@@ -105,7 +106,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
   const [editingSelection, setEditingSelection] = useState(false)
   const [transferRequest, setTransferRequest] = useState<{
     action: CatalogTransferAction
-    plan: TransferPlan
+    plans: TransferPlan[]
     selectedItems: CatalogMetadataTarget[]
     selectedLocation: string
   }>()
@@ -163,7 +164,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
         case 'size': return entry.kind === 'folder' ? totalsByFolder.get(entry.node.prefix)?.sizeBytes : file && (file.entryType === 'SYMLINK' ? 0 : file.sizeBytes)
         case 'state': return file ? stateLabels[file.storageState] : undefined
         case 'temperature': {
-          const temperature = temperatureOf(file?.lastModifiedAt ?? null)
+          const temperature = temperatureOf(file?.lastModifiedAt, temperaturePolicy)
           return temperature ? { COLD: 0, WARM: 1, HOT: 2 }[temperature] : undefined
         }
         case 'modified': return file?.lastModifiedAt ? Date.parse(file.lastModifiedAt) : undefined
@@ -179,7 +180,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
     return entries.map(entry => ({ entry, value: sortValue(entry) }))
       .sort((left, right) => compareCatalogValues(left.value, right.value, direction))
       .map(({ entry }) => entry)
-  }, [catalog, index, sort, totalsByFolder])
+  }, [catalog, index, sort, totalsByFolder, temperaturePolicy])
   const ordered = useMemo(() => orderContents(folder), [orderContents, folder])
   const total = ordered.length
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -199,11 +200,11 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
     return rows
   }, [pageEntries, orderContents, expandedFolders])
   const segments = folder.split('/').filter(Boolean)
-  const currentFolder = catalog.foldersByPath.get(folder)
+  const wholeFolderSelected = selection.has(folder)
   const [selected, selectedFolders] = useMemo(() => {
     const selectedFiles = []
     const selectedFolders = []
-    if (currentFolder && selection.has(currentFolder.prefix)) selectedFolders.push(currentFolder)
+    if (wholeFolderSelected) selectedFolders.push({ prefix: folder, name: locationName, children: [] })
     if (selection.size) {
       for (const entry of visible) {
         if (!selection.has(entry.key)) continue
@@ -212,7 +213,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
       }
     }
     return [selectedFiles, selectedFolders] as const
-  }, [visible, selection, currentFolder])
+  }, [visible, selection, wholeFolderSelected, folder, locationName])
   const selectedTargets: CatalogMetadataTarget[] = [...selected.map(file => ({ scope: 'FILE' as const, path: file.relativePath })),
     ...selectedFolders.map(node => ({ scope: 'FOLDER' as const, path: node.prefix }))]
   const inspectedFolder = inspectedId ? catalog.foldersByPath.get(inspectedId) : undefined
@@ -224,11 +225,8 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
     [selectedEndpoint, endpoints, selected, selectedFolders, files])
   const inspectorPlans = useMemo(() => planTransfers(selectedEndpoint, endpoints, inspected ? [inspected] : [],
     inspectedFolder ? [inspectedFolder] : [], files), [selectedEndpoint, endpoints, inspected, inspectedFolder, files])
-  const targets = transferRequest ? transferTargets(transferRequest.action, transferRequest.plan.source, endpoints)
-    .filter(target => !transferRequest.plan.destinationId || target.id === transferRequest.plan.destinationId) : []
-  const itemKeys = pageEntries.map(entry => entry.key)
-  const wholeFolderSelected = !!currentFolder && selection.has(currentFolder.prefix)
-
+  const archivePlan = plans.archive
+  const inspectorArchivePlan = inspectorPlans.archive
   function favoriteButton(target: CatalogMetadataTarget, name: string) {
     if (!selectedEndpoint) return null
     const item = { ...target, connectionId: selectedEndpoint.id }
@@ -246,10 +244,10 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
     })
   }
 
-  function startTransfer(action: CatalogTransferAction, plan: TransferPlan | undefined, selectedItems: CatalogMetadataTarget[]) {
-    if (!plan || !selectedEndpoint) return
+  function startTransfer(action: CatalogTransferAction, plans: TransferPlan[], selectedItems: CatalogMetadataTarget[]) {
+    if (!plans.length || !selectedEndpoint) return
     setInspectedId(undefined)
-    setTransferRequest({ action, plan, selectedItems, selectedLocation: selectedEndpoint.name })
+    setTransferRequest({ action, plans, selectedItems, selectedLocation: selectedEndpoint.name })
   }
 
   function toggleFolder(prefix: string) {
@@ -369,10 +367,6 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   {archiveIndicators.folderPaths.has(folder) && <ArchiveSpinner />}
                 </div>
               </div>
-              {canTransfer && currentFolder && !!locationTotals?.files && <Button icon="folder" aria-pressed={wholeFolderSelected}
-                onClick={() => setSelection(wholeFolderSelected ? new Set() : new Set([currentFolder.prefix]))}>
-                {wholeFolderSelected ? 'Folder selected' : 'Select entire folder'}
-              </Button>}
               <div className="catalog-location-tools">
                 {locationTotals && <dl className="catalog-location-totals" aria-label="Catalog totals including subfolders">
                   <div><dt>Total size</dt><dd>{bytes(locationTotals.sizeBytes)}</dd></div>
@@ -389,9 +383,11 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
             <div className="catalog-table catalog-table-tags" role="table" aria-label="Catalog folders and files"
               aria-rowcount={visible.length + 1}>
               <div className="catalog-row catalog-table-header" role="row" aria-rowindex={1}>
-                <span role="columnheader"><input type="checkbox" aria-label="Select all items on this page"
-                  disabled={!canTransfer || wholeFolderSelected || !itemKeys.length} checked={itemKeys.length > 0 && itemKeys.every(key => selection.has(key))}
-                  onChange={event => setSelection(event.target.checked ? new Set(itemKeys) : new Set())} /></span>
+                <span role="columnheader"><input type="checkbox" aria-label="Select all files and folders in this location"
+                  title="Select all items, including other pages and subfolders"
+                  ref={input => { if (input) input.indeterminate = !wholeFolderSelected && selection.size > 0 }}
+                  disabled={!canTransfer || !total} checked={wholeFolderSelected}
+                  onChange={event => setSelection(event.target.checked ? new Set([folder]) : new Set())} /></span>
                 {(Object.keys(catalogColumns) as CatalogColumn[]).map(column => {
                   const direction = sort?.column === column ? sort.direction : undefined
                   return <span role="columnheader" key={column} aria-sort={direction} className={`catalog-column-${column}`}>
@@ -446,7 +442,7 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
                   }
                   const { file } = entry
                   const stateLabel = stateLabels[file.storageState]
-                  const temperature = temperatureOf(file.lastModifiedAt)
+                  const temperature = temperatureOf(file.lastModifiedAt, temperaturePolicy)
                   const storageClass = file.s3StorageClass
                   const archived = file.storageState === 'ARCHIVED'
                   const symlink = file.entryType === 'SYMLINK'
@@ -503,25 +499,27 @@ export default function StorageBrowserPage({ initialConnection, initialEntry, in
         </section>
       </div>}
     {canTransfer && selectedTargets.length > 0 && <div className="bulk-bar" aria-label="Selection actions">
-      <strong>{wholeFolderSelected ? 'Entire folder selected' : `${count(selectedTargets.length)} selected`}</strong>
+      <strong>{wholeFolderSelected ? 'All files and folders selected' : `${count(selectedTargets.length)} selected`}</strong>
       <Button icon="close" aria-label="Clear selection" onClick={() => setSelection(new Set())} />
-      <Button variant="primary" icon="layers" onClick={() => setEditingSelection(true)}>Edit metadata</Button>
-      {plans.archive && <Button icon="upload" onClick={() => startTransfer('archive', plans.archive, selectedTargets)}>Archive to S3</Button>}
-      {plans.recall && <Button icon="download" onClick={() => startTransfer('recall', plans.recall, selectedTargets)}>Recall to Source</Button>}
+      {(!wholeFolderSelected || folder) && <Button variant="primary" icon="layers" onClick={() => setEditingSelection(true)}>Edit metadata</Button>}
+      {archivePlan && <Button icon="upload" onClick={() => startTransfer('archive', [archivePlan], selectedTargets)}>Archive to S3</Button>}
+      {plans.recall.length > 0 && <Button icon="download" onClick={() => startTransfer('recall', plans.recall, selectedTargets)}>Recall to Source</Button>}
+      {!archivePlan && !plans.recall.length && <span>No eligible files for archive or recall</span>}
     </div>}
     {selectedEndpoint && inspectedTarget && <FileInspector key={inspectedId} file={inspected} target={inspectedTarget}
       favoriteControl={favoriteButton(inspectedTarget, inspected?.fileName ?? inspectedFolder?.name ?? inspectedTarget.path)}
       folderDetails={inspectedFolder ? folderSummary(totalsByFolder.get(inspectedFolder.prefix)) : undefined}
-      location={selectedEndpoint} connections={endpoints} navigate={navigate} metadata={annotations.data ? metadataFor(index, inspectedTarget) : undefined}
+      location={selectedEndpoint} connections={endpoints} navigate={navigate} temperaturePolicy={temperaturePolicy}
+      metadata={annotations.data ? metadataFor(index, inspectedTarget) : undefined}
       metadataError={annotations.error} onRetry={() => void annotations.refetch()} writable={canTransfer}
       onClose={() => setInspectedId(undefined)} onOpen={inspectedFolder && inspectedFolder.prefix !== folder ? () => openFolder(inspectedFolder.prefix) : undefined}
-      onArchive={canTransfer && inspectorPlans.archive ? () => startTransfer('archive', inspectorPlans.archive, [inspectedTarget]) : undefined}
-      onRecall={canTransfer && inspectorPlans.recall ? () => startTransfer('recall', inspectorPlans.recall, [inspectedTarget]) : undefined} />}
+      onArchive={canTransfer && inspectorArchivePlan ? () => startTransfer('archive', [inspectorArchivePlan], [inspectedTarget]) : undefined}
+      onRecall={canTransfer && inspectorPlans.recall.length > 0 ? () => startTransfer('recall', inspectorPlans.recall, [inspectedTarget]) : undefined} />}
     {canTransfer && selectedEndpoint && editingSelection && selectedTargets.length > 0 &&
       <BulkMetadataDialog connectionId={selectedEndpoint.id} targets={selectedTargets} onClose={() => setEditingSelection(false)}
         onSaved={() => { setEditingSelection(false); setSelection(new Set()) }} />}
-    {canTransfer && transferRequest && <TransferDialog action={transferRequest.action} plan={transferRequest.plan}
-      selectedItems={transferRequest.selectedItems} selectedLocation={transferRequest.selectedLocation} targets={targets}
+    {canTransfer && transferRequest && <TransferDialog action={transferRequest.action} plans={transferRequest.plans}
+      selectedItems={transferRequest.selectedItems} selectedLocation={transferRequest.selectedLocation} locations={endpoints}
       onClose={() => setTransferRequest(undefined)} onSubmitted={() => {
         setSelection(new Set())
         setTransferRequest(undefined)

@@ -1,115 +1,167 @@
-import { useCatalogLocations, useCatalogSnapshot, useTransferJobs } from '../../api/hooks/queries'
+import { useRef, useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import { connectionStatusOptions, useConnections, useStorageUsage, useTransferJobs } from '../../api/hooks/queries'
 import { isActiveJob, isObjectStorage } from '../../api/mappers'
-import type { FileMetadataDTO } from '../../api/types'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
-import type { Navigate } from '../../shared/ui/feedback'
 import { Icon, Metric, bytes, count, percent, storageName } from '../../shared/ui/primitives'
-import { StorageConnectionsPage } from './StorageConnectionsPage'
+import { ConnectionStatus, currentCapacity, providers, roles, type ConnectionProbe } from './StorageConnectivity'
+import { currency, monthlySavings, savingsRate, summarizeUsage, type LocationUsage } from './storageUsage'
 
-const currency = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 })
+export default function StorageStatusPage() {
+  const connections = useConnections()
+  const usage = useStorageUsage()
+  const [locationId, setLocationId] = useState('')
+  const locationSelect = useRef<HTMLSelectElement>(null)
+  const locations = connections.data ?? []
+  const probes = useQueries({ queries: locations.map(connection => connectionStatusOptions(connection.id, connection.active)) })
+  const probeById = new Map(locations.map((connection, index) => [connection.id, probes[index]]))
+  const summary = usage.data ? summarizeUsage(locations, usage.data) : undefined
+  const selected = summary?.locations.get(locationId)
+  const selectedConnection = locations.find(connection => connection.id === locationId)
+  const scope = selectedConnection?.id ?? ''
+  const failure = connections.error ?? usage.error
 
-export default function StorageStatusPage({ navigate }: { navigate: Navigate }) {
-  const locations = useCatalogLocations()
-  const catalog = useCatalogSnapshot()
-  const jobs = useTransferJobs()
-  const queries = [locations, catalog, jobs]
-  const failed = queries.find(query => query.isError)
-  if (failed?.error) return <ApiPageState loadingLabel="Loading storage status" error={failed.error}
-    retry={() => { for (const query of queries) if (query.isError) void query.refetch() }} retrying={failed.isFetching} />
-  if (queries.some(query => query.isPending)) return <ApiPageState loadingLabel="Loading storage status" />
-
-  const tiers = [
-    { name: 'Local only', volume: 0, files: 0, color: 'local-tier' },
-    { name: 'Synced · Local + S3', volume: 0, files: 0, color: 'sync-tier' },
-    { name: 'Optimized · S3 only', volume: 0, files: 0, color: 'cold-tier' },
-  ]
-  const cloudIds = new Set(locations.data?.filter(item => isObjectStorage(item.providerType)).map(item => item.id))
-  const key = (id: string, path: string) => JSON.stringify([id, path])
-  const entries = catalog.data ?? []
-  const archived = new Map<string, FileMetadataDTO>(entries
-    .filter(file => file.entryType === 'FILE' && cloudIds.has(file.connectionId))
-    .map(file => [key(file.connectionId, file.relativePath), file]))
-  const synced = new Set<string>()
-  for (const file of entries) {
-    if (file.entryType !== 'FILE' || cloudIds.has(file.connectionId)) continue
-    const object = file.targetConnectionId && file.s3Key ? key(file.targetConnectionId, file.s3Key) : undefined
-    const hasCopy = object && file.storageState === 'ARCHIVED_COPY' && archived.has(object)
-    const tier = hasCopy ? tiers[1] : tiers[0]
-    if (hasCopy) synced.add(object)
-    tier.volume += file.sizeBytes
-    tier.files++
-  }
-  for (const [object, file] of archived) {
-    if (synced.has(object)) continue
-    tiers[2].volume += file.sizeBytes
-    tiers[2].files++
-  }
-  const classes = new Map<string, { name: string; files: number; volume: number }>()
-  for (const file of archived.values()) {
-    const storageClass = file.s3StorageClass ?? 'STANDARD'
-    const group = classes.get(storageClass) ?? { name: storageName[storageClass] ?? storageClass, files: 0, volume: 0 }
-    group.files++
-    group.volume += file.sizeBytes
-    classes.set(storageClass, group)
-  }
-  const archiveClasses = [...classes.values()]
-  const volume = tiers.reduce((total, tier) => total + tier.volume, 0)
-  const catalogedFiles = tiers.reduce((total, tier) => total + tier.files, 0)
-  const archivedFiles = archived.size
-  const archivedVolume = archiveClasses.reduce((total, tier) => total + tier.volume, 0)
-  const optimized = { files: 0, volume: 0 }
-  for (const file of entries) {
-    if (file.entryType !== 'SYMLINK' || !file.targetConnectionId || !file.s3Key) continue
-    const object = archived.get(key(file.targetConnectionId, file.s3Key))
-    if (object) {
-      optimized.files++
-      optimized.volume += object.sizeBytes
-    }
-  }
-  const monthlySavings = optimized.volume / 1e9 * 0.02
-  const transfers = (jobs.data ?? []).filter(job => job.operation !== 'SCAN' && isActiveJob(job))
-  const throughput = transfers.reduce((sum, job) => sum + job.transferredBytes / Math.max(1, (Date.now() - Date.parse(job.createdAt)) / 1000), 0)
-  const legend = tiers.map(tier => `${tier.name}: ${percent(tier.volume, volume).toFixed(1)}%`).join(', ')
   return <>
-    <div className="page-heading"><div><h1>Storage status</h1><p>See how much storage you use, what’s saved in S3, and where you’re saving space.</p></div></div>
-
-    <div className="metrics storage-metrics">
-      <Metric icon="drive" tone="blue" title="Total cataloged volume" value={bytes(volume)}>{count(catalogedFiles)} cataloged {catalogedFiles === 1 ? 'file' : 'files'} across all tiers</Metric>
-      <Metric icon="cloud" tone="blue" title="S3 archived footprint" value={bytes(archivedVolume)}>Combined Standard and Glacier storage</Metric>
-      <Metric icon="files" tone="green" title="Files saved to S3" value={count(archivedFiles)}>Files with a copy in S3</Metric>
-      <Metric icon="layers" tone="purple" title="Files optimized" value={count(optimized.files)}>Files kept in S3 with local space freed</Metric>
-      <Metric icon="check" tone="green" title="Local space reclaimed" value={bytes(optimized.volume)}>Space reclaimed from cataloged files</Metric>
-      <Metric icon="bolt" tone="yellow" title="Estimated monthly savings" value={currency.format(monthlySavings)}>Based on current S3-only volume</Metric>
+    <div className="page-heading"><div><h1>Storage status</h1><p>Compare capacity, cataloged usage, and estimated savings across storage locations.</p></div></div>
+    <div className="panel storage-scope">
+      <label htmlFor="storage-location">Storage location</label>
+      <select ref={locationSelect} id="storage-location" value={scope} onChange={event => setLocationId(event.target.value)}>
+        <option value="">All locations</option>
+        {locations.map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {providers[connection.providerType]}</option>)}
+      </select>
     </div>
-
-    <section className="panel distribution">
-      <div className="panel-heading"><div><h2>Storage tier distribution</h2><p>How your files are split between local storage and S3</p></div><div className="distribution-total"><strong>{bytes(volume)}</strong><span>Total volume</span></div></div>
-      <div className="stacked-bar" role="img" aria-label={legend}>
-        {tiers.filter(tier => tier.volume > 0).map(tier => {
-          const share = percent(tier.volume, volume)
-          return <div key={tier.color} className={tier.color} style={{ flex: share }}>
-            {share >= 5 && <span>{share.toFixed(1)}%</span>}
-          </div>
-        })}
+    {failure ? <ApiPageState loadingLabel="Loading storage usage" error={failure}
+      retrying={connections.isFetching || usage.isFetching}
+      retry={() => { if (connections.isError) void connections.refetch(); if (usage.isError) void usage.refetch() }} />
+      : connections.isPending || !summary ? <ApiPageState loadingLabel="Loading storage usage" />
+        : selected ? <LocationOverview location={selected} probe={probeById.get(selected.connection.id)} />
+          : <PortfolioOverview summary={summary} />}
+    {!connections.isError && !connections.isPending && <section className="panel storage-connectivity" aria-labelledby="storage-connectivity-title">
+      <div className="panel-heading">
+        <div><h2 id="storage-connectivity-title">Storage locations</h2><p>Choose a location to analyze it. Active connections are checked when this page opens.</p></div>
       </div>
-      <div className="tier-legend">{tiers.map(tier => <div key={tier.name}><i className={tier.color} /><span>{tier.name}</span><strong>{bytes(tier.volume)}</strong><span>{count(tier.files)} {tier.files === 1 ? 'file' : 'files'}</span></div>)}</div>
-    </section>
-
-    <div className="storage-detail-grid">
-      <section className="panel storage-detail">
-        <div className="panel-heading"><div><h2>S3 storage classes</h2><p>Archived file counts and volume</p></div><span className="icon-tile blue"><Icon name="cloud" /></span></div>
-        <ul className="storage-breakdown">{!archiveClasses.length && <li>No archived files.</li>}{archiveClasses.map(tier => <li key={tier.name}><strong>{tier.name}</strong><span>{count(tier.files)} {tier.files === 1 ? 'file' : 'files'}</span><strong>{bytes(tier.volume)}</strong></li>)}</ul>
-      </section>
-      <section className="panel storage-detail">
-        <div className="panel-heading"><div><h2>Savings estimate</h2><p>Monthly and annual storage savings</p></div><span className="icon-tile green"><Icon name="check" /></span></div>
-        <div className="storage-savings"><div><strong>{currency.format(monthlySavings)}</strong><span>per month</span></div><div><strong>{currency.format(monthlySavings * 12)}</strong><span>per year</span></div></div>
-        <p className="storage-assumption">Illustrative estimate using £0.02 net savings per GB of S3-only storage per month.</p>
-      </section>
-      <section className="panel storage-detail">
-        <div className="panel-heading"><div><h2>Transfer activity</h2><p>Current archive and recall work</p></div><span className="icon-tile yellow"><Icon name="activity" /></span></div>
-        <div className="storage-savings"><div><strong>{count(transfers.length)}</strong><span>active transfers</span></div><div><strong>{bytes(throughput)}/s</strong><span>average active transfer rate</span></div></div>
-      </section>
-    </div>
-    <StorageConnectionsPage navigate={navigate} embedded />
+      {locations.length ? <div className="storage-location-scroll">
+        <table className="storage-location-table">
+          <thead><tr><th scope="col">Location</th><th scope="col">Connectivity</th><th scope="col">Cataloged usage</th><th scope="col">Available capacity</th></tr></thead>
+          <tbody>{locations.map(connection => {
+            const probe = probeById.get(connection.id)
+            const stored = summary?.locations.get(connection.id)?.stored
+            const capacity = currentCapacity(connection, probe)
+            return <tr key={connection.id} data-selected={connection.id === scope || undefined}>
+              <th scope="row"><button className="text-button" aria-pressed={connection.id === scope}
+                onClick={() => { setLocationId(connection.id); locationSelect.current?.focus() }}>{connection.name}</button>
+                <span>{providers[connection.providerType]} · {roles[connection.role]}</span></th>
+              <td><ConnectionStatus connection={connection} probe={probe} /></td>
+              <td>{stored ? <>{bytes(stored.sizeBytes)}<span>{count(stored.fileCount)} {isObjectStorage(connection.providerType) ? 'objects' : 'files'}</span></> : '—'}</td>
+              <td>{capacity ? <>{bytes(capacity.availableBytes)}<span>of {bytes(capacity.totalBytes)}</span></>
+                : connection.active && probe?.isFetching ? 'Checking…' : 'Unavailable'}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div> : <p className="empty compact">No storage locations configured.</p>}
+    </section>}
+    <TransferActivity locationId={scope} />
   </>
+}
+
+function Savings({ reclaimedBytes, description }: { reclaimedBytes: number; description: string }) {
+  const monthly = monthlySavings(reclaimedBytes)
+  return <section className="panel storage-detail">
+    <div className="panel-heading"><div><h2>Estimated cost savings</h2><p>{description}</p></div><span className="icon-tile green"><Icon name="bolt" /></span></div>
+    <div className="storage-savings">
+      <div><strong>{currency.format(monthly)}</strong><span>per month</span></div>
+      <div><strong>{currency.format(monthly * 12)}</strong><span>per year</span></div>
+    </div>
+    <p className="storage-assumption">Illustrative estimate using {currency.format(savingsRate)} net savings per GB of reclaimed local space per month.</p>
+  </section>
+}
+
+function PortfolioOverview({ summary }: { summary: ReturnType<typeof summarizeUsage> }) {
+  const total = summary.mounted.sizeBytes + summary.object.sizeBytes
+  const tiers = [
+    { name: 'Mounted storage', data: summary.mounted, color: 'local-tier' },
+    { name: 'Object storage', data: summary.object, color: 'cold-tier' },
+  ]
+  return <>
+    <div className="metrics storage-overview-metrics">
+      <Metric icon="drive" tone="blue" title="Total cataloged footprint" value={bytes(total)}>Includes each stored copy across {count(summary.locations.size)} locations</Metric>
+      <Metric icon="server" tone="blue" title="Mounted storage" value={bytes(summary.mounted.sizeBytes)}>{count(summary.mounted.fileCount)} cataloged files</Metric>
+      <Metric icon="cloud" tone="blue" title="Object storage" value={bytes(summary.object.sizeBytes)}>{count(summary.object.fileCount)} cataloged objects</Metric>
+      <Metric icon="check" tone="green" title="Local space reclaimed" value={bytes(summary.reclaimed.sizeBytes)}>{count(summary.reclaimed.fileCount)} archived file references</Metric>
+    </div>
+    <div className="storage-analysis-grid">
+      <section className="panel storage-detail">
+        <div className="panel-heading"><div><h2>Cataloged footprint by tier</h2><p>Stored bytes across all connections</p></div></div>
+        {total > 0 && <div className="stacked-bar" aria-hidden="true">
+          {tiers.filter(tier => tier.data.sizeBytes > 0).map(tier => <div key={tier.name} className={tier.color} style={{ flex: percent(tier.data.sizeBytes, total) }} />)}
+        </div>}
+        <div className="tier-legend">{tiers.map(tier => <div key={tier.name}><i className={tier.color} /><span>{tier.name}</span>
+          <strong>{bytes(tier.data.sizeBytes)}</strong><span>{percent(tier.data.sizeBytes, total).toFixed(1)}%</span></div>)}</div>
+      </section>
+      <Savings reclaimedBytes={summary.reclaimed.sizeBytes} description="Total across all locations" />
+    </div>
+  </>
+}
+
+function LocationOverview({ location, probe }: { location: LocationUsage; probe?: ConnectionProbe }) {
+  const { connection, stored, reclaimed, classes } = location
+  const cloud = isObjectStorage(connection.providerType)
+  const capacity = currentCapacity(connection, probe)
+  return <>
+    <section className="panel storage-location-profile">
+      <div className="panel-heading">
+        <div className="storage-location-name"><span className={`icon-tile ${cloud ? 'blue' : 'neutral'}`}><Icon name={cloud ? 'cloud' : 'drive'} /></span>
+          <div><h2>{connection.name}</h2><p>{providers[connection.providerType]} · {roles[connection.role]}</p></div>
+        </div>
+        <ConnectionStatus connection={connection} probe={probe} detailed />
+      </div>
+      <dl className="storage-location-path">
+        <div><dt>{cloud ? 'Bucket' : 'Path'}</dt><dd>{connection.basePathOrBucket}</dd></div>
+        {connection.region && <div><dt>Region</dt><dd>{connection.region}</dd></div>}
+        {connection.endpointUrl && <div><dt>Endpoint</dt><dd>{connection.endpointUrl}</dd></div>}
+      </dl>
+    </section>
+    <div className="metrics storage-overview-metrics">
+      <Metric icon={cloud ? 'cloud' : 'drive'} tone="blue" title="Cataloged usage" value={bytes(stored.sizeBytes)}>{count(stored.fileCount)} {cloud ? 'cataloged objects' : 'cataloged files'}</Metric>
+      <Metric icon="check" tone="green" title={cloud ? 'Local space reclaimed by archives here' : 'Local space reclaimed'} value={bytes(reclaimed.sizeBytes)}>{count(reclaimed.fileCount)} archived file references</Metric>
+    </div>
+    <div className="storage-analysis-grid">
+      <section className="panel storage-detail">
+        {cloud ? <>
+          <div className="panel-heading"><div><h2>Object storage classes</h2><p>Cataloged usage by class</p></div></div>
+          <ul className="storage-breakdown">{!classes.size && <li>No cataloged objects.</li>}
+            {[...classes.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, data]) => <li key={name}>
+              <strong>{storageName[name] ?? name}</strong><span>{count(data.fileCount)} objects</span><strong>{bytes(data.sizeBytes)}</strong>
+            </li>)}
+          </ul>
+          <p className="storage-assumption">Capacity and free space are unavailable for this connection.</p>
+        </> : <>
+          <div className="panel-heading"><div><h2>Filesystem capacity</h2><p>Capacity reported by the filesystem hosting this path</p></div></div>
+          {capacity ? <>
+            <meter className="storage-capacity-meter" min={0} max={capacity.totalBytes} value={capacity.usedBytes} aria-label="Filesystem space used" />
+            <div className="storage-savings">
+              <div><strong>{bytes(capacity.totalBytes)}</strong><span>Total</span></div>
+              <div><strong>{bytes(capacity.usedBytes)}</strong><span>Used</span></div>
+              <div><strong>{bytes(capacity.availableBytes)}</strong><span>Available to Koonj</span></div>
+            </div>
+          </> : <p className="storage-assumption">{connection.active && probe?.isFetching ? 'Checking capacity…' : 'Filesystem capacity is unavailable.'}</p>}
+        </>}
+      </section>
+      <Savings reclaimedBytes={reclaimed.sizeBytes} description={cloud ? 'Savings attributed to archives at this location' : 'Savings from space reclaimed at this location'} />
+    </div>
+  </>
+}
+
+function TransferActivity({ locationId }: { locationId: string }) {
+  const jobs = useTransferJobs()
+  const transfers = jobs.data?.filter(job => job.operation !== 'SCAN' && isActiveJob(job)
+    && (!locationId || job.sourceConnectionId === locationId || job.targetConnectionId === locationId))
+  const throughput = transfers?.reduce((sum, job) => sum + job.transferredBytes / Math.max(1,
+    (Date.now() - Date.parse(job.startedAt ?? job.createdAt)) / 1000), 0)
+  return <section className="panel storage-detail">
+    <div className="panel-heading"><div><h2>Transfer activity</h2><p>{locationId ? 'Archives and recalls involving this location' : 'Archives and recalls across all locations'}</p></div><span className="icon-tile yellow"><Icon name="activity" /></span></div>
+    {transfers ? <div className="storage-savings"><div><strong>{count(transfers.length)}</strong><span>active transfers</span></div>
+      <div><strong>{bytes(throughput ?? 0)}/s</strong><span>average active transfer rate</span></div></div>
+      : <p className="storage-assumption">{jobs.isError ? 'Transfer activity is unavailable.' : 'Loading transfer activity…'}</p>}
+  </section>
 }

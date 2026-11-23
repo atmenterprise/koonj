@@ -111,6 +111,11 @@
             <outputDirectory>docker/fuse</outputDirectory>
         </file>
         <file>
+            <source>../deploy/migrations/project-workspaces.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
             <source>../docs/DEPLOYMENT-GUIDE.md</source>
             <outputDirectory>/</outputDirectory>
         </file>

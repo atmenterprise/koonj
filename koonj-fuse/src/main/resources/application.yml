@@ -7,6 +7,7 @@ koonj:
   server-url: ${KOONJ_SERVER_URL:http://localhost:8080}
   agent:
     client-id: ${KOONJ_AGENT_CLIENT_ID:koonj-agent}
+    project-id: ${KOONJ_AGENT_PROJECT_ID:}
     client-secret: ${KOONJ_AGENT_CLIENT_SECRET:}
     token-uri: ${KOONJ_AGENT_TOKEN_URI:http://localhost:8180/realms/koonj/protocol/openid-connect/token}
   fuse:

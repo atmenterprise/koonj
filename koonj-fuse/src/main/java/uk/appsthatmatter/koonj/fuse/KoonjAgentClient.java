@@ -32,7 +32,7 @@ final class KoonjAgentClient {
     private final Cache<UUID, Metadata> metadata = Caffeine.newBuilder()
             .maximumSize(10_000).expireAfterWrite(Duration.ofSeconds(30)).build();
 
-    KoonjAgentClient(String server, String tokenUri, String clientId, String secret, int timeout) {
+    KoonjAgentClient(String server, String tokenUri, String clientId, String secret, int timeout, String projectId) {
         var registration = ClientRegistration.withRegistrationId(REGISTRATION)
                 .clientId(clientId).clientSecret(secret).clientName(REGISTRATION)
                 .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
@@ -64,9 +64,11 @@ final class KoonjAgentClient {
                 new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(PRINCIPAL, null));
         bearer.setAuthorizationFailureHandler(OAuth2ClientHttpRequestInterceptor.authorizationFailureHandler(clients));
 
-        this.http = RestClient.builder().baseUrl(server)
+        var http = RestClient.builder().baseUrl(server)
                 .requestFactory(requestFactory(Duration.ofSeconds(timeout + 25L)))
-                .requestInterceptor(bearer).build();
+                .requestInterceptor(bearer);
+        if (!projectId.isBlank()) http.defaultHeader("X-Koonj-Project", UUID.fromString(projectId.strip()).toString());
+        this.http = http.build();
         this.timeout = timeout;
     }
 

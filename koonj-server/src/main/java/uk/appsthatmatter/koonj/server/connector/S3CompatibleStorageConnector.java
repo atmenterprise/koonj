@@ -104,6 +104,12 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     }
 
     @Override
+    public void checkConnectivity(StorageConnection config) {
+        client(config).listObjectsV2(request -> request.bucket(config.getBasePathOrBucket()).maxKeys(1)
+                .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
+    }
+
+    @Override
     public void testConnection(StorageConnection config) throws IOException {
         String bucket = config.getBasePathOrBucket();
         S3Client client = client(config);

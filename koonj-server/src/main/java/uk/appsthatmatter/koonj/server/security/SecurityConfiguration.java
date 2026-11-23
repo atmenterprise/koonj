@@ -76,7 +76,7 @@ public class SecurityConfiguration {
             throw new IllegalArgumentException("CORS requires explicit origins");
         }
         cors.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", ProjectScope.HEADER));
         cors.setMaxAge(3600L);
         var source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/v1/**", cors);

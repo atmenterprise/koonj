@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,14 +33,14 @@ public class CatalogMetadataService {
 
     @Transactional(readOnly = true)
     public List<CatalogMetadataResponse> list(UUID connectionId) {
-        if (!connections.existsById(connectionId)) throw missingConnection();
+        if (!connections.existsByIdAndProjectId(connectionId, ProjectScope.id())) throw missingConnection();
         return annotations.findByConnectionIdOrderByPathAscScopeAsc(connectionId).stream()
                 .map(item -> new CatalogMetadataResponse(item.getScope(), item.getPath(), item.getAttributes())).toList();
     }
 
     @Transactional
     public void save(UUID connectionId, CatalogMetadataWriteRequest request) {
-        var connection = connections.findByIdForUpdate(connectionId).orElseThrow(CatalogMetadataService::missingConnection);
+        var connection = connections.findByIdForUpdate(connectionId, ProjectScope.id()).orElseThrow(CatalogMetadataService::missingConnection);
         var targets = request.targets().stream().map(CatalogMetadataService::normalize).distinct().toList();
         for (Target target : targets) {
             var existing = annotations.findByConnectionIdAndScopeAndPath(connectionId, target.scope(), target.path());

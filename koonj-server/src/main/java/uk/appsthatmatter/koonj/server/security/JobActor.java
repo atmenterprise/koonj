@@ -17,6 +17,13 @@ public final class JobActor {
         return fullName.isEmpty() ? null : fullName;
     }
 
+    public static String subject() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) return null;
+        if (authentication instanceof JwtAuthenticationToken jwt) return "oidc:" + jwt.getToken().getSubject();
+        return "basic:" + authentication.getName();
+    }
+
     public static String current() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken token) {

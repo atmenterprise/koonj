@@ -1,9 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import AdminPage from '../modules/admin/AdminPage'
 import DashboardPage from '../modules/home/DashboardPage'
 import StorageBrowserPage from '../modules/catalog/StorageBrowserPage'
-import StorageStatusPage from '../modules/storage/StorageStatusPage'
 import { Topbar, themes, type Theme } from './Topbar'
+import type { Project } from '../api/services/projectService'
 import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { useAuth } from '../auth/AuthProvider'
@@ -11,6 +10,9 @@ import { Button, Icon } from '../shared/ui/primitives'
 import { LoadingRows } from '../shared/ui/feedback'
 
 const AuditLogPage = lazy(() => import('../modules/activity/AuditLogPage'))
+const StorageStatusPage = lazy(() => import('../modules/storage/StorageStatusPage'))
+const AdminPage = lazy(() => import('../modules/admin/AdminPage'))
+const ManagementPage = lazy(() => import('../modules/management/ManagementPage'))
 
 const pages = [
   { path: '/Home', title: 'Home', icon: 'home', access: 'read' },
@@ -18,10 +20,22 @@ const pages = [
   { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: 'operate' },
   { path: '/storage', title: 'Storage status', shortTitle: 'Storage', icon: 'drive', access: 'admin' },
   { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: 'admin' },
+  { path: '/management', title: 'Management', icon: 'server', access: 'admin' },
 ] as const
-const currentLocation = () => window.location.pathname + window.location.search
+const browserLocation = () => window.location.pathname + window.location.search
+function currentLocation() {
+  const location = browserLocation()
+  if (window.location.pathname.toLowerCase().replace(/\/+$/, '') !== '/admin') return location
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('section') === 'storage') return '/management'
+  if (params.get('section') !== 'activity') return location
+  const job = params.get('job')
+  return job ? '/activities?' + new URLSearchParams({ job }) : '/activities'
+}
 
-export default function Console() {
+export default function Console({ project, projects, onProjectSwitch, refreshMemberships }: {
+  project: Project; projects: Project[]; onProjectSwitch: (id: string) => void; refreshMemberships: () => void
+}) {
   const [location, setLocation] = useState(currentLocation)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('koonj-sidebar') === 'collapsed')
   const [theme, setTheme] = useState<Theme>(() => {
@@ -53,7 +67,12 @@ export default function Console() {
   }, [location, notify, pageAllowed])
 
   useEffect(() => {
-    const changed = () => setLocation(currentLocation())
+    const changed = () => {
+      const canonical = currentLocation()
+      if (canonical !== browserLocation()) window.history.replaceState(null, '', canonical)
+      setLocation(canonical)
+    }
+    changed()
     window.addEventListener('popstate', changed)
     return () => window.removeEventListener('popstate', changed)
   }, [])
@@ -101,15 +120,22 @@ export default function Console() {
     </aside>
     <div className="app-body">
       <Topbar title={page.title} pages={pages.filter(canView)} navigate={navigate} theme={theme}
-        onThemeChange={setTheme} canOperate={canOperate} />
+        onThemeChange={setTheme} canOperate={canOperate} project={project} projects={projects} onProjectSwitch={onProjectSwitch} />
       <main id="main-content" className="main-content" tabIndex={-1}>
         {!pageAllowed ? null : page.path === '/explorer' ? <StorageBrowserPage key={location} initialConnection={params.get('endpoint')} initialEntry={params.get('entry')}
             initialPath={params.get('path')} navigate={navigate} />
           : page.path === '/activities' ? <Suspense fallback={<LoadingRows label="Loading activity" />}>
             <AuditLogPage key={location} initialJob={params.get('job')} />
           </Suspense>
-          : page.path === '/admin' ? <AdminPage section={params.get('section')} job={params.get('job')} navigate={navigate} />
-          : page.path === '/storage' ? <StorageStatusPage navigate={navigate} />
+          : page.path === '/admin' ? <Suspense fallback={<LoadingRows label="Loading administration" />}>
+            <AdminPage section={params.get('section')} navigate={navigate} projectId={project.id} refreshMemberships={refreshMemberships} />
+          </Suspense>
+          : page.path === '/management' ? <Suspense fallback={<LoadingRows label="Loading management" />}>
+            <ManagementPage section={params.get('section')} navigate={navigate} />
+          </Suspense>
+          : page.path === '/storage' ? <Suspense fallback={<LoadingRows label="Loading storage status" />}>
+            <StorageStatusPage />
+          </Suspense>
           : <DashboardPage navigate={navigate} />}
       </main>
       <footer className="app-footer"><span>© 2026 Apps that Matter</span><span>Version 1.0</span></footer>

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useCatalogSnapshot, useCatalogLocations, useTransferJobs } from '../api/hooks/queries'
 import { jobLabels, operationLabels } from '../api/mappers'
+import type { Project } from '../api/services/projectService'
 import type { TransferJobDTO } from '../api/types'
 import { useActivityNotifications } from '../shared/notifications/ActivityNotifications'
 import { notificationPresentation } from '../shared/notifications/NotificationPopup'
@@ -251,8 +252,9 @@ function ProfileMenu({ theme, onThemeChange }: { theme: Theme; onThemeChange: (t
   </ToolbarPopover>
 }
 
-export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperate }: {
+export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperate, project, projects, onProjectSwitch }: {
   title: string; pages: SearchPage[]; navigate: Navigate; theme: Theme; onThemeChange: (theme: Theme) => void; canOperate: boolean
+  project: Project; projects: Project[]; onProjectSwitch: (id: string) => void
 }) {
   const jobHistory = useTransferJobs(canOperate)
   const { notices, markRead, syncJobs } = useActivityNotifications()
@@ -263,8 +265,15 @@ export function Topbar({ title, pages, navigate, theme, onThemeChange, canOperat
   const unread = notices.filter(notice => !notice.read).length
   const alerts = notices.slice().reverse()
   return <header className="topbar">
-    <div className="topbar-path"><span>Workspace</span><Icon name="chevron" size={14} /><strong>{title}</strong></div>
+    <nav className="topbar-path" aria-label="Breadcrumb">
+      <span title={project.name}>{project.name}</span><Icon name="chevron" size={14} />
+      <strong aria-current="page">{title}</strong>
+    </nav>
     <GlobalSearch pages={pages} navigate={navigate} jobs={jobs} />
+    <select className="topbar-project" aria-label="Active project" title={project.name} value={project.id}
+      onChange={event => onProjectSwitch(event.target.value)}>
+      {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+    </select>
     <div className="topbar-actions">
       <ToolbarPopover label={`Notifications (${unread} unread)`} triggerClass="alerts-trigger" panelClass="alerts-popover"
         triggerContent={<><Icon name="bell" size={19} />{unread > 0 && <span className="alerts-badge" aria-hidden="true">{unread}</span>}</>}>

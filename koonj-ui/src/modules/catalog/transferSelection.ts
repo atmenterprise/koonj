@@ -26,9 +26,12 @@ export interface TransferPlan {
   destinationId?: string
   targetFolderPaths?: string[]
   fileCount: number
+  skippedCount: number
+  scopeCounts: ReadonlyMap<string, number>
 }
 
 function selectedFolderFor(path: string, folders: ReadonlySet<string>) {
+  if (folders.has('')) return ''
   for (let slash = path.lastIndexOf('/'); slash >= 0; slash = path.lastIndexOf('/', slash - 1)) {
     const prefix = path.slice(0, slash + 1)
     if (folders.has(prefix)) return prefix
@@ -36,54 +39,84 @@ function selectedFolderFor(path: string, folders: ReadonlySet<string>) {
   }
 }
 
+function recallSource(file: FileMetadataDTO, locations: CatalogLocationDTO[]) {
+  if (file.entryType !== 'SYMLINK') return undefined
+  const bucket = linkedBucket(file, locations)
+  const key = isUuidArchiveLink(file) ? file.s3Key : bucket && file.symlinkTarget?.slice(('s3://' + bucket.bucket + '/').length)
+  if (!key || key.includes('\\') || key.includes('\0') || key.split('/').some(part => !part || part === '.' || part === '..')
+    || /^\.koonj-transfer\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:-previous)?$/.test(key)) return undefined
+  return bucket
+}
+
 export function planTransfers(location: CatalogLocationDTO | undefined, locations: CatalogLocationDTO[],
-  files: FileMetadataDTO[], folders: FolderNode[], catalog: FileMetadataDTO[]): { archive?: TransferPlan; recall?: TransferPlan } {
-  if (!location?.active || !(files.length || folders.length)) return {}
+  files: FileMetadataDTO[], folders: FolderNode[], catalog: FileMetadataDTO[]): { archive?: TransferPlan; recall: TransferPlan[] } {
+  if (!location?.active || !(files.length || folders.length)) return { recall: [] }
+  const locationId = location.id
   const chosen = new Set(folders.map(folder => folder.prefix))
-  const paths = [...chosen].filter(path => !selectedFolderFor(path.slice(0, -1), chosen))
+  const paths = [...chosen].filter(path => path === '' || selectedFolderFor(path.slice(0, -1), chosen) === undefined)
   const prefixes = new Set(paths)
-  const explicitFiles = files.filter(file => !selectedFolderFor(file.relativePath, prefixes))
-  const fileIds = explicitFiles.map(file => file.id)
+  const explicitFiles = files.filter(file => selectedFolderFor(file.relativePath, prefixes) === undefined)
+  const nestedFolders = new Set([...chosen].filter(path => !prefixes.has(path)))
+  const filePaths = new Set(files.map(file => file.relativePath))
+  const scopes = [...chosen, ...filePaths]
   const cloud = isObjectStorage(location.providerType)
-  const regular = (file: FileMetadataDTO) => file.connectionId === location.id && file.entryType === 'FILE'
-  const regularFolders = new Set<string>()
-  const linkFolders = new Set<string>()
+  const counts = new Map<string, number>()
+  const regularIds: string[] = []
+  const archivedBySource = new Map<string, { source: CatalogLocationDTO; ids: string[]; counts: Map<string, number>; total: number }>()
+  let selectedCount = 0
   let regularCount = 0
-  let linkCount = 0
-  let source: CatalogLocationDTO | undefined
-  let compatibleLinks = true
-  const checkLinks = !cloud && explicitFiles.every(file => file.entryType === 'SYMLINK')
 
-  function includeLink(file: FileMetadataDTO, path?: string) {
-    if (!compatibleLinks) return
-    const bucket = linkedBucket(file, locations)
-    if (file.connectionId !== location?.id || !bucket || (source && bucket.id !== source.id)) {
-      compatibleLinks = false
-      return
+  function addEligible(filePath: string, scope: string, eligible: Map<string, number>) {
+    eligible.set(scope, (eligible.get(scope) ?? 0) + 1)
+    if (filePath !== scope && filePaths.has(filePath)) eligible.set(filePath, 1)
+    if (!nestedFolders.size) return
+    for (let slash = filePath.indexOf('/'); slash !== -1; slash = filePath.indexOf('/', slash + 1)) {
+      const nested = filePath.slice(0, slash + 1)
+      if (nestedFolders.has(nested)) eligible.set(nested, (eligible.get(nested) ?? 0) + 1)
     }
-    source = bucket
-    linkCount++
-    if (path) linkFolders.add(path)
   }
 
-  if (checkLinks) explicitFiles.forEach(file => includeLink(file))
-  if (paths.length) {
+  function include(file: FileMetadataDTO, scope: string, explicit: boolean) {
+    if (file.connectionId !== locationId || file.entryType === 'DIRECTORY') return
+    selectedCount++
+    if (file.entryType === 'FILE') {
+      regularCount++
+      addEligible(file.relativePath, scope, counts)
+      if (explicit) regularIds.push(file.id)
+    } else if (!cloud) {
+      const source = recallSource(file, locations)
+      if (!source) return
+      let links = archivedBySource.get(source.id)
+      if (!links) {
+        links = { source, ids: [], counts: new Map(), total: 0 }
+        archivedBySource.set(source.id, links)
+      }
+      links.total++
+      addEligible(file.relativePath, scope, links.counts)
+      if (explicit) links.ids.push(file.id)
+    }
+  }
+
+  explicitFiles.forEach(file => include(file, file.relativePath, true))
+  if (prefixes.size) {
     for (const file of catalog) {
-      if (file.entryType === 'DIRECTORY') continue
-      const path = selectedFolderFor(file.relativePath, prefixes)
-      if (!path) continue
-      if (regular(file)) {
-        regularFolders.add(path)
-        regularCount++
-      } else if (checkLinks && file.entryType === 'SYMLINK') includeLink(file, path)
+      const scope = selectedFolderFor(file.relativePath, prefixes)
+      if (scope !== undefined) include(file, scope, false)
     }
   }
-  const regularPlan = explicitFiles.every(regular) && regularFolders.size === paths.length
-    ? { source: location, paths, fileIds, fileCount: regularCount + fileIds.length } : undefined
-  if (cloud) return { recall: regularPlan }
-  const archive = location.role !== 'TARGET' ? regularPlan : undefined
-  const recall = source && compatibleLinks && linkFolders.size === paths.length
-    ? { source, paths: [], fileIds, targetFolderPaths: paths, destinationId: location.id, fileCount: linkCount } : undefined
+
+  function scopeSummary(eligible: ReadonlyMap<string, number>, fileCount: number) {
+    return { fileCount, skippedCount: selectedCount - fileCount,
+      scopeCounts: new Map(scopes.map(scope => [scope, eligible.get(scope) ?? 0])) }
+  }
+  const eligiblePaths = (eligible: ReadonlyMap<string, number>) => paths.filter(path => eligible.has(path)).map(path => path || '/')
+  const regular = regularCount ? { source: location, paths: eligiblePaths(counts), fileIds: regularIds,
+    ...scopeSummary(counts, regularCount) } : undefined
+  if (cloud) return { recall: regular ? [regular] : [] }
+  const archive = location.role !== 'TARGET' ? regular : undefined
+  const recall = [...archivedBySource.values()].map(({ source, ids, counts, total }) => ({
+    source, paths: [], fileIds: ids, targetFolderPaths: eligiblePaths(counts), destinationId: location.id, ...scopeSummary(counts, total),
+  }))
   return { archive, recall }
 }
 

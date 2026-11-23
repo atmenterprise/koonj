@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.entity;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -14,7 +15,9 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "transfer_jobs", indexes = {@Index(columnList = "created_at"), @Index(columnList = "status")})
+@Table(name = "transfer_jobs", indexes = {@Index(columnList = "created_at"), @Index(columnList = "status"),
+        @Index(name = "idx_transfer_job_project_created", columnList = "project_id, created_at"),
+        @Index(name = "idx_transfer_job_project_owner_created", columnList = "project_id, owner_subject, created_at")})
 @Getter
 @Setter
 public class TransferJob {
@@ -23,6 +26,11 @@ public class TransferJob {
 
     @Id @GeneratedValue
     private UUID id;
+
+    @Column(nullable = false)
+    @ColumnDefault("'" + ProjectScope.LEGACY_VALUE + "'")
+    private UUID projectId = ProjectScope.LEGACY;
+
     @Enumerated(EnumType.STRING) @Column(nullable = false)
     private Operation operation;
     @Enumerated(EnumType.STRING) @Column(nullable = false)
@@ -57,6 +65,8 @@ public class TransferJob {
     private String triggeredBy;
     @Column(columnDefinition = "text")
     private String triggeredByName;
+    @Column(length = 255)
+    private String ownerSubject;
     @CreationTimestamp
     private Instant createdAt;
     private Instant startedAt;

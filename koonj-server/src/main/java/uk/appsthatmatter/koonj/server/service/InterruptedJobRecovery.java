@@ -38,6 +38,13 @@ public class InterruptedJobRecovery implements ApplicationRunner {
         var active = List.of(Status.PENDING, Status.RUNNING, Status.PAUSING, Status.STOPPING);
         for (var jobId : jobs.idsWithStatus(active)) jobService.log(jobId, finished, Level.ERROR, null, reason);
         jobs.finishInterrupted(Status.FAILED, finished, reason, active);
+        String legacyReason = "Paused job has no verified owner. Resubmit to retry.";
+        for (var job : jobs.findByStatusAndOwnerSubjectIsNull(Status.PAUSED)) {
+            job.setStatus(Status.FAILED);
+            job.setCompletedAt(finished);
+            job.setDetails(legacyReason);
+            jobService.log(job.getId(), finished, Level.ERROR, null, legacyReason);
+        }
         files.failInterrupted(StorageState.FAILED, reason, List.of(StorageState.QUEUED_ARCHIVE,
                 StorageState.ARCHIVING, StorageState.QUEUED_RECALL, StorageState.RECALLING));
     }

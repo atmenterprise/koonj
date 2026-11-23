@@ -6,12 +6,21 @@ import { folderTotals, indexFolderContents } from './folderContents'
 import { folderTree } from '../../api/mappers'
 import { compareCatalogValues } from './catalogSort'
 import { catalogSearchResults } from './catalogSearchResults'
-import { fileAge } from './fileDates'
+import { fileAge, temperatureOf } from './fileDates'
 import { favoriteHref, favoriteKey } from './catalogFavorites'
 
 const local: CatalogLocationDTO = { id: 'local', name: 'Local', providerType: 'LOCAL', bucket: null, role: 'BOTH', active: true }
 const bucket: CatalogLocationDTO = { id: 's3', name: 'Bucket', providerType: 'AWS_S3', bucket: 'archive', role: 'BOTH', active: true }
 const folders = [{ name: 'docs', prefix: 'docs/', children: [] }, { name: 'photos', prefix: 'photos/', children: [] }]
+
+it('applies the configured temperature thresholds at both boundaries', () => {
+  const now = Date.parse('2026-11-23T00:00:00Z')
+  const policy = { hotDays: 5, coldDays: 10 }
+  expect(temperatureOf('2026-11-19T00:00:00Z', policy, now)).toBe('HOT')
+  expect(temperatureOf('2026-11-18T00:00:00Z', policy, now)).toBe('WARM')
+  expect(temperatureOf('2026-11-13T00:00:00Z', policy, now)).toBe('COLD')
+  expect(temperatureOf(null, policy, now)).toBeUndefined()
+})
 
 it('links favorite folders and files to their exact catalog paths', () => {
   const folder = { connectionId: local.id, scope: 'FOLDER' as const, path: 'docs & notes/' }
@@ -55,7 +64,7 @@ describe('folder transfer selection', () => {
   it('sends multiple folder prefixes alongside explicitly selected file IDs for archive', () => {
     const selected = file('standalone', 'readme.txt')
     const inventory = [selected, file('doc', 'docs/doc.txt'), file('photo', 'photos/photo.jpg')]
-    expect(planTransfers(local, [local, bucket], [selected], folders, inventory).archive).toEqual({
+    expect(planTransfers(local, [local, bucket], [selected], folders, inventory).archive).toMatchObject({
       source: local, paths: ['docs/', 'photos/'], fileIds: ['standalone'], fileCount: 3,
     })
   })
@@ -65,22 +74,50 @@ describe('folder transfer selection', () => {
     const archiveBucket: CatalogLocationDTO = { ...bucket, role: 'TARGET' }
     const archived = file('archived', 'docs/report.txt', true)
     const locations = [sourceOnly, archiveBucket]
-    expect(planTransfers(sourceOnly, locations, [archived], [], [archived]).recall?.source).toEqual(archiveBucket)
+    expect(planTransfers(sourceOnly, locations, [archived], [], [archived]).recall[0]?.source).toEqual(archiveBucket)
     expect(transferTargets('recall', archiveBucket, locations)).toEqual([sourceOnly])
     expect(transferTargets('archive', sourceOnly, locations)).toEqual([archiveBucket])
-    expect(planTransfers(sourceOnly, locations, [file('new', 'docs/new.txt')], [], []).recall).toBeUndefined()
+    expect(planTransfers(sourceOnly, locations, [file('new', 'docs/new.txt')], [], []).recall).toEqual([])
   })
 
   it('recalls cloud folders by source prefix and mounted folders by destination prefix', () => {
     const files = [file('a', 'docs/a.txt', true), file('b', 'photos/b.jpg', true), file('c', 'docs/not-archived.txt'),
       file('d', 'docs-old/d.txt', true)]
-    expect(planTransfers(local, [local, bucket], [files[0]], folders, files).recall).toEqual({
-      source: bucket, paths: [], fileIds: [], targetFolderPaths: ['docs/', 'photos/'], destinationId: local.id, fileCount: 2,
+    expect(planTransfers(local, [local, bucket], [files[0]], folders, files).recall[0]).toMatchObject({
+      source: bucket, paths: [], fileIds: [], targetFolderPaths: ['docs/', 'photos/'], destinationId: local.id, fileCount: 2, skippedCount: 1,
     })
     const objects = files.map(file => ({ ...file, connectionId: bucket.id, entryType: 'FILE' as const }))
-    expect(planTransfers(bucket, [local, bucket], [], folders, objects).recall).toEqual({
+    expect(planTransfers(bucket, [local, bucket], [], folders, objects).recall[0]).toMatchObject({
       source: bucket, paths: ['docs/', 'photos/'], fileIds: [], fileCount: 3,
     })
+  })
+
+  it('filters mixed folder contents and explicit selections and groups recalls by archive source', () => {
+    const secondBucket = { ...bucket, id: 'secondary', name: 'Secondary', bucket: 'secondary' }
+    const document = file('doc', 'docs/ready.txt')
+    const archived = file('archived', 'docs/archived.txt', true)
+    const secondary = { ...file('second', 'photos/only-link.txt', true), targetConnectionId: secondBucket.id,
+      symlinkTarget: 's3://secondary/photos/only-link.txt' }
+    const external = { ...file('external', 'external', true), symlinkTarget: '/mount/other/file', targetConnectionId: null }
+    const invalid = { ...file('invalid', 'docs/invalid', true), symlinkTarget: 's3://archive/../file' }
+    const inventory = [document, archived, secondary, external, invalid]
+    const plan = planTransfers(local, [local, bucket, secondBucket], [external, document], folders, inventory)
+    expect(plan.archive).toMatchObject({ paths: ['docs/'], fileIds: [], fileCount: 1, skippedCount: 4,
+      scopeCounts: new Map([['docs/', 1], ['photos/', 0], ['external', 0], ['docs/ready.txt', 1]]) })
+    expect(plan.recall).toEqual([
+      expect.objectContaining({ source: bucket, targetFolderPaths: ['docs/'], fileIds: [], fileCount: 1, skippedCount: 4,
+        scopeCounts: new Map([['docs/', 1], ['photos/', 0], ['external', 0], ['docs/ready.txt', 0]]) }),
+      expect.objectContaining({ source: secondBucket, targetFolderPaths: ['photos/'], fileIds: [], fileCount: 1, skippedCount: 4 }),
+    ])
+  })
+
+  it('uses one root scope for select-all without sending individual IDs', () => {
+    const direct = file('root-file', 'root-file')
+    const nested = file('nested-file', 'photos/nested-file', true)
+    const selection = planTransfers(local, [local, bucket], [direct], [{ prefix: '', name: 'Root', children: [] }, folders[1]],
+      [direct, nested])
+    expect(selection.archive).toMatchObject({ paths: ['/'], fileIds: [], fileCount: 1, skippedCount: 1 })
+    expect(selection.recall[0]).toMatchObject({ targetFolderPaths: ['/'], fileIds: [], fileCount: 1, skippedCount: 1 })
   })
 
   it('counts a 500,001-file folder once and keeps redundant paths and IDs out of the request', () => {
@@ -90,13 +127,13 @@ describe('folder transfer selection', () => {
     }))]
     const nested = { prefix: 'docs/nested/', name: 'nested', children: [] }
     const plan = planTransfers(local, [local, bucket], [first], [folders[0], nested], catalog).archive
-    expect(plan).toEqual({ source: local, paths: ['docs/'], fileIds: [], fileCount: 500_001 })
+    expect(plan).toMatchObject({ source: local, paths: ['docs/'], fileIds: [], fileCount: 500_001 })
     const link = file('archived', 'docs/nested/archived.txt', true)
     const links = Array.from({ length: 500_001 }, (_, index) => ({
       ...link, id: String(index), relativePath: `docs/nested/${index}.txt`,
       symlinkTarget: `koonj-ref://${index}`, s3Key: `archive/${index}.txt`,
     }))
-    expect(planTransfers(local, [local, bucket], [links[0]], [folders[0], nested], links).recall).toEqual({
+    expect(planTransfers(local, [local, bucket], [links[0]], [folders[0], nested], links).recall[0]).toMatchObject({
       source: bucket, paths: [], fileIds: [], targetFolderPaths: ['docs/'], destinationId: local.id, fileCount: 500_001,
     })
   })

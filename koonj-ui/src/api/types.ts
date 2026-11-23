@@ -43,6 +43,12 @@ export interface ConnectionHealthDTO {
   connectionId: string
   healthy: boolean
   message: string
+  capacity?: { totalBytes: number; usedBytes: number; availableBytes: number } | null
+}
+
+export interface StorageUsageDTO {
+  footprints: { connectionId: string; storageClass: string | null; fileCount: number; sizeBytes: number }[]
+  reclaimed: { sourceConnectionId: string; targetConnectionId: string; fileCount: number; sizeBytes: number }[]
 }
 
 export const storageStates = ['LOCAL_ONLY', 'QUEUED_ARCHIVE', 'ARCHIVING', 'ARCHIVED', 'ARCHIVED_COPY', 'ARCHIVED_SYMLINK',
@@ -167,6 +173,7 @@ export interface DashboardSummaryDTO {
 
 export interface ServerTelemetryDTO {
   health: string
+  instance: string
   sampledAt: string
   uptimeSeconds: number
   javaVersion: string
@@ -174,6 +181,7 @@ export interface ServerTelemetryDTO {
   heapCommittedBytes: number
   livePlatformThreads: number
   availableProcessors: number
+  components: Record<string, string>
 }
 
 export interface CatalogMetadataValues {

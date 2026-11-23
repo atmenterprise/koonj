@@ -47,6 +47,7 @@ public class CatalogController {
     @GetMapping("/locations/{connectionId}/active-archives")
     @PreAuthorize(KoonjRoles.READ)
     public List<JobService.ArchiveActivity> activeArchives(@PathVariable UUID connectionId) {
+        connections.get(connectionId);
         return jobs.activeArchives(connectionId);
     }
 
@@ -55,6 +56,12 @@ public class CatalogController {
     @Operation(summary = "Queue a catalog scan", description = "Discover physical entries and remove entries absent from the scanned location. Track completion through the returned job ID.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public JobResponse scan(@PathVariable UUID connectionId) { return catalog.submit(connectionId); }
+
+    @PostMapping("/scan/sources")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @Operation(summary = "Queue scans for all active source connections")
+    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    public ScanSourcesResponse scanSources() { return catalog.submitSources(); }
 
     @GetMapping("/files/{fileId}")
     @PreAuthorize(KoonjRoles.READ)
@@ -68,12 +75,14 @@ public class CatalogController {
     @PreAuthorize(KoonjRoles.READ)
     public PageResponse<FileMovementResponse> lineage(@PathVariable UUID connectionId, @RequestParam String path,
             @RequestParam(defaultValue = "0") @Min(0) int page, @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size) {
+        connections.get(connectionId);
         return lineage.forFile(connectionId, path, page, size);
     }
 
     @GetMapping(value = "/locations/{connectionId}/lineage/report", produces = "text/csv;charset=UTF-8")
     @PreAuthorize(KoonjRoles.READ)
     public ResponseEntity<StreamingResponseBody> lineageReport(@PathVariable UUID connectionId, @RequestParam String path) {
+        connections.get(connectionId);
         return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"folder-checksum-report.csv\"")
                 .header(HttpHeaders.CACHE_CONTROL, "no-store").body(lineage.folderReport(connectionId, path));
     }

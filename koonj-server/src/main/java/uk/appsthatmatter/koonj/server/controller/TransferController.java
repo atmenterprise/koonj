@@ -61,7 +61,7 @@ public class TransferController {
     }
 
     @GetMapping("/jobs")
-    @Operation(summary = "List jobs", description = "Browse archive, recall and scan jobs in reverse creation order.")
+    @Operation(summary = "List jobs", description = "Browse your archive, recall and scan jobs in this project in reverse creation order.")
     @PreAuthorize(KoonjRoles.OPERATE)
     public PageResponse<JobResponse> list(@RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size) {

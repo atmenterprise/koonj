@@ -90,6 +90,7 @@ services:
       KOONJ_SERVER_URL: ${KOONJ_SERVER_URL:-http://host.docker.internal:8080}
       KOONJ_AGENT_TOKEN_URI: ${KOONJ_AGENT_TOKEN_URI:-http://keycloak:8080/realms/koonj/protocol/openid-connect/token}
       KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
+      KOONJ_AGENT_PROJECT_ID: ${KOONJ_AGENT_PROJECT_ID:-}
       KOONJ_AGENT_CLIENT_SECRET: ${KOONJ_AGENT_CLIENT_SECRET:-}
     volumes:
       - type: bind

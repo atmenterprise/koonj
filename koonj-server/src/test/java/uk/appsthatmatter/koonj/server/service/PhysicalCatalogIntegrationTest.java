@@ -5,20 +5,37 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.BadJwtException;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import uk.appsthatmatter.koonj.server.connector.*;
+import uk.appsthatmatter.koonj.server.controller.AdminController;
+import uk.appsthatmatter.koonj.server.controller.IntegrationController;
+import uk.appsthatmatter.koonj.server.controller.ManagementController;
+import uk.appsthatmatter.koonj.server.controller.ManagementController.TemperaturePolicy;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteRequest;
 import uk.appsthatmatter.koonj.server.dto.CatalogFavoriteResponse;
 import uk.appsthatmatter.koonj.server.dto.CatalogMetadataValues;
 import uk.appsthatmatter.koonj.server.dto.CatalogMetadataWriteRequest;
 import uk.appsthatmatter.koonj.server.dto.FileResponse;
 import uk.appsthatmatter.koonj.server.dto.JobResponse;
+import uk.appsthatmatter.koonj.server.dto.StorageUsage;
 import uk.appsthatmatter.koonj.server.dto.TransferRequest;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
@@ -31,6 +48,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -47,9 +65,12 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static uk.appsthatmatter.koonj.server.entity.TransferJob.Operation.*;
 import static uk.appsthatmatter.koonj.server.entity.TransferJob.Status.*;
 
+@AutoConfigureMockMvc
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:physical-catalog;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -67,7 +88,13 @@ class PhysicalCatalogIntegrationTest {
     @Autowired FileTransferService transfers;
     @Autowired JobService jobs;
     @Autowired TransferJobRepository jobRepository;
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper json;
+    @Autowired ProjectTestTokens serverTokens;
     @Autowired BucketFixture bucketFixture;
+    @Autowired AdminController administration;
+    @Autowired IntegrationController integrations;
+    @Autowired ManagementController management;
     private TestBucket s3;
     private StorageConnection source;
     private StorageConnection bucket;
@@ -78,6 +105,239 @@ class PhysicalCatalogIntegrationTest {
         s3.reset();
         source = connection(ProviderType.LOCAL, root.toString());
         bucket = connection(ProviderType.MINIO, "archive");
+    }
+
+    @Test
+    void signedInUsersSwitchOnlyBetweenTheirAssignedProjects() throws Exception {
+        String admin = token("project-admin", "KOONJ_ADMIN");
+        String operator = token("project-operator", "KOONJ_OPERATOR");
+        String pending = token("project-pending");
+        assertThat(firstProject(admin)).isEqualTo(ProjectScope.LEGACY.toString());
+        String personal = firstProject(operator);
+        assertThat(personal).isNotEqualTo(ProjectScope.LEGACY.toString());
+        firstProject(pending);
+        request(get("/api/v1/catalog/locations"), pending, null).andExpect(status().isForbidden());
+        request(get("/api/v1/projects/users"), operator, null).andExpect(status().isForbidden());
+
+        var created = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Research\"}"), admin, null).andExpect(status().isCreated()).andReturn();
+        String shared = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+        request(get("/api/v1/catalog/locations"), operator, shared).andExpect(status().isForbidden());
+        request(get("/api/v1/catalog/locations"), admin, personal).andExpect(status().isForbidden());
+        request(put("/api/v1/projects/{id}/members", shared).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"subject\":\"oidc:project-operator\"}"), admin, null).andExpect(status().isNoContent());
+        request(post("/api/v1/projects/session"), operator, null).andExpect(jsonPath("$[*].id").value(
+                org.hamcrest.Matchers.containsInAnyOrder(personal, shared)));
+        request(delete("/api/v1/projects/{id}/members", shared).param("subject", "oidc:project-admin"), operator, null)
+                .andExpect(status().isForbidden());
+
+        var sharedFolder = Files.createDirectory(root.resolve("research"));
+        Files.writeString(sharedFolder.resolve("report.txt"), "project-scoped data");
+        var location = connection(ProviderType.LOCAL, sharedFolder.toString());
+        location.setProjectId(UUID.fromString(shared));
+        connections.saveAndFlush(location);
+
+        request(get("/api/v1/catalog/locations"), operator, shared)
+                .andExpect(jsonPath("$[0].id").value(location.getId().toString()));
+        request(get("/api/v1/catalog/locations"), operator, personal)
+                .andExpect(jsonPath("$").isEmpty());
+        request(post("/api/v1/catalog/scan/{id}", source.getId()), operator, shared).andExpect(status().isNotFound());
+        var submitted = request(post("/api/v1/catalog/scan/sources"), admin, shared).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.jobs.length()").value(1)).andReturn();
+        String job = json.readTree(submitted.getResponse().getContentAsString()).get("jobs").get(0).get("id").asText();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                request(get("/api/v1/transfers/jobs/{id}", job), admin, shared)
+                        .andExpect(jsonPath("$.status").value("COMPLETED")));
+        request(get("/api/v1/transfers/jobs/{id}", job), operator, shared).andExpect(status().isNotFound());
+        request(get("/api/v1/transfers/jobs/{id}/events", job), operator, shared).andExpect(status().isNotFound());
+        request(get("/api/v1/transfers/jobs/{id}/files", job), operator, shared).andExpect(status().isNotFound());
+        request(post("/api/v1/transfers/jobs/{id}/control", job).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"action\":\"STOP\"}"), operator, shared).andExpect(status().isNotFound());
+        request(get("/api/v1/transfers/jobs"), operator, shared).andExpect(jsonPath("$.totalElements").value(0));
+        request(get("/api/v1/transfers/jobs"), admin, shared).andExpect(jsonPath("$.content[0].id").value(job));
+        request(get("/api/v1/transfers/jobs"), operator, personal).andExpect(jsonPath("$.content").isEmpty());
+        var file = files.findByConnectionIdAndRelativePath(location.getId(), "report.txt").orElseThrow();
+        request(get("/api/v1/catalog/files/{id}", file.getId()), operator, shared).andExpect(status().isOk());
+        request(get("/api/v1/catalog/files/{id}", file.getId()), operator, personal).andExpect(status().isNotFound());
+
+        String agent = "project-fuse-agent";
+        serverTokens.tokens.put(agent, Jwt.withTokenValue(agent).header("alg", "RS256").subject(agent)
+                .claim("azp", "koonj-agent").claim("realm_access", Map.of("roles", List.of("KOONJ_OPERATOR"))).build());
+        request(get("/api/v1/catalog/files/{id}", file.getId()), agent, shared).andExpect(status().isForbidden());
+        request(get("/api/v1/catalog/files/{id}", file.getId()), agent, null).andExpect(status().isNotFound());
+        request(get("/api/v1/catalog/locations"), agent, null).andExpect(status().isForbidden());
+
+        var projectBucket = connection(ProviderType.MINIO, "research-archive");
+        projectBucket.setProjectId(UUID.fromString(shared));
+        projectBucket.setRole(StorageRole.TARGET);
+        connections.saveAndFlush(projectBucket);
+        var crossProjectArchive = new TransferRequest(location.getId(), bucket.getId(),
+                List.of("report.txt"), null, "STANDARD", ArchiveMode.COPY, false);
+        request(post("/api/v1/transfers/archive").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(crossProjectArchive)), operator, shared).andExpect(status().isNotFound());
+        var projectArchive = new TransferRequest(location.getId(), projectBucket.getId(),
+                List.of("report.txt"), null, "STANDARD", ArchiveMode.COPY, false);
+        var archive = request(post("/api/v1/transfers/archive").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(projectArchive)), operator, shared).andExpect(status().isAccepted()).andReturn();
+        String archiveId = json.readTree(archive.getResponse().getContentAsString()).get("id").asText();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                request(get("/api/v1/transfers/jobs/{id}", archiveId), operator, shared)
+                        .andExpect(jsonPath("$.status").value("COMPLETED")));
+        request(get("/api/v1/transfers/jobs/{id}/files", archiveId), operator, shared)
+                .andExpect(jsonPath("$.content.length()").value(1));
+
+        String renamedToken = "renewed-operator-token";
+        serverTokens.tokens.put(renamedToken, Jwt.withTokenValue(renamedToken).header("alg", "RS256")
+                .subject(operator).claim("preferred_username", "renamed-operator")
+                .claim("realm_access", Map.of("roles", List.of("KOONJ_OPERATOR"))).build());
+        request(get("/api/v1/transfers/jobs"), renamedToken, shared)
+                .andExpect(jsonPath("$.totalElements").value(1)).andExpect(jsonPath("$.content[0].id").value(archiveId));
+        request(get("/api/v1/transfers/jobs/{id}/files", archiveId), admin, shared).andExpect(status().isNotFound());
+
+        request(put("/api/v1/management/temperature-policy").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"hotDays\":8,\"coldDays\":70}"), admin, shared).andExpect(status().isOk());
+        request(get("/api/v1/management/temperature-policy"), operator, shared).andExpect(jsonPath("$.coldDays").value(70));
+        request(get("/api/v1/management/temperature-policy"), operator, personal).andExpect(jsonPath("$.coldDays").value(30));
+
+        request(delete("/api/v1/projects/{id}/members", shared).param("subject", "oidc:project-operator"), admin, null)
+                .andExpect(status().isNoContent());
+        request(get("/api/v1/catalog/locations"), operator, shared).andExpect(status().isForbidden());
+        request(delete("/api/v1/projects/{id}/members", personal).param("subject", "oidc:project-operator"), admin, null)
+                .andExpect(status().isConflict());
+    }
+
+    private String token(String subject, String... roles) {
+        var token = Jwt.withTokenValue(subject).header("alg", "RS256").subject(subject)
+                .claim("realm_access", Map.of("roles", List.of(roles))).build();
+        serverTokens.tokens.put(subject, token);
+        return subject;
+    }
+
+    private String firstProject(String token) throws Exception {
+        var result = request(post("/api/v1/projects/session"), token, null)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1)).andReturn();
+        return json.readTree(result.getResponse().getContentAsString()).get(0).get("id").asText();
+    }
+
+    private ResultActions request(MockHttpServletRequestBuilder request, String token, String project) throws Exception {
+        if (project != null) request.header(ProjectScope.HEADER, project);
+        return mvc.perform(request.header("Authorization", "Bearer " + token));
+    }
+
+    @Test
+    void administrationAndManagementEnforceAccessAndPersistSettings() {
+        var context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated("viewer", null,
+                List.of(new SimpleGrantedAuthority("ROLE_KOONJ_VIEWER"))));
+        SecurityContextHolder.setContext(context);
+        var policy = new TemperaturePolicy(10, 45);
+        try {
+            assertThat(management.temperaturePolicy()).isEqualTo(new TemperaturePolicy(15, 30));
+            assertThatThrownBy(() -> management.updateTemperaturePolicy(policy)).isInstanceOf(AccessDeniedException.class);
+            assertThatThrownBy(() -> integrations.list(IntegrationEndpoint.Kind.MCP)).isInstanceOf(AccessDeniedException.class);
+            context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated("admin", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_KOONJ_ADMIN"))));
+            assertThat(administration.telemetry().components()).containsEntry("db", "UP");
+            assertThat(administration.observability().exporters()).containsKeys("logs", "metrics", "traces");
+            assertThatThrownBy(() -> management.updateTemperaturePolicy(new TemperaturePolicy(40, 30)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(management.updateTemperaturePolicy(policy)).isEqualTo(policy);
+            assertThat(management.temperaturePolicy()).isEqualTo(policy);
+            var settings = new IntegrationController.Settings(IntegrationEndpoint.Kind.MCP, "Catalog MCP",
+                    "https://catalog.example.com/mcp", true);
+            var endpoint = integrations.create(settings);
+            assertThat(integrations.list(IntegrationEndpoint.Kind.MCP)).contains(endpoint);
+            var updated = integrations.update(endpoint.id(), new IntegrationController.Settings(settings.kind(), settings.name(), settings.url(), false));
+            assertThat(updated.enabled()).isFalse();
+            assertThatThrownBy(() -> integrations.create(new IntegrationController.Settings(
+                    IntegrationEndpoint.Kind.API, "invalid", "https://user:password@example.com/api", true)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            integrations.delete(endpoint.id());
+            assertThat(integrations.list(IntegrationEndpoint.Kind.MCP)).doesNotContain(endpoint, updated);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void queuesEveryActiveSourceOnceAndLeavesTargetOnlyAndInactiveConnectionsOut() throws Exception {
+        var previouslyActive = connections.findAll().stream().filter(StorageConnection::isActive)
+                .filter(connection -> !connection.getId().equals(source.getId()) && !connection.getId().equals(bucket.getId()))
+                .toList();
+        previouslyActive.forEach(connection -> connection.setActive(false));
+        connections.saveAllAndFlush(previouslyActive);
+        source.setRole(StorageRole.SOURCE);
+        bucket.setRole(StorageRole.TARGET);
+        connections.saveAllAndFlush(List.of(source, bucket));
+        var second = connection(ProviderType.LOCAL, Files.createDirectory(root.resolve("second")).toString());
+        Files.writeString(Path.of(second.getBasePathOrBucket()).resolve("file"), "scanned contents");
+        var inactive = connection(ProviderType.LOCAL, root.toString());
+        inactive.setActive(false);
+        connections.saveAndFlush(inactive);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var blocker = jobs.create(SCAN, source.getId(), null, List.of());
+        var running = jobs.execute(blocker, job -> { entered.countDown(); release.await(); });
+        try {
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            var batch = catalog.submitSources();
+            assertThat(batch.existingScanCount()).isEqualTo(1);
+            assertThat(batch.jobs()).singleElement().satisfies(job -> assertThat(job.sourceConnectionId()).isEqualTo(second.getId()));
+            var repeat = catalog.submitSources();
+            assertThat(repeat.jobs()).isEmpty();
+            assertThat(repeat.existingScanCount()).isEqualTo(2);
+            assertThatThrownBy(() -> catalog.submit(second.getId()))
+                    .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("409");
+            release.countDown();
+            completed(batch.jobs().getFirst());
+            assertThat(files.findByConnectionIdAndRelativePath(second.getId(), "file")).isPresent();
+        } finally {
+            release.countDown();
+            running.get(10, TimeUnit.SECONDS);
+            previouslyActive.forEach(connection -> connection.setActive(true));
+            connections.saveAllAndFlush(previouslyActive);
+        }
+    }
+
+    @Test
+    void checksActiveStorageWithoutWritingAndSkipsInactiveLocations() throws IOException {
+        var baseline = FileTime.from(Instant.parse("2025-01-01T00:00:00Z"));
+        Files.setLastModifiedTime(root, baseline);
+        var mounted = connectionService.connectivity(source.getId());
+        assertThat(mounted.healthy()).isTrue();
+        assertThat(mounted.capacity().totalBytes()).isGreaterThan(0);
+        assertThat(mounted.capacity().availableBytes()).isBetween(0L, mounted.capacity().totalBytes());
+        assertThat(Files.getLastModifiedTime(root)).isEqualTo(baseline);
+        assertThat(connectionService.connectivity(bucket.getId()).healthy()).isTrue();
+        assertThat(connectionService.connectivity(bucket.getId()).capacity()).isNull();
+
+        var missing = connection(ProviderType.LOCAL, root.resolve("missing").toString());
+        var offline = connectionService.connectivity(missing.getId());
+        assertThat(offline.healthy()).isFalse();
+        assertThat(offline.message()).contains("path not found");
+        missing.setActive(false);
+        connections.saveAndFlush(missing);
+        assertThat(connectionService.connectivity(missing.getId()).message()).isEqualTo("Connection is inactive");
+    }
+
+    @Test
+    void summarizesMultipleStorageProvidersAndAttributesSavingsToBothEnds() throws IOException {
+        StorageConnection secondTarget = connection(ProviderType.RUSTFS, "alternate");
+        Files.writeString(root.resolve("copy"), "keep");
+        Files.writeString(root.resolve("purge"), "release");
+        completed(transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("copy"), null, null, ArchiveMode.COPY, false)));
+        completed(transfers.submit(ARCHIVE, new TransferRequest(source.getId(), secondTarget.getId(),
+                List.of("purge"), null, null, ArchiveMode.PURGE, false)));
+
+        StorageUsage usage = connectionService.storageUsage();
+        assertThat(usage.footprints()).filteredOn(item -> List.of(source.getId(), bucket.getId(), secondTarget.getId())
+                        .contains(item.connectionId()))
+                .extracting(StorageUsage.Footprint::connectionId, StorageUsage.Footprint::fileCount, StorageUsage.Footprint::sizeBytes)
+                .containsExactlyInAnyOrder(tuple(source.getId(), 1L, 4L), tuple(bucket.getId(), 1L, 4L), tuple(secondTarget.getId(), 1L, 7L));
+        assertThat(usage.reclaimed()).filteredOn(item -> item.sourceConnectionId().equals(source.getId()))
+                .containsExactly(new StorageUsage.Reclaimed(source.getId(), secondTarget.getId(), 1, 7));
     }
 
     @Test
@@ -361,35 +621,34 @@ class PhysicalCatalogIntegrationTest {
         Files.writeString(root.resolve("copied.txt"), "verified bytes");
         Files.writeString(root.resolve("corrupt.txt"), "damaged during archive");
         s3.corruptReads = "corrupt.txt";
-        JobResponse accepted;
         var context = SecurityContextHolder.createEmptyContext();
         var token = Jwt.withTokenValue("test-token").header("alg", "none").subject("operator-id")
                 .claim("preferred_username", "operator@example.com").claim("name", "Catalog Operator").build();
         context.setAuthentication(new JwtAuthenticationToken(token));
         SecurityContextHolder.setContext(context);
         try {
-            accepted = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+            var accepted = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
                     List.of("copied.txt", "corrupt.txt", "missing.txt"), null, null, ArchiveMode.COPY, false));
+            var job = finished(accepted);
+            assertThat(job.status()).isEqualTo(PARTIAL_FAILURE);
+            assertThat(job.triggeredBy()).isEqualTo("operator@example.com");
+            assertThat(job.triggeredByName()).isEqualTo("Catalog Operator");
+            assertThat(job.startedAt()).isBetween(job.createdAt(), job.completedAt());
+            assertThat(job.failedFiles()).isEqualTo(2);
+            assertThat(jobs.fileResults(job.id(), false, PageRequest.of(0, 1)).totalElements()).isEqualTo(2);
+            assertThat(jobs.fileResults(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(file -> {
+                assertThat(file.sourcePath()).isEqualTo("corrupt.txt");
+                assertThat(file.error()).contains("checksum mismatch");
+            });
+            assertThat(jobs.events(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(event -> {
+                assertThat(event.path()).isEqualTo("missing.txt");
+                assertThat(event.message()).isEqualTo("No regular files found");
+            });
+            assertThat(jobs.events(job.id(), false, PageRequest.of(0, 10)).content()).extracting(event -> event.message())
+                    .contains("Job queued", "Execution started", "Execution completed with failures");
         } finally {
             SecurityContextHolder.clearContext();
         }
-        var job = finished(accepted);
-        assertThat(job.status()).isEqualTo(PARTIAL_FAILURE);
-        assertThat(job.triggeredBy()).isEqualTo("operator@example.com");
-        assertThat(job.triggeredByName()).isEqualTo("Catalog Operator");
-        assertThat(job.startedAt()).isBetween(job.createdAt(), job.completedAt());
-        assertThat(job.failedFiles()).isEqualTo(2);
-        assertThat(jobs.fileResults(job.id(), false, PageRequest.of(0, 1)).totalElements()).isEqualTo(2);
-        assertThat(jobs.fileResults(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(file -> {
-            assertThat(file.sourcePath()).isEqualTo("corrupt.txt");
-            assertThat(file.error()).contains("checksum mismatch");
-        });
-        assertThat(jobs.events(job.id(), true, PageRequest.of(0, 1)).content()).singleElement().satisfies(event -> {
-            assertThat(event.path()).isEqualTo("missing.txt");
-            assertThat(event.message()).isEqualTo("No regular files found");
-        });
-        assertThat(jobs.events(job.id(), false, PageRequest.of(0, 10)).content()).extracting(event -> event.message())
-                .contains("Job queued", "Execution started", "Execution completed with failures");
     }
 
     @Test
@@ -480,7 +739,7 @@ class PhysicalCatalogIntegrationTest {
     }
 
     private JobResponse finished(JobResponse accepted) {
-        await().atMost(Duration.ofSeconds(10)).until(() -> jobs.get(accepted.id()).completedAt() != null);
+        await().pollInSameThread().atMost(Duration.ofSeconds(10)).until(() -> jobs.get(accepted.id()).completedAt() != null);
         return jobs.get(accepted.id());
     }
 
@@ -526,6 +785,30 @@ class PhysicalCatalogIntegrationTest {
     }
 
     @Test
+    void transfersOnlyEligibleFilesFromTheStorageRoot() throws IOException {
+        Path link = Files.writeString(root.resolve("archived"), "archived bytes");
+        Path regular = Files.writeString(root.resolve("local"), "local bytes");
+        Path external = Files.createSymbolicLink(root.resolve("external"), regular);
+        completed(transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("archived"), null, null, ArchiveMode.PURGE, false)));
+
+        var archive = transfers.submit(ARCHIVE, new TransferRequest(source.getId(), bucket.getId(),
+                List.of("/"), null, null, ArchiveMode.COPY, false));
+        completed(archive);
+        assertThat(jobs.get(archive.id()).processedFiles()).isEqualTo(1);
+        assertThat(s3.objects).containsOnlyKeys("archived", "local");
+
+        var recall = transfers.submit(RECALL, new TransferRequest(bucket.getId(), source.getId(),
+                null, null, null, null, false, List.of("/")));
+        completed(recall);
+        assertThat(recall.requestedPaths()).containsExactly("/");
+        assertThat(jobs.get(recall.id()).processedFiles()).isEqualTo(1);
+        assertThat(link).hasContent("archived bytes");
+        assertThat(regular).hasContent("local bytes");
+        assertThat(Files.isSymbolicLink(external)).isTrue();
+    }
+
+    @Test
     void deduplicatesMountedLinksAndOverlappingS3Selections() throws IOException {
         Files.createDirectories(root.resolve("docs/nested"));
         Path first = Files.writeString(root.resolve("docs/first"), "first");
@@ -548,8 +831,23 @@ class PhysicalCatalogIntegrationTest {
         return new TransferRequest(from.getId(), to.getId(), List.of("report"), null, null, mode, delete);
     }
 
+    static class ProjectTestTokens {
+        final Map<String, Jwt> tokens = new ConcurrentHashMap<>();
+
+        Jwt decode(String value) {
+            Jwt token = tokens.get(value);
+            if (token == null) throw new BadJwtException("Unknown test token");
+            return token;
+        }
+    }
+
     @TestConfiguration
     static class ConnectorConfiguration {
+        @Bean ProjectTestTokens projectTestTokens() { return new ProjectTestTokens(); }
+
+        @Bean @Primary
+        JwtDecoder projectTestDecoder(ProjectTestTokens tokens) { return tokens::decode; }
+
         @Bean BucketFixture bucketFixture() { return new BucketFixture(new TestBucket()); }
 
         @Bean @Primary
@@ -594,6 +892,7 @@ class PhysicalCatalogIntegrationTest {
         @Override public Optional<Instant> requestColdRestore(StorageConnection connection, String key) {
             return Optional.ofNullable(coldReady);
         }
+        @Override public void checkConnectivity(StorageConnection config) {}
         @Override public void testConnection(StorageConnection config) {}
 
         @Override

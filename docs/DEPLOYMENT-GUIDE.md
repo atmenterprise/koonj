@@ -201,13 +201,14 @@ docker compose up -d --wait  # restart
 
 ## Optional Docker Observability with OpenObserve
 
-The standard Docker command leaves metric export disabled. To enable it, set
+The standard Docker command leaves telemetry export disabled. To enable it, set
 these values in the extracted `docker/.env` file:
 
 ```dotenv
 OPENOBSERVE_ROOT_EMAIL=monitoring@example.com
 OPENOBSERVE_ROOT_PASSWORD='your_openobserve_password'
 OPENOBSERVE_AUTHORIZATION='Basic <base64(email:password)>'
+KOONJ_OPENOBSERVE_URL=http://localhost:5080/web
 ```
 
 Replace the placeholder after `Basic ` with the Base64-encoded ingestion
@@ -219,7 +220,7 @@ printf '%s' 'monitoring@example.com:your_openobserve_password' | base64 | tr -d 
 
 From the extracted `docker/` directory, start Compose with both files. The
 base file defines the Koonj services and the second file adds OpenObserve and
-enables the metrics exporter. Use the same file pair for subsequent Compose
+enables log, metric, and trace export. Use the same file pair for subsequent Compose
 commands.
 
 ```bash
@@ -228,12 +229,17 @@ docker compose -f docker-compose.yml -f docker-compose.otel.yml ps
 curl -fsS http://127.0.0.1:5080/healthz
 ```
 
-Sign in to OpenObserve at `http://127.0.0.1:5080` on the Docker host and open
+Open **Administration → Observability** in Koonj to open the Logs, Metrics, or
+Traces view in OpenObserve. For remote browsers, set `KOONJ_OPENOBSERVE_URL` to
+the reachable browser URL. Set `KOONJ_OPENOBSERVE_ORGANIZATION` if the ingestion
+organization is different from `default`. Sign in to OpenObserve and open
 **Traces** in the `default` organization after running a scan or transfer.
 Look for the `koonj.job.execution` span and its `operation` and `outcome`
 attributes. **Metrics** shows aggregates such as job execution count and
-duration. Allow a minute for the first metrics export. Koonj sends both
-signals directly over OTLP/HTTP. The OpenObserve data volume persists
+duration. Allow a minute for the first metrics export. **Logs** shows events from
+Koonj application loggers in the `koonj_server` stream. Koonj sends all three signals directly over OTLP/HTTP.
+For a host installation, set `KOONJ_OTLP_LOGS_ENDPOINT` to the complete OTLP/HTTP
+logs endpoint, such as `http://127.0.0.1:5080/api/default/v1/logs`. The OpenObserve data volume persists
 across container restarts.
 
 When upgrading the same Compose project from the old Grafana setup, add
@@ -439,6 +445,40 @@ JAVA_OPTS=-Xms1g -Xmx4g -XX:+UseG1GC
 ```
 
 ---
+
+## Project workspaces
+
+Upgrade an existing PostgreSQL installation by backing up the Koonj database,
+stopping the server, and applying the
+[project workspace migration](../deploy/migrations/project-workspaces.sql) with
+`psql -v ON_ERROR_STOP=1 -f deploy/migrations/project-workspaces.sql` against that
+database before starting the new server. The migration assigns existing storage
+connections, catalog records, jobs, and integrations to **Default project**.
+Current temperature thresholds remain available in that project. Fresh
+installations using `KOONJ_DDL_AUTO=update` create the project schema at startup.
+The Activity log uses stable account identifiers for newly submitted jobs.
+Older jobs without a verified owner remain in the database and in catalog
+lineage where applicable. Resubmit any older paused jobs after upgrading.
+Reapply the migration on installations that already have projects to add the
+activity ownership column and index.
+
+Existing administrators and the configured HTTP Basic account are assigned to
+Default project on first sign-in. To preserve access for existing Keycloak
+operators or viewers, set `KOONJ_PROJECTS_LEGACY_SUBJECTS` to a comma-separated
+list of their Keycloak subject identifiers before rollout, or assign them to
+Default project from **Administration → Projects** after their first sign-in.
+Other new users receive a personal project and retain their Keycloak role
+requirements. Administrators can create shared projects and manage memberships.
+Use dedicated mount roots, shares, and buckets to keep the underlying storage
+separate between projects.
+
+API clients can call `POST /api/v1/projects/session` to obtain their memberships
+and then pass the selected project UUID in `X-Koonj-Project`. Requests without
+the header use Default project when the account belongs to it, or the account’s
+first available project. FUSE uses Default project unless
+`KOONJ_AGENT_PROJECT_ID` is set. For a project-specific FUSE mount, include that
+UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
+`KOONJ_AGENT_PROJECT_ID` on the mount.
 
 ## Configuration Reference
 

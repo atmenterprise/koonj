@@ -9,6 +9,7 @@ export function createQueryClient(notify: (message: ActivityMessage) => void) {
   return new QueryClient({
     queryCache: new QueryCache({
       onError: (error, query) => {
+        if (query.meta?.inlineError === true) return
         const detail = errorDetail(error)
         if (unresolved.has(query) && unresolved.get(query) === detail) return
         unresolved.set(query, detail)

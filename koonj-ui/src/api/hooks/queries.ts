@@ -3,6 +3,7 @@ import { catalogTablePage, isActiveJob } from '../mappers'
 import { catalogService } from '../services/catalogService'
 import { connectionService } from '../services/connectionService'
 import { transferService } from '../services/transferService'
+import { managementService } from '../services/managementService'
 import type { CatalogParams, PageResponse, TransferJobDTO } from '../types'
 
 export const queryKeys = {
@@ -11,11 +12,35 @@ export const queryKeys = {
   activeArchives: ['catalog', 'active-archives'] as const,
   files: ['catalog', 'files'] as const,
   jobs: ['transfers', 'jobs'] as const,
+  temperaturePolicy: ['management', 'temperature-policy'] as const,
 }
 
 export function useConnections() {
   return useQuery({ queryKey: queryKeys.connections, meta: { errorTitle: 'Could not load storage connections' },
     queryFn: ({ signal }) => connectionService.getConnections(signal) })
+}
+
+export function useTemperaturePolicy() {
+  return useQuery({ queryKey: queryKeys.temperaturePolicy,
+    queryFn: ({ signal }) => managementService.getTemperaturePolicy(signal),
+    meta: { errorTitle: 'Could not load the temperature policy' } })
+}
+
+export function connectionStatusOptions(id: string, active: boolean) {
+  return queryOptions({
+    queryKey: ['connection-status', id], enabled: active,
+    queryFn: ({ signal }) => connectionService.getStatus(id, signal),
+    refetchOnMount: 'always', refetchOnWindowFocus: false, retry: false,
+    meta: { inlineError: true },
+  })
+}
+
+export function useStorageUsage() {
+  return useQuery({
+    queryKey: [...queryKeys.files, 'storage-usage'],
+    queryFn: ({ signal }) => connectionService.getUsage(signal),
+    meta: { errorTitle: 'Could not load storage usage' },
+  })
 }
 
 export function useCatalogLocations() {

@@ -2,6 +2,7 @@ import { lazy, Suspense, useId, useState, type ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { isObjectStorage, stateLabels } from '../../api/mappers'
 import { useCatalogFileAttributes } from '../../api/hooks/queries'
+import type { TemperaturePolicy } from '../../api/services/managementService'
 import type { FileMetadataDTO, CatalogLocationDTO, CatalogMetadataTarget } from '../../api/types'
 import { Dialog, LoadingRows } from '../../shared/ui/feedback'
 import { useActivityNotifications } from '../../shared/notifications/ActivityNotifications'
@@ -18,23 +19,25 @@ const FileLineage = lazy(() => import('./FileLineage'))
 
 const tabs = [
   { id: 'metadata', label: 'Metadata' },
-  { id: 'custom', label: 'Custom metadata' },
   { id: 'lineage', label: 'Lineage' },
+  { id: 'properties', label: 'Properties' },
 ] as const
 
 function dateTime(value?: string | null) {
   return value ? `${date(value)} · ${time(value)}` : undefined
 }
 
-export function FileInspector({ file, target, location, connections, metadata, writable, folderDetails, favoriteControl,
+export function FileInspector({ file, target, location, connections, metadata, writable, folderDetails, favoriteControl, temperaturePolicy,
   metadataError, navigate, onRetry, onClose, onOpen, onArchive, onRecall }: {
   file?: FileMetadataDTO; target: CatalogMetadataTarget; location: CatalogLocationDTO; connections: CatalogLocationDTO[]
+  temperaturePolicy?: TemperaturePolicy
   metadata?: ReturnType<typeof metadataFor>; writable: boolean; metadataError: Error | null; folderDetails?: string; favoriteControl?: ReactNode
   navigate: (path: string) => void; onRetry: () => void; onClose: () => void; onOpen?: () => void; onArchive?: () => void; onRecall?: () => void
 }) {
   const { notify } = useActivityNotifications()
   const failure = file?.errorMessage
   const [tab, setTab] = useState<typeof tabs[number]['id']>('metadata')
+  const [lineageOpened, setLineageOpened] = useState(false)
   const inspectorId = useId()
   const formId = inspectorId + '-form'
   const attributes = useCatalogFileAttributes(file?.entryType === 'FILE' ? file.id : undefined)
@@ -49,7 +52,7 @@ export function FileInspector({ file, target, location, connections, metadata, w
   const source = connections.find(connection => connection.id === file?.connectionId) ?? location
   const archive = connections.find(connection => connection.id === file?.targetConnectionId)
   const bucket = archive ?? (isObjectStorage(source.providerType) ? source : undefined)
-  const temperature = temperatureOf(file?.lastModifiedAt)
+  const temperature = temperatureOf(file?.lastModifiedAt, temperaturePolicy)
   const physical = attributes.data
   const fields: (readonly [string, ReactNode])[] = file ? [
     ['Relative path', file.relativePath],
@@ -80,6 +83,11 @@ export function FileInspector({ file, target, location, connections, metadata, w
   const retryAttributes = attributes.isError && tab === 'metadata'
   const exportFolder = !file && tab === 'lineage'
 
+  function selectTab(next: typeof tabs[number]['id']) {
+    if (next === 'lineage') setLineageOpened(true)
+    setTab(next)
+  }
+
   function attribution(label: string, value?: string | null) {
     if (value?.trim()) return value
     if (label === 'Owner') return '—'
@@ -87,7 +95,7 @@ export function FileInspector({ file, target, location, connections, metadata, w
     return entered ? <>{entered.value} <small className="inspector-attribute-source">Catalog property</small></> : '—'
   }
 
-  return <Dialog title="Metadata inspector" className="catalog-inspector" onClose={onClose}>
+  return <Dialog title="Metadata inspector" className={file && tab === 'lineage' ? 'catalog-inspector catalog-inspector--lineage' : 'catalog-inspector'} onClose={onClose}>
     <div className="catalog-inspector-body">
       <div className="inspector-title"><span className="icon-tile yellow"><Icon name={file?.entryType === 'SYMLINK' ? 'link' : file ? 'file' : 'folder'} size={23} /></span>
         <div><h3>{name}</h3><p>{details ? `${details} · ${source.name}` : source.name}</p></div>
@@ -99,13 +107,13 @@ export function FileInspector({ file, target, location, connections, metadata, w
       <div className="filters inspector-tabs" role="tablist" aria-label="Inspector views">
         {tabs.map(({ id, label }, index) => <button type="button" key={id} id={inspectorId + '-tab-' + id}
           role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id}
-          aria-controls={inspectorId + '-panel-' + id} onClick={() => setTab(id)} onKeyDown={event => {
+          aria-controls={inspectorId + '-panel-' + id} onClick={() => selectTab(id)} onKeyDown={event => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
             const size = tabs.length
             const offset = event.key === 'ArrowLeft' ? -1 : 1
             const next = tabs[event.key === 'Home' ? 0 : event.key === 'End' ? size - 1 : (index + offset + size) % size].id
             event.preventDefault()
-            setTab(next)
+            selectTab(next)
             document.getElementById(inspectorId + '-tab-' + next)?.focus()
           }}>{label}</button>)}
       </div>
@@ -122,8 +130,8 @@ export function FileInspector({ file, target, location, connections, metadata, w
             <div className="inspector-tags-heading">
               <h4>Tags</h4>
               {writable && <Button variant="quiet" onClick={() => {
-                setTab('custom')
-                document.getElementById(inspectorId + '-tab-custom')?.focus()
+                selectTab('properties')
+                document.getElementById(inspectorId + '-tab-properties')?.focus()
               }}>Edit tags</Button>}
             </div>
             {metadata.effective.tags.length ? <MetadataTags tags={metadata.effective.tags} /> : <p>No tags added.</p>}
@@ -143,17 +151,8 @@ export function FileInspector({ file, target, location, connections, metadata, w
           </div>)}</dl>
         </section>}
       </section>
-      <section role="tabpanel" id={inspectorId + '-panel-custom'} aria-labelledby={inspectorId + '-tab-custom'} hidden={tab !== 'custom'}>
-        {!file && <p className="metadata-scope">Folder tags and custom properties are inherited by files and subfolders.</p>}
-        {metadata ? writable
-          ? <MetadataEditor formId={formId} initial={metadata.direct} inherited={metadata.inherited} pending={save.isPending}
-            onSave={async values => { await save.mutateAsync({ targets: [target], values, mode: 'REPLACE' }) }} />
-          : <ReadOnlyMetadata direct={metadata.direct} inherited={metadata.inherited} />
-          : metadataError ? <p className="metadata-scope">Custom metadata could not be loaded.</p>
-            : <LoadingRows label="Loading custom metadata" />}
-      </section>
-      <section role="tabpanel" id={inspectorId + '-panel-lineage'} aria-labelledby={inspectorId + '-tab-lineage'} hidden={tab !== 'lineage'}>
-        {tab === 'lineage' && (file ? <Suspense fallback={<LoadingRows label="Loading file lineage" />}>
+      <section role="tabpanel" id={inspectorId + '-panel-lineage'} className="inspector-lineage-panel" aria-labelledby={inspectorId + '-tab-lineage'} hidden={tab !== 'lineage'}>
+        {lineageOpened && (file ? <Suspense fallback={<LoadingRows label="Loading file lineage" />}>
           <FileLineage file={file} source={source} locations={connections} navigate={navigate} />
         </Suspense>
           : <div className="lineage-message">
@@ -161,6 +160,15 @@ export function FileInspector({ file, target, location, connections, metadata, w
             <p>Download a CSV of recorded file movements and their SHA-256 checksums, including subfolders.
               Catalog files without movement history are marked as no record.</p>
           </div>)}
+      </section>
+      <section role="tabpanel" id={inspectorId + '-panel-properties'} aria-labelledby={inspectorId + '-tab-properties'} hidden={tab !== 'properties'}>
+        {!file && <p className="metadata-scope">Folder tags and custom properties are inherited by files and subfolders.</p>}
+        {metadata ? writable
+          ? <MetadataEditor formId={formId} initial={metadata.direct} inherited={metadata.inherited} pending={save.isPending}
+            onSave={async values => { await save.mutateAsync({ targets: [target], values, mode: 'REPLACE' }) }} />
+          : <ReadOnlyMetadata direct={metadata.direct} inherited={metadata.inherited} />
+          : metadataError ? <p className="metadata-scope">Properties could not be loaded.</p>
+            : <LoadingRows label="Loading properties" />}
       </section>
     </div>
     {(exportFolder || editing || retryMetadata || retryAttributes || onOpen || onArchive || onRecall || failure) && <div className="dialog-footer">

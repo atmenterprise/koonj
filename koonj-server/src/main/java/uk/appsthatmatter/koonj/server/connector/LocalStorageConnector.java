@@ -63,11 +63,30 @@ public class LocalStorageConnector implements StorageConnector {
     }
 
     @Override
-    public void testConnection(StorageConnection config) throws IOException {
-        Path root = root(config);
+    public void checkConnectivity(StorageConnection config) throws IOException {
+        checkReadable(root(config));
+    }
+
+    @Override
+    public Optional<StorageCapacity> capacity(StorageConnection config) throws IOException {
+        var store = Files.getFileStore(root(config));
+        long total = store.getTotalSpace();
+        if (total <= 0) return Optional.empty();
+        long free = Math.clamp(store.getUnallocatedSpace(), 0, total);
+        long available = Math.clamp(store.getUsableSpace(), 0, free);
+        return Optional.of(new StorageCapacity(total, total - free, available));
+    }
+
+    private static void checkReadable(Path root) throws IOException {
         try (var entries = Files.newDirectoryStream(root)) {
             entries.iterator().hasNext();
         }
+    }
+
+    @Override
+    public void testConnection(StorageConnection config) throws IOException {
+        Path root = root(config);
+        checkReadable(root);
         if (config.getRole() != StorageRole.SOURCE) {
             Files.delete(Files.createTempFile(root, TEMP_PREFIX, ".koonj.tmp"));
         }

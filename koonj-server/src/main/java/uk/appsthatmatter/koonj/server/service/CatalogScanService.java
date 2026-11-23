@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
@@ -11,8 +12,10 @@ import uk.appsthatmatter.koonj.server.connector.*;
 import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.entity.*;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
+import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -27,23 +30,50 @@ public class CatalogScanService {
     private final FileMetadataRepository files;
     private final JobService jobs;
     private final TransactionTemplate transaction;
+    private final StorageConnectionRepository storage;
 
     public CatalogScanService(ConnectionService connections, StorageConnectorFactory connectors,
-                              FileMetadataRepository files, JobService jobs, TransactionTemplate transaction) {
+                              FileMetadataRepository files, JobService jobs, TransactionTemplate transaction,
+                              StorageConnectionRepository storage) {
         this.connections = connections;
         this.connectors = connectors;
         this.files = files;
         this.jobs = jobs;
         this.transaction = transaction;
+        this.storage = storage;
     }
 
     public JobResponse submit(UUID id) {
-        connections.active(id);
-        TransferJob job = jobs.create(TransferJob.Operation.SCAN, id, null, List.of());
+        TransferJob job = transaction.execute(status -> {
+            StorageConnection connection = storage.findByIdForUpdate(id, ProjectScope.id()).orElseThrow(() ->
+                    new ResponseStatusException(HttpStatus.NOT_FOUND, "Storage connection was not found"));
+            if (!connection.isActive()) throw new IllegalArgumentException("Storage connection is inactive");
+            if (jobs.hasActiveScan(id)) throw new ResponseStatusException(HttpStatus.CONFLICT, "A scan already exists for this connection");
+            return jobs.create(TransferJob.Operation.SCAN, id, null, List.of());
+        });
         JobResponse accepted = JobResponse.from(job);
         execute(job);
         return accepted;
     }
+
+    public ScanSourcesResponse submitSources() {
+        var batch = transaction.execute(status -> {
+            var queued = new ArrayList<TransferJob>();
+            int existingScanCount = 0;
+            for (UUID id : storage.activeSourceIds(ProjectScope.id())) {
+                StorageConnection connection = storage.findByIdForUpdate(id, ProjectScope.id()).orElse(null);
+                if (connection == null || !connection.isActive() || connection.getRole() == StorageRole.TARGET) continue;
+                if (jobs.hasActiveScan(id)) existingScanCount++;
+                else queued.add(jobs.create(TransferJob.Operation.SCAN, id, null, List.of()));
+            }
+            return new QueuedScans(queued, existingScanCount);
+        });
+        var response = new ScanSourcesResponse(batch.jobs().stream().map(JobResponse::from).toList(), batch.existingScanCount());
+        batch.jobs().forEach(this::execute);
+        return response;
+    }
+
+    private record QueuedScans(List<TransferJob> jobs, int existingScanCount) {}
 
     public void execute(TransferJob job) {
         jobs.execute(job, this::scan);
@@ -154,7 +184,7 @@ public class CatalogScanService {
     }
 
     public FileResponse get(UUID id) {
-        return files.findById(id).map(FileResponse::from).orElseThrow(() ->
+        return files.findByIdAndConnectionProjectId(id, ProjectScope.id()).map(FileResponse::from).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Catalog entry was not found"));
     }
@@ -172,8 +202,10 @@ public class CatalogScanService {
     }
 
     public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix, Pageable pageable) {
+        UUID projectId = ProjectScope.id();
         Specification<FileMetadata> filter = (root, query, cb) ->
-                cb.notEqual(root.get("storageState"), StorageState.PURGED_LOCAL);
+                cb.and(cb.equal(root.get("connection").get("projectId"), projectId),
+                        cb.notEqual(root.get("storageState"), StorageState.PURGED_LOCAL));
         if (connectionId != null) {
             filter = filter.and((root, query, cb) -> cb.equal(root.get("connection").get("id"), connectionId));
         }

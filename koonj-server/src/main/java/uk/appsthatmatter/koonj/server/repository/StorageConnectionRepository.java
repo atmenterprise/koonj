@@ -12,8 +12,17 @@ import java.util.UUID;
 
 public interface StorageConnectionRepository extends JpaRepository<StorageConnection, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select c from StorageConnection c where c.id = :id")
-    Optional<StorageConnection> findByIdForUpdate(UUID id);
+    @Query("select c from StorageConnection c where c.id = :id and c.projectId = :projectId")
+    Optional<StorageConnection> findByIdForUpdate(UUID id, UUID projectId);
 
-    List<StorageConnection> findAllByOrderByNameAsc();
+    List<StorageConnection> findByProjectIdOrderByNameAsc(UUID projectId);
+    Optional<StorageConnection> findByIdAndProjectId(UUID id, UUID projectId);
+    boolean existsByIdAndProjectId(UUID id, UUID projectId);
+
+    @Query("""
+            select c.id from StorageConnection c
+            where c.projectId = :projectId and c.active = true and c.role <> uk.appsthatmatter.koonj.server.entity.StorageRole.TARGET
+            order by c.id
+            """)
+    List<UUID> activeSourceIds(UUID projectId);
 }

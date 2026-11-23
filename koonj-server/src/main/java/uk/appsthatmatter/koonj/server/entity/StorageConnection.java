@@ -1,5 +1,7 @@
 package uk.appsthatmatter.koonj.server.entity;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
+import org.hibernate.annotations.ColumnDefault;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -10,13 +12,19 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "storage_connections")
+@Table(name = "storage_connections", uniqueConstraints =
+        @UniqueConstraint(name = "uk_storage_project_name", columnNames = {"project_id", "name"}))
 @Getter
 @Setter
 public class StorageConnection {
     @Id @GeneratedValue
     private UUID id;
-    @Column(nullable = false, unique = true)
+
+    @Column(nullable = false)
+    @ColumnDefault("'" + ProjectScope.LEGACY_VALUE + "'")
+    private UUID projectId = ProjectScope.LEGACY;
+
+    @Column(nullable = false)
     private String name;
     @Enumerated(EnumType.STRING) @Column(nullable = false)
     private ProviderType providerType;

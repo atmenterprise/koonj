@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.data.domain.PageRequest;
@@ -76,6 +77,11 @@ public class JobService {
         return create(operation, source, target, paths, ArchiveMode.COPY, false);
     }
 
+    boolean hasActiveScan(UUID sourceId) {
+        return jobs.existsBySourceConnectionIdAndOperationAndStatusIn(sourceId, Operation.SCAN,
+                List.of(Status.PENDING, Status.RUNNING, Status.PAUSING, Status.PAUSED, Status.STOPPING));
+    }
+
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths,
                               ArchiveMode archiveMode, boolean deleteFromTarget) {
         return create(operation, source, target, paths, archiveMode, deleteFromTarget, BACKGROUND);
@@ -90,12 +96,14 @@ public class JobService {
                               ArchiveMode archiveMode, boolean deleteFromTarget, int priority,
                               TransferPlan plan, UUID restartedFrom) {
         TransferJob job = new TransferJob();
+        job.setProjectId(ProjectScope.id());
         job.setPriority(priority);
         job.setArchiveMode(archiveMode);
         job.setDeleteFromTarget(deleteFromTarget);
         job.setOperation(operation);
         job.setTriggeredBy(Objects.requireNonNullElse(JobActor.current(), "System"));
         job.setTriggeredByName(JobActor.displayName());
+        job.setOwnerSubject(JobActor.subject());
         job.setSourceConnectionId(source);
         job.setTargetConnectionId(target);
         job.setRequestedPaths(paths);
@@ -111,6 +119,8 @@ public class JobService {
     public TransferJob control(UUID id, Action action, boolean administrator) {
         return transaction.execute(transactionStatus -> {
             TransferJob job = locked(id);
+            ProjectScope.require(job.getProjectId(), "Transfer job was not found");
+            if (!Objects.equals(job.getOwnerSubject(), JobActor.subject())) throw missingJob();
             if (job.getOperation() != Operation.SCAN && job.getPlan() == null) throw conflict("This job has no saved execution plan");
             if ((action == Action.RESUME || action == Action.RESTART) && job.getOperation() == Operation.ARCHIVE
                     && job.getArchiveMode() == ArchiveMode.PURGE && !administrator) {
@@ -237,7 +247,7 @@ public class JobService {
     }
 
     private TransferJob locked(UUID id) {
-        return jobs.lock(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer job was not found"));
+        return jobs.lock(id).orElseThrow(JobService::missingJob);
     }
 
     private void update(TransferJob job, Consumer<TransferJob> change) {
@@ -245,12 +255,12 @@ public class JobService {
     }
 
     public JobResponse get(UUID id) {
-        return JobResponse.from(jobs.findById(id).orElseThrow(() ->
-                new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer job was not found")));
+        return JobResponse.from(jobs.findByIdAndProjectIdAndOwnerSubject(id, ProjectScope.id(), JobActor.subject())
+                .orElseThrow(JobService::missingJob));
     }
 
     public PageResponse<JobResponse> list(Pageable pageable) {
-        return PageResponse.from(jobs.findAll(pageable).map(JobResponse::from));
+        return PageResponse.from(jobs.findByProjectIdAndOwnerSubject(ProjectScope.id(), JobActor.subject(), pageable).map(JobResponse::from));
     }
 
     public PageResponse<JobEventResponse> events(UUID jobId, boolean errorsOnly, Pageable page) {
@@ -268,7 +278,11 @@ public class JobService {
     }
 
     private void requireJob(UUID jobId) {
-        if (!jobs.existsById(jobId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer job was not found");
+        if (!jobs.existsByIdAndProjectIdAndOwnerSubject(jobId, ProjectScope.id(), JobActor.subject())) throw missingJob();
+    }
+
+    private static ResponseStatusException missingJob() {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer job was not found");
     }
 
     void log(UUID jobId, Instant recordedAt, Level level, String path, String message) {
@@ -283,14 +297,15 @@ public class JobService {
 
     public CompletableFuture<JobResponse> execute(TransferJob job, JobWork work) {
         var completion = new CompletableFuture<JobResponse>();
-        worker.execute(new QueuedJob(job.getPriority(), sequence.getAndIncrement(), () -> {
+        worker.execute(new QueuedJob(job.getPriority(), sequence.getAndIncrement(), () -> ProjectScope.run(job.getProjectId(), () -> {
             try {
                 run(job.getId(), work);
-                completion.complete(get(job.getId()));
+                completion.complete(JobResponse.from(jobs.findByIdAndProjectId(job.getId(), job.getProjectId())
+                        .orElseThrow(JobService::missingJob)));
             } catch (RuntimeException failure) {
                 completion.completeExceptionally(failure);
             }
-        }));
+        })));
         return completion;
     }
 

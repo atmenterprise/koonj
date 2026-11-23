@@ -38,4 +38,7 @@ export const catalogService = {
   async triggerScan(connectionId: string, signal?: AbortSignal) {
     return (await apiClient.post<TransferJobDTO>(`/catalog/scan/${connectionId}`, undefined, { signal })).data
   },
+  async scanSources() {
+    return (await apiClient.post<{ jobs: TransferJobDTO[]; existingScanCount: number }>('/catalog/scan/sources')).data
+  },
 }

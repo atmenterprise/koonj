@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +28,7 @@ public class CatalogFavoriteService {
 
     @Transactional(readOnly = true)
     public List<CatalogFavoriteResponse> list(String subject) {
-        return favorites.findByAccountSubjectOrderByCreatedAtDescIdDesc(subject).stream()
+        return favorites.findByAccountSubjectAndConnectionProjectIdOrderByCreatedAtDescIdDesc(subject, ProjectScope.id()).stream()
                 .map(CatalogFavoriteResponse::from).toList();
     }
 
@@ -37,7 +38,7 @@ public class CatalogFavoriteService {
         if (path.isBlank() || path.getBytes(StandardCharsets.UTF_8).length > 2048) {
             throw new IllegalArgumentException("A favorite requires a relative file or folder path of at most 2048 bytes");
         }
-        var connection = connections.findByIdForUpdate(request.connectionId()).orElseThrow(() ->
+        var connection = connections.findByIdForUpdate(request.connectionId(), ProjectScope.id()).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "Storage connection was not found"));
         var existing = favorites.findByAccountSubjectAndConnectionIdAndScopeAndPath(
                 subject, request.connectionId(), request.scope(), path);

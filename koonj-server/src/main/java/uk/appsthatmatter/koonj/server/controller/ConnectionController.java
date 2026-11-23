@@ -4,7 +4,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.security.access.prepost.PreAuthorize;
 import uk.appsthatmatter.koonj.server.security.KoonjRoles;
 import jakarta.validation.Valid;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.service.ConnectionService;
@@ -32,6 +34,11 @@ public class ConnectionController {
     @PreAuthorize(KoonjRoles.ADMIN_ONLY)
     public List<ConnectionResponse> list() { return connections.list(); }
 
+    @GetMapping("/usage")
+    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    @Operation(summary = "Summarize cataloged storage usage across connections")
+    public StorageUsage usage() { return connections.storageUsage(); }
+
     @PutMapping("/{id}")
     @Operation(summary = "Update a storage connection", description = "Replace endpoint settings. Omitted or masked credentials retain their existing values.")
     @PreAuthorize(KoonjRoles.ADMIN_ONLY)
@@ -44,6 +51,13 @@ public class ConnectionController {
     @Operation(summary = "Remove a storage connection", description = "Delete a connection that has no catalog references or active jobs.")
     @PreAuthorize(KoonjRoles.ADMIN_ONLY)
     public void delete(@PathVariable UUID id) { connections.delete(id); }
+
+    @GetMapping("/{id}/status")
+    @Operation(summary = "Check storage connectivity", description = "Check listing access for an active connection using a read-only probe.")
+    @PreAuthorize(KoonjRoles.ADMIN_ONLY)
+    public ResponseEntity<ConnectionHealth> status(@PathVariable UUID id) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(connections.connectivity(id));
+    }
 
     @PostMapping("/{id}/test")
     @Operation(summary = "Probe storage access", description = "Check listing access and, for writable roles, create and remove a temporary probe.")

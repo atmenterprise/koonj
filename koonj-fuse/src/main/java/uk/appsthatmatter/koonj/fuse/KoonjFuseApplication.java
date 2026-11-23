@@ -29,7 +29,8 @@ public class KoonjFuseApplication {
             int timeout = env.getRequiredProperty("koonj.fuse.recall-timeout-seconds", Integer.class);
             if (timeout < 1 || timeout > 60) throw new IllegalArgumentException("Recall timeout must be 1–60 seconds");
             var agent = new KoonjAgentClient(required(env, "koonj.server-url"), required(env, "koonj.agent.token-uri"),
-                    required(env, "koonj.agent.client-id"), required(env, "koonj.agent.client-secret"), timeout);
+                    required(env, "koonj.agent.client-id"), required(env, "koonj.agent.client-secret"), timeout,
+                    env.getProperty("koonj.agent.project-id", ""));
 
             var options = new ArrayList<String>();
             if (windows) {

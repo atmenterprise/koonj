@@ -60,6 +60,10 @@ springdoc:
     path: /swagger-ui/start
 
 koonj:
+  observability:
+    openobserve-url: "${KOONJ_OPENOBSERVE_URL:}"
+    openobserve-organization: "${KOONJ_OPENOBSERVE_ORGANIZATION:default}"
+    logs-endpoint: "${KOONJ_OTLP_LOGS_ENDPOINT:}"
   security:
     allowed-origins: "${KOONJ_CORS_ALLOWED_ORIGINS:http://localhost:5173}"
     basic-auth:

@@ -6,14 +6,14 @@ import MetadataEditor, { MetadataValues } from './MetadataEditor'
 export function ReadOnlyMetadata({ direct, inherited }: {
   direct: CatalogMetadataValues; inherited: CatalogMetadataValues
 }) {
-  return <section className="metadata-inherited" aria-label="Custom metadata">
+  return <section className="metadata-inherited" aria-label="Properties">
     <h3>Custom tags and properties</h3>
     <MetadataValues values={direct} />
     {(inherited.tags.length > 0 || inherited.properties.length > 0) && <>
       <h3>Inherited from folders</h3><MetadataValues values={inherited} />
     </>}
     {!direct.tags.length && !direct.properties.length && !inherited.tags.length && !inherited.properties.length &&
-      <p>No custom metadata.</p>}
+      <p>No tags or properties.</p>}
   </section>
 }
 

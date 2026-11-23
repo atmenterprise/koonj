@@ -111,7 +111,7 @@ export default function AuditLogPage({ initialJob }: { initialJob: string | null
   if (jobs.isPending) return <ApiPageState loadingLabel="Loading activity" />
 
   return <>
-    <div className="page-heading"><div><h1>Activity log</h1><p>Track archive, recall and scan jobs.</p></div></div>
+    <div className="page-heading"><div><h1>Activity log</h1><p>Track the archive, recall and scan jobs you started in this project.</p></div></div>
     <section className="panel activity-panel" aria-label="Job history">
       <div className="table-tools">
         <div className="filters" aria-label="Activity filters">{filters.map(value =>

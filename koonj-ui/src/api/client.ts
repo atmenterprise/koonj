@@ -4,6 +4,8 @@ import { accessToken } from '../auth/keycloak'
 const defaultBaseURL = 'http://localhost:8080/api/v1'
 const configuredBaseURL = import.meta.env.VITE_API_BASE_URL || defaultBaseURL
 
+export const projectHeader = 'X-Koonj-Project'
+
 export const apiClient = axios.create({
   baseURL: import.meta.env.DEV && configuredBaseURL === defaultBaseURL ? '/api/v1' : configuredBaseURL,
   headers: { 'Content-Type': 'application/json' },

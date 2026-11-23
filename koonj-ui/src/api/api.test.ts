@@ -9,6 +9,7 @@ import { archiveMutationOptions, recallMutationOptions } from './hooks/mutations
 import { jobHistoryKey, jobPollingInterval, queryKeys, transferJobsOptions } from './hooks/queries'
 import { catalogTablePage } from './mappers'
 import { catalogService } from './services/catalogService'
+import { connectionService } from './services/connectionService'
 import { transferService } from './services/transferService'
 import type { ArchiveRequest, FileMetadataDTO, PageResponse, RecallRequest, TransferJobDTO } from './types'
 
@@ -32,7 +33,21 @@ beforeEach(() => {
 })
 afterEach(() => { mock.restore(); client.clear() })
 
+it('reads storage status without invoking the manual write probe', async () => {
+  const result = { connectionId: 'local-id', healthy: false, message: 'File or path not found' }
+  mock.onGet('/connections/local-id/status').reply(200, result)
+  expect(await connectionService.getStatus('local-id')).toEqual(result)
+  expect(mock.history.post).toHaveLength(0)
+})
+
 describe('catalog API', () => {
+  it('queues all source scans with a single request and reads the already-scanning count', async () => {
+    const result = { jobs: [{ ...job, operation: 'SCAN' }], existingScanCount: 2 }
+    mock.onPost('/catalog/scan/sources').reply(202, result)
+    expect(await catalogService.scanSources()).toEqual(result)
+    expect(mock.history.post).toHaveLength(1)
+  })
+
   it('forwards server pagination, filters and cancellation, and maps Explorer rows', async () => {
     const abort = new AbortController()
     const params = { connectionId: file.connectionId, page: 1, size: 50, pathPrefix: 'docs/', storageState: 'LOCAL_ONLY' } as const

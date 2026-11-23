@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,7 +38,7 @@ public class ConnectionService {
     }
 
     public StorageConnection get(UUID id) {
-        return connections.findById(id).orElseThrow(() ->
+        return connections.findByIdAndProjectId(id, ProjectScope.id()).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "Storage connection was not found"));
     }
 
@@ -48,11 +49,11 @@ public class ConnectionService {
     }
 
     public List<ConnectionResponse> list() {
-        return connections.findAllByOrderByNameAsc().stream().map(ConnectionResponse::from).toList();
+        return connections.findByProjectIdOrderByNameAsc(ProjectScope.id()).stream().map(ConnectionResponse::from).toList();
     }
 
     public List<CatalogLocationResponse> catalogLocations() {
-        return connections.findAllByOrderByNameAsc().stream().map(connection -> {
+        return connections.findByProjectIdOrderByNameAsc(ProjectScope.id()).stream().map(connection -> {
             boolean objectStorage = connectors.resolve(connection.getProviderType()).objectStorage();
             return new CatalogLocationResponse(connection.getId(), connection.getName(), connection.getProviderType(),
                     connection.getRole(), objectStorage ? connection.getBasePathOrBucket() : null, connection.isActive());
@@ -61,12 +62,14 @@ public class ConnectionService {
 
     @Transactional
     public ConnectionResponse create(ConnectionRequest request) {
-        return save(new StorageConnection(), request);
+        var connection = new StorageConnection();
+        connection.setProjectId(ProjectScope.id());
+        return save(connection, request);
     }
 
     @Transactional
     public ConnectionResponse update(UUID id, ConnectionRequest request) {
-        StorageConnection existing = get(id);
+        StorageConnection existing = storageForUpdate(id);
         requireIdle(id);
         if (referenced(id) && (existing.getProviderType() != request.providerType()
                 || !existing.getBasePathOrBucket().equals(request.basePathOrBucket())
@@ -80,14 +83,18 @@ public class ConnectionService {
 
     @Transactional
     public void delete(UUID id) {
-        StorageConnection connection = connections.findByIdForUpdate(id).orElseThrow(() ->
-                new ResponseStatusException(HttpStatus.NOT_FOUND, "Storage connection was not found"));
+        StorageConnection connection = storageForUpdate(id);
         requireIdle(id);
         if (referenced(id)) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Connection is referenced by the catalog. Set active to false to retire it.");
         annotations.deleteByConnectionId(id);
         favorites.deleteByConnectionId(id);
         connections.delete(connection);
+    }
+
+    private StorageConnection storageForUpdate(UUID id) {
+        return connections.findByIdForUpdate(id, ProjectScope.id()).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "Storage connection was not found"));
     }
 
     private boolean referenced(UUID id) {
@@ -99,6 +106,29 @@ public class ConnectionService {
                 TransferJob.Status.PAUSED, TransferJob.Status.STOPPING)) != 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Connection has an active job");
         }
+    }
+
+    public ConnectionHealth connectivity(UUID id) {
+        StorageConnection connection = get(id);
+        if (!connection.isActive()) return new ConnectionHealth(id, false, "Connection is inactive");
+        var connector = connectors.resolve(connection.getProviderType());
+        try {
+            connector.checkConnectivity(connection);
+        } catch (IOException | RuntimeException failure) {
+            return new ConnectionHealth(id, false, StorageErrors.describe(failure));
+        }
+        StorageCapacity capacity;
+        try {
+            capacity = connector.capacity(connection).orElse(null);
+        } catch (IOException | RuntimeException failure) {
+            capacity = null;
+        }
+        return new ConnectionHealth(id, true, "Storage is reachable and can be listed", capacity);
+    }
+
+    @Transactional(readOnly = true)
+    public StorageUsage storageUsage() {
+        return new StorageUsage(files.storageFootprints(ProjectScope.id()), files.reclaimedStorage(ProjectScope.id()));
     }
 
     public ConnectionHealth testConnection(UUID id) {

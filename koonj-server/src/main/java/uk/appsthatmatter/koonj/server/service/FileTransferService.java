@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -79,7 +80,9 @@ public class FileTransferService {
             if (archive) throw new IllegalArgumentException("Mounted folder selections are only supported for recall");
             for (String folder : request.targetFolderPaths()) {
                 String path = transferPath(folder);
-                if (!path.endsWith("/")) throw new IllegalArgumentException("Provide a non-root mounted folder ending in /");
+                if (!path.endsWith("/") && !folder.equals("/")) {
+                    throw new IllegalArgumentException("Provide a mounted folder ending in /, or / for the storage root");
+                }
                 targetFolders.add(path);
             }
         }
@@ -87,7 +90,7 @@ public class FileTransferService {
         Set<String> exactPaths = new HashSet<>();
         if (request.fileIds() != null) {
             for (UUID id : request.fileIds()) {
-                FileMetadata selected = files.findById(id).orElseThrow(() ->
+                FileMetadata selected = files.findByIdAndConnectionProjectId(id, ProjectScope.id()).orElseThrow(() ->
                         new IllegalArgumentException("Unknown catalog file ID " + id));
                 String path = resolveFileId(operation, endpoints, selected, restorePaths);
                 exactPaths.add(path);
@@ -95,8 +98,9 @@ public class FileTransferService {
             }
         }
         if (paths.isEmpty() && targetFolders.isEmpty()) throw new IllegalArgumentException("Provide at least one path, folder, or file ID");
-        Set<String> requestedPaths = new LinkedHashSet<>(paths);
-        requestedPaths.addAll(targetFolders);
+        Set<String> requestedPaths = new LinkedHashSet<>();
+        java.util.stream.Stream.concat(paths.stream(), targetFolders.stream())
+                .map(path -> path.isEmpty() ? "/" : path).forEach(requestedPaths::add);
         var plan = new TransferPlan(storageClass, List.copyOf(paths), List.copyOf(targetFolders), restorePaths, exactPaths, null);
         TransferJob job = jobs.create(operation, request.sourceConnectionId(), request.targetConnectionId(),
                 List.copyOf(requestedPaths), request.archiveMode(), request.deleteFromTarget(), JobService.BACKGROUND, plan, null);
@@ -169,7 +173,7 @@ public class FileTransferService {
     }
 
     private FileMetadata file(UUID id) {
-        return files.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown file ID"));
+        return files.findByIdAndConnectionProjectId(id, ProjectScope.id()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown file ID"));
     }
 
     private static boolean isLocal(FileMetadata file) {
@@ -260,7 +264,7 @@ public class FileTransferService {
         Set<String> requested = new LinkedHashSet<>(plan.targetFolders());
         List<String> mountedFolders = requested.stream()
                 .filter(folder -> !handled.failedSelections().contains(folder))
-                .filter(folder -> !coveredByFolder(requested, folder.substring(0, folder.length() - 1)))
+                .filter(folder -> folder.isEmpty() || !coveredByFolder(requested, folder.substring(0, folder.length() - 1)))
                 .toList();
         validateRecallAliases(job, endpoints, mountedFolders, restorePaths);
         restorePaths.forEach((key, path) -> {
@@ -274,7 +278,7 @@ public class FileTransferService {
             if (handled.failedSelections().contains(path)) continue;
             if (!path.endsWith("/") && handled.sourcePaths(List.of(path)).contains(path)) continue;
             try {
-                if (path.endsWith("/")) {
+                if (path.isEmpty() || path.endsWith("/")) {
                     folders.putIfAbsent(path, path);
                     continue;
                 }
@@ -427,7 +431,12 @@ public class FileTransferService {
             for (var link : page) {
                 after = link.getRelativePath();
                 if (!after.startsWith(folder)) continue;
-                String key = recallKey(endpoints.source(), link.getId(), link.getTargetId(), link.getSymlinkTarget(), link.getS3Key());
+                String key;
+                try {
+                    key = recallKey(endpoints.source(), link.getId(), link.getTargetId(), link.getSymlinkTarget(), link.getS3Key());
+                } catch (IllegalArgumentException invalidReference) {
+                    continue;
+                }
                 if (key == null) continue;
                 visitor.accept(link, key);
                 matched = true;
