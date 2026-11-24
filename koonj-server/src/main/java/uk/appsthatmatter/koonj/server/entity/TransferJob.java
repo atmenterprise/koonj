@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -15,7 +16,12 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
+@DynamicUpdate
 @Table(name = "transfer_jobs", indexes = {@Index(columnList = "created_at"), @Index(columnList = "status"),
+        @Index(name = "idx_transfer_job_dispatch", columnList = "status, dispatch_after"),
+        @Index(name = "idx_transfer_job_attempt", columnList = "worker_attempt"),
+        @Index(name = "idx_transfer_job_worker_instance", columnList = "worker_instance"),
+        @Index(name = "idx_transfer_job_interactive", columnList = "project_id, interactive_file_id, created_at"),
         @Index(name = "idx_transfer_job_project_created", columnList = "project_id, created_at"),
         @Index(name = "idx_transfer_job_project_owner_created", columnList = "project_id, owner_subject, created_at")})
 @Getter
@@ -51,6 +57,17 @@ public class TransferJob {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private TransferPlan plan;
+    private UUID interactiveFileId;
+    private Instant recallReadyAt;
+    private UUID dispatchGeneration;
+    private Instant dispatchAfter;
+    private String dispatchPool;
+    private UUID workerAttempt;
+    private UUID workerInstance;
+    private Instant workerHeartbeat;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private List<String> activePaths;
     private UUID restartedFrom;
     private UUID restartedAs;
     @Column(nullable = false)

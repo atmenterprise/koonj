@@ -122,6 +122,11 @@
             <lineEnding>unix</lineEnding>
         </file>
         <file>
+            <source>../deploy/migrations/transfer-dispatch.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
             <source>../deploy/migrations/user-api-keys.sql</source>
             <outputDirectory>deploy/migrations</outputDirectory>
             <lineEnding>unix</lineEnding>
@@ -140,6 +145,10 @@
         <file>
             <source>../docs/MCP-INTEGRATION.md</source>
             <outputDirectory>/</outputDirectory>
+        </file>
+        <file>
+            <source>../docs/TRANSFER-WORKERS.md</source>
+            <outputDirectory>docs</outputDirectory>
         </file>
         <file>
             <source>../docs/DEPLOYMENT-GUIDE.md</source>

@@ -75,8 +75,8 @@ export function useScanSourcesMutation() {
       complete: ({ jobs, existingScanCount }) => ({
         tone: jobs.length ? 'success' : 'info',
         title: jobs.length ? `${count(jobs.length)} source ${jobs.length === 1 ? 'scan' : 'scans'} queued`
-          : existingScanCount ? 'Source scans are already queued or active' : 'No active sources to scan',
-        detail: jobs.length && existingScanCount ? `${count(existingScanCount)} already queued or active.` : undefined,
+          : existingScanCount ? 'Sources already have queued or active storage jobs' : 'No active sources to scan',
+        detail: jobs.length && existingScanCount ? `${count(existingScanCount)} with queued or active storage jobs.` : undefined,
       }),
     }, () => catalogService.scanSources()),
     onSuccess: ({ jobs }) => jobs.length ? invalidateJobsAndCatalog(client, jobs)

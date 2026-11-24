@@ -21,6 +21,19 @@ spring:
           issuer-uri: "${KOONJ_AUTH_ISSUER_URI:http://localhost:8180/realms/koonj}"
           jwk-set-uri: "${KOONJ_AUTH_JWK_SET_URI:http://localhost:8180/realms/koonj/protocol/openid-connect/certs}"
           audiences: koonj-server
+  rabbitmq:
+    host: ${KOONJ_TRANSFER_RABBIT_HOST:${KOONJ_RABBITMQ_HOST:localhost}}
+    port: ${KOONJ_TRANSFER_RABBIT_PORT:${KOONJ_RABBITMQ_PORT:5672}}
+    username: ${KOONJ_TRANSFER_RABBIT_USERNAME:${KOONJ_RABBITMQ_USERNAME:guest}}
+    password: ${KOONJ_TRANSFER_RABBIT_PASSWORD:${KOONJ_RABBITMQ_PASSWORD:guest}}
+    virtual-host: ${KOONJ_TRANSFER_RABBIT_VHOST:${KOONJ_RABBITMQ_VHOST:/}}
+    ssl:
+      enabled: ${KOONJ_TRANSFER_RABBIT_SSL:${KOONJ_RABBITMQ_SSL:false}}
+    connection-timeout: 5s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   jpa:
     open-in-view: false
     hibernate:
@@ -28,6 +41,9 @@ spring:
 
 
 management:
+  health:
+    rabbit:
+      enabled: false
   endpoints:
     web:
       exposure:
@@ -60,6 +76,22 @@ springdoc:
     path: /swagger-ui/start
 
 koonj:
+  transfer:
+    embedded-jobs: ${KOONJ_TRANSFER_EMBEDDED_JOBS:1}
+    case-insensitive-mounts: ${KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS:true}
+    mounted-domain: ${KOONJ_TRANSFER_MOUNTED_DOMAIN:default}
+    storage-aliases: "${KOONJ_TRANSFER_STORAGE_ALIASES:}"
+    rabbit:
+      enabled: ${KOONJ_TRANSFER_RABBIT_ENABLED:false}
+      relay-enabled: ${KOONJ_TRANSFER_RELAY_ENABLED:true}
+      worker-enabled: ${KOONJ_TRANSFER_WORKER_ENABLED:true}
+      worker-pool: ${KOONJ_TRANSFER_WORKER_POOL:default}
+      mount-pools: "${KOONJ_TRANSFER_MOUNT_POOLS:}"
+      background-workers: ${KOONJ_TRANSFER_BACKGROUND_WORKERS:2}
+      interactive-workers: ${KOONJ_TRANSFER_INTERACTIVE_WORKERS:1}
+      tenant-jobs: ${KOONJ_TRANSFER_TENANT_JOBS:2}
+      tenant-interactive-jobs: ${KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS:1}
+      backend-jobs: ${KOONJ_TRANSFER_BACKEND_JOBS:8}
   observability:
     openobserve-url: "${KOONJ_OPENOBSERVE_URL:}"
     openobserve-organization: "${KOONJ_OPENOBSERVE_ORGANIZATION:default}"

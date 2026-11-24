@@ -3,6 +3,8 @@ package uk.appsthatmatter.koonj.server.service;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -32,6 +34,7 @@ import uk.appsthatmatter.koonj.notification.NotificationEvent;
 import uk.appsthatmatter.koonj.server.security.JobActor;
 
 import java.nio.file.FileSystemException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -55,6 +58,10 @@ public class JobService {
     private final ObservationRegistry observations;
     private final TransactionTemplate transaction;
     private final NotificationOutboxWriter notificationEvents;
+    private final TransferReservations reservations;
+    private final boolean distributed;
+    private final JdbcTemplate jdbc;
+    private final Duration coldPoll;
     private final AtomicLong peakTransferConcurrency = new AtomicLong();
     public static final int INTERACTIVE = 100;
     static final int BACKGROUND = 5;
@@ -70,17 +77,27 @@ public class JobService {
     private final PriorityBlockingQueue<Runnable> pending = new PriorityBlockingQueue<>(11,
             Comparator.comparingInt((Runnable task) -> ((QueuedJob) task).priority()).reversed()
                     .thenComparingLong(task -> ((QueuedJob) task).sequence()));
-    private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, pending,
-            Thread.ofPlatform().name("koonj-transfer").factory());
+    private final ThreadPoolExecutor worker;
 
     public JobService(TransferJobRepository jobs, JobEventRepository events, FileMovementRepository movements,
-                      ObservationRegistry observations, TransactionTemplate transaction, NotificationOutboxWriter notificationEvents) {
+                      ObservationRegistry observations, TransactionTemplate transaction, NotificationOutboxWriter notificationEvents,
+                      TransferReservations reservations, JdbcTemplate jdbc,
+                      @Value("${koonj.transfer.rabbit.enabled:false}") boolean distributed,
+                      @Value("${koonj.transfer.embedded-jobs:1}") int embeddedJobs,
+                      @Value("${koonj.transfer.rabbit.cold-poll:30s}") Duration coldPoll) {
         this.jobs = jobs;
         this.events = events;
         this.movements = movements;
         this.observations = observations;
         this.transaction = transaction;
         this.notificationEvents = notificationEvents;
+        this.reservations = reservations;
+        this.distributed = distributed;
+        this.jdbc = jdbc;
+        this.coldPoll = coldPoll.compareTo(Duration.ofSeconds(1)) < 0 ? Duration.ofSeconds(1) : coldPoll;
+        int threads = Math.clamp(embeddedJobs, 1, 32);
+        worker = new ThreadPoolExecutor(threads, threads, 0, TimeUnit.SECONDS, pending,
+                Thread.ofPlatform().name("koonj-transfer-", 0).factory());
     }
 
     public TransferJob create(Operation operation, UUID source, UUID target, List<String> paths) {
@@ -119,9 +136,12 @@ public class JobService {
         job.setTargetConnectionId(target);
         job.setRequestedPaths(paths);
         job.setPlan(plan);
+        if (plan != null) job.setInteractiveFileId(plan.interactiveFileId());
         job.setRestartedFrom(restartedFrom);
         return transaction.execute(status -> {
             TransferJob saved = jobs.saveAndFlush(job);
+            reservations.acquire(saved);
+            dispatch(saved);
             log(saved.getId(), saved.getCreatedAt(), Level.INFO, null, "Job queued");
             return saved;
         });
@@ -164,10 +184,18 @@ public class JobService {
                 }
                 default -> throw new IllegalStateException();
             };
+            if (next == Status.PENDING) {
+                reservations.acquire(job);
+                dispatch(job);
+            }
+            if (next == Status.PAUSED || next == Status.STOPPED) {
+                job.setDispatchAfter(null);
+                reservations.release(id);
+            }
             job.setStatus(next);
             Instant now = Instant.now();
             if (next == Status.STOPPED) job.setCompletedAt(now);
-            if (next == Status.PAUSING || next == Status.STOPPING) interruptions.put(id, next);
+            if (!distributed && (next == Status.PAUSING || next == Status.STOPPING)) interruptions.put(id, next);
             log(id, now, Level.INFO, null, switch (action) {
                 case PAUSE -> (next == Status.PAUSING ? "Pause requested by " : "Paused by ") + actor();
                 case RESUME -> "Resume requested by " + actor();
@@ -184,7 +212,7 @@ public class JobService {
         return jobs.findBySourceConnectionIdAndOperationAndStatusIn(connectionId, Operation.ARCHIVE,
                 List.of(Status.RUNNING, Status.PAUSING, Status.STOPPING)).stream()
                 .map(job -> {
-                    var current = activeFiles.getOrDefault(job.getId(), Set.of()).stream().sorted().toList();
+                    var current = distributed && job.getActivePaths() != null ? job.getActivePaths() : activePaths(job.getId());
                     return new ArchiveActivity(current.isEmpty() ? null : current.getFirst(), List.copyOf(job.getRequestedPaths()), current);
                 })
                 .toList();
@@ -192,10 +220,57 @@ public class JobService {
 
     public void checkpoint(TransferJob job) {
         Status request = interruptions.get(job.getId());
-        if (request == null) return;
-        Status persisted = transaction.execute(status -> locked(job.getId()).getStatus());
+        if (!distributed && request == null) return;
+        if (distributed && !shouldCheckControls(job.getId())) return;
+        Status persisted = jdbc.queryForObject("select status from transfer_jobs where id = ?",
+                (row, number) -> Status.valueOf(row.getString(1)), job.getId());
         if (persisted == Status.PAUSING || persisted == Status.STOPPING) throw new JobInterrupted();
-        interruptions.remove(job.getId(), request);
+        if (request != null) interruptions.remove(job.getId(), request);
+    }
+
+    private final ConcurrentHashMap<UUID, Long> controlChecks = new ConcurrentHashMap<>();
+
+    private boolean shouldCheckControls(UUID id) {
+        long now = System.nanoTime();
+        var previous = controlChecks.putIfAbsent(id, now);
+        return previous == null || (now - previous >= TimeUnit.MILLISECONDS.toNanos(250)
+                && controlChecks.replace(id, previous, now));
+    }
+
+    private void dispatch(TransferJob job) {
+        if (!distributed) return;
+        if (job.getDispatchPool() == null) {
+            throw new IllegalArgumentException("Distributed transfers require a saved execution plan");
+        }
+        job.setRecallReadyAt(null);
+        job.setDispatchGeneration(UUID.randomUUID());
+        job.setDispatchAfter(Instant.now());
+    }
+
+    boolean distributed() { return distributed; }
+
+    void coldRestore(TransferJob job, Instant ready) {
+        if (distributed) throw new ColdRestorePending(ready);
+        update(job, current -> current.setRecallReadyAt(ready));
+    }
+
+    void recallAvailable(TransferJob job) {
+        if (job.getRecallReadyAt() != null) update(job, current -> current.setRecallReadyAt(null));
+    }
+
+    private static final class ColdRestorePending extends RuntimeException {
+        final Instant ready;
+        ColdRestorePending(Instant ready) { this.ready = ready; }
+    }
+
+    TransferJob interactiveJob(UUID fileId, boolean activeOnly) {
+        return (activeOnly ? jobs.findFirstByProjectIdAndInteractiveFileIdAndStatusInOrderByCreatedAtDesc(
+                ProjectScope.id(), fileId, List.of(Status.PENDING, Status.RUNNING))
+                : jobs.findFirstByProjectIdAndInteractiveFileIdOrderByCreatedAtDesc(ProjectScope.id(), fileId)).orElse(null);
+    }
+
+    TransferJob recallStatus(UUID id) {
+        return jobs.findByIdAndProjectId(id, ProjectScope.id()).orElseThrow(JobService::missingJob);
     }
 
     public void beginFile(TransferJob job, String path) {
@@ -205,7 +280,23 @@ public class JobService {
     }
 
     public long sampleTransferConcurrency() {
-        return Math.max(peakTransferConcurrency.getAndSet(0), activeTransferCount());
+        long localPeak = Math.max(peakTransferConcurrency.getAndSet(0), activeTransferCount());
+        if (!distributed) return localPeak;
+        Long clusterActive = jdbc.queryForObject("""
+                select coalesce(sum(jsonb_array_length(active_paths)), 0)
+                from transfer_jobs where worker_attempt is not null
+                """, Long.class);
+        return Math.max(localPeak, clusterActive == null ? 0 : clusterActive);
+    }
+
+    List<String> activePaths(UUID id) {
+        return activeFiles.getOrDefault(id, Set.of()).stream().sorted().toList();
+    }
+
+    void publishActivePaths(TransferJob attempt, List<String> paths) {
+        update(attempt, current -> {
+            if (attempt.getWorkerAttempt().equals(current.getWorkerAttempt())) current.setActivePaths(paths);
+        });
     }
 
     private long activeTransferCount() {
@@ -326,9 +417,10 @@ public class JobService {
 
     public CompletableFuture<JobResponse> execute(TransferJob job, JobWork work) {
         var completion = new CompletableFuture<JobResponse>();
+        if (distributed) return CompletableFuture.failedFuture(new IllegalStateException("Use a durable transfer execution plan"));
         worker.execute(new QueuedJob(job.getPriority(), sequence.getAndIncrement(), () -> ProjectScope.run(job.getProjectId(), () -> {
             try {
-                run(job.getId(), work);
+                runEmbedded(job.getId(), work);
                 completion.complete(JobResponse.from(jobs.findByIdAndProjectId(job.getId(), job.getProjectId())
                         .orElseThrow(JobService::missingJob)));
             } catch (RuntimeException failure) {
@@ -359,19 +451,27 @@ public class JobService {
         public void run() { task.run(); }
     }
 
-    private void run(UUID id, JobWork work) {
+    private void runEmbedded(UUID id, JobWork work) {
         TransferJob job = transaction.execute(status -> {
             TransferJob current = locked(id);
             if (current.getStatus() != Status.PENDING) return null;
-            current.setStatus(Status.RUNNING);
-            current.setSkippedFiles(0);
-            Instant now = Instant.now();
-            boolean resumed = current.getStartedAt() != null;
-            if (!resumed) current.setStartedAt(now);
-            log(id, now, Level.INFO, null, resumed ? "Execution resumed" : "Execution started");
+            started(current);
             return current;
         });
-        if (job == null) return;
+        if (job != null) runClaimed(job, work);
+    }
+
+    void started(TransferJob job) {
+        job.setStatus(Status.RUNNING);
+        job.setSkippedFiles(0);
+        Instant now = Instant.now();
+        boolean resumed = job.getStartedAt() != null;
+        if (!resumed) job.setStartedAt(now);
+        log(job.getId(), now, Level.INFO, null, resumed ? "Execution resumed" : "Execution started");
+    }
+
+    void runClaimed(TransferJob job, JobWork work) {
+        UUID id = job.getId();
         Observation activity = Observation.createNotStarted("koonj.job.execution", observations)
                 .lowCardinalityKeyValue("operation", job.getOperation().name());
         try {
@@ -379,9 +479,12 @@ public class JobService {
             String executionError = null;
             String executionPath = null;
             boolean interrupted = false;
+            Instant coldReady = null;
             try {
                 checkpoint(job);
                 work.run(job);
+            } catch (ColdRestorePending waiting) {
+                coldReady = waiting.ready;
             } catch (JobInterrupted pauseOrStop) {
                 interrupted = true;
             } catch (Exception failure) {
@@ -391,13 +494,34 @@ public class JobService {
             String error = executionError;
             String path = executionPath;
             boolean yielded = interrupted;
+            Instant readyForRecall = coldReady;
             Status outcome = transaction.execute(status -> {
                 TransferJob current = locked(id);
                 Instant now = Instant.now();
-                Status next = yielded ? (current.getStatus() == Status.STOPPING ? Status.STOPPED : Status.PAUSED)
+                boolean controlRequested = current.getStatus() == Status.PAUSING || current.getStatus() == Status.STOPPING;
+                if (!Objects.equals(current.getWorkerAttempt(), job.getWorkerAttempt())) {
+                    throw new IllegalStateException("Transfer attempt no longer owns this job");
+                }
+                current.setWorkerAttempt(null);
+                current.setWorkerInstance(null);
+                current.setWorkerHeartbeat(null);
+                current.setActivePaths(null);
+                if (readyForRecall != null && !controlRequested) {
+                    if (current.getRecallReadyAt() == null) {
+                        current.setRecallReadyAt(readyForRecall);
+                        log(id, now, Level.INFO, null, "Waiting for S3 cold storage restore");
+                    }
+                    current.setStatus(Status.PENDING);
+                    current.setDispatchGeneration(UUID.randomUUID());
+                    current.setDispatchAfter(now.plus(coldPoll));
+                    return Status.PENDING;
+                }
+                Status next = (yielded || (controlRequested && error == null))
+                        ? (current.getStatus() == Status.STOPPING ? Status.STOPPED : Status.PAUSED)
                         : error != null ? Status.FAILED : current.getFailedFiles() == 0 ? Status.COMPLETED
                         : current.getProcessedFiles() > current.getFailedFiles() ? Status.PARTIAL_FAILURE : Status.FAILED;
                 current.setStatus(next);
+                reservations.release(id);
                 if (next != Status.PAUSED) current.setCompletedAt(now);
                 if (error != null) {
                     appendError(current, error);
@@ -429,6 +553,7 @@ public class JobService {
             activity.lowCardinalityKeyValue("outcome", "FAILED");
             throw failure;
         } finally {
+            controlChecks.remove(id);
             activity.stop();
         }
     }
