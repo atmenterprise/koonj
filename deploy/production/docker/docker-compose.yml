@@ -94,14 +94,14 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile.server
-    image: koonj-server:${KOONJ_VERSION:-latest}
+    image: &koonj-server-image koonj-server:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
       keycloak:
         condition: service_healthy
-    environment:
+    environment: &koonj-server-env
       SPRING_PROFILES_ACTIVE: production
       KOONJ_DB_URL: "jdbc:postgresql://postgres:5432/${KOONJ_DB_NAME:-koonj}?reWriteBatchedInserts=true"
       KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
@@ -109,6 +109,18 @@ services:
       KOONJ_PROJECTS_LEGACY_SUBJECTS: ${KOONJ_PROJECTS_LEGACY_SUBJECTS:-}
       KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
       KOONJ_PROJECTS_AGENT_IDS: ${KOONJ_PROJECTS_AGENT_IDS:-00000000-0000-0000-0000-000000000001}
+      KOONJ_TRANSFER_RABBIT_ENABLED: "true"
+      KOONJ_TRANSFER_WORKER_ENABLED: "false"
+      KOONJ_TRANSFER_RABBIT_HOST: ${KOONJ_TRANSFER_RABBIT_HOST:-${KOONJ_RABBITMQ_HOST:-rabbitmq}}
+      KOONJ_TRANSFER_RABBIT_PORT: ${KOONJ_TRANSFER_RABBIT_PORT:-${KOONJ_RABBITMQ_PORT:-5672}}
+      KOONJ_TRANSFER_RABBIT_USERNAME: ${KOONJ_TRANSFER_RABBIT_USERNAME:-${KOONJ_RABBITMQ_USERNAME:-koonj}}
+      KOONJ_TRANSFER_RABBIT_PASSWORD: ${KOONJ_TRANSFER_RABBIT_PASSWORD:-${KOONJ_RABBITMQ_PASSWORD}}
+      KOONJ_TRANSFER_RABBIT_VHOST: ${KOONJ_TRANSFER_RABBIT_VHOST:-${KOONJ_RABBITMQ_VHOST:-koonj}}
+      KOONJ_TRANSFER_RABBIT_SSL: "${KOONJ_TRANSFER_RABBIT_SSL:-${KOONJ_RABBITMQ_SSL:-false}}"
+      KOONJ_TRANSFER_STORAGE_ALIASES: "${KOONJ_TRANSFER_STORAGE_ALIASES:-}"
+      KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS: "${KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS:-true}"
+      KOONJ_TRANSFER_MOUNTED_DOMAIN: "${KOONJ_TRANSFER_MOUNTED_DOMAIN:-default}"
+      KOONJ_TRANSFER_MOUNT_POOLS: "${KOONJ_TRANSFER_MOUNT_POOLS:-}"
       KOONJ_DDL_AUTO: ${KOONJ_DDL_AUTO:-update}
       KOONJ_QUOTA_CATALOGED_FILES: "${KOONJ_QUOTA_CATALOGED_FILES:-0}"
       KOONJ_QUOTA_STORAGE_CONNECTIONS: "${KOONJ_QUOTA_STORAGE_CONNECTIONS:-0}"
@@ -128,21 +140,46 @@ services:
         -XX:MaxRAMPercentage=75.0
         -XX:InitialRAMPercentage=50.0
         -Djava.security.egd=file:/dev/./urandom
-    volumes:
+    volumes: &koonj-server-volumes
       - ${KOONJ_DATA_MOUNT:-${KOONJ_FUSE_BACKING_DIR:-./data}}:/mnt/koonj:rw
-    healthcheck:
+    healthcheck: &koonj-server-healthcheck
       test: ['CMD', 'curl', '-sf', 'http://localhost:8080/actuator/health']
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 45s
-    deploy:
+    deploy: &koonj-server-deploy
       resources:
         limits:
           memory: ${KOONJ_SERVER_MEMORY:-2G}
-      # Scale with: docker compose up -d --scale koonj-server=N
     networks:
       - koonj-internal
+
+  koonj-transfer-worker:
+    image: *koonj-server-image
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *koonj-server-env
+      KOONJ_TRANSFER_RELAY_ENABLED: "false"
+      KOONJ_TRANSFER_WORKER_ENABLED: "true"
+      KOONJ_TRANSFER_WORKER_POOL: ${KOONJ_TRANSFER_WORKER_POOL:-default}
+      KOONJ_TRANSFER_BACKGROUND_WORKERS: "${KOONJ_TRANSFER_BACKGROUND_WORKERS:-2}"
+      KOONJ_TRANSFER_INTERACTIVE_WORKERS: "${KOONJ_TRANSFER_INTERACTIVE_WORKERS:-1}"
+      KOONJ_TRANSFER_TENANT_JOBS: "${KOONJ_TRANSFER_TENANT_JOBS:-2}"
+      KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS: "${KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS:-1}"
+      KOONJ_TRANSFER_BACKEND_JOBS: "${KOONJ_TRANSFER_BACKEND_JOBS:-8}"
+    volumes: *koonj-server-volumes
+    healthcheck: *koonj-server-healthcheck
+    deploy: *koonj-server-deploy
+    networks:
+      - koonj-internal
+    stop_grace_period: 90s
 
   rabbitmq:
     image: rabbitmq:4.2-alpine

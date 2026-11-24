@@ -32,16 +32,18 @@ public class CatalogScanService {
     private final JobService jobs;
     private final TransactionTemplate transaction;
     private final StorageConnectionRepository storage;
+    private final TransferReservations reservations;
 
     public CatalogScanService(ConnectionService connections, StorageConnectorFactory connectors,
                               FileMetadataRepository files, JobService jobs, TransactionTemplate transaction,
-                              StorageConnectionRepository storage) {
+                              StorageConnectionRepository storage, TransferReservations reservations) {
         this.connections = connections;
         this.connectors = connectors;
         this.files = files;
         this.jobs = jobs;
         this.transaction = transaction;
         this.storage = storage;
+        this.reservations = reservations;
     }
 
     public JobResponse submit(UUID id) {
@@ -58,30 +60,35 @@ public class CatalogScanService {
     }
 
     public ScanSourcesResponse submitSources() {
-        var batch = transaction.execute(status -> {
-            var queued = new ArrayList<TransferJob>();
-            int existingScanCount = 0;
-            for (UUID id : storage.activeSourceIds(ProjectScope.id())) {
-                StorageConnection connection = storage.findByIdForUpdate(id, ProjectScope.id()).orElse(null);
-                if (connection == null || !connection.isActive() || connection.getRole() == StorageRole.TARGET) continue;
-                if (jobs.hasActiveScan(id)) existingScanCount++;
-                else queued.add(jobs.create(TransferJob.Operation.SCAN, id, null, List.of()));
+        var queued = new ArrayList<TransferJob>();
+        int existingScanCount = 0;
+        for (UUID id : storage.activeSourceIds(ProjectScope.id())) {
+            try {
+                TransferJob job = transaction.execute(status -> {
+                    StorageConnection connection = storage.findByIdForUpdate(id, ProjectScope.id()).orElse(null);
+                    if (connection == null || !connection.isActive() || connection.getRole() == StorageRole.TARGET) return null;
+                    if (jobs.hasActiveScan(id)) throw new ResponseStatusException(HttpStatus.CONFLICT, "A scan already exists");
+                    return jobs.create(TransferJob.Operation.SCAN, id, null, List.of());
+                });
+                if (job != null) {
+                    queued.add(job);
+                    execute(job);
+                }
+            } catch (ResponseStatusException conflict) {
+                if (!HttpStatus.CONFLICT.equals(conflict.getStatusCode())) throw conflict;
+                existingScanCount++;
             }
-            return new QueuedScans(queued, existingScanCount);
-        });
-        var response = new ScanSourcesResponse(batch.jobs().stream().map(JobResponse::from).toList(), batch.existingScanCount());
-        batch.jobs().forEach(this::execute);
-        return response;
+        }
+        return new ScanSourcesResponse(queued.stream().map(JobResponse::from).toList(), existingScanCount);
     }
-
-    private record QueuedScans(List<TransferJob> jobs, int existingScanCount) {}
 
     public void execute(TransferJob job) {
-        jobs.execute(job, this::scan);
+        if (!jobs.distributed()) jobs.execute(job, this::scan);
     }
 
-    private void scan(TransferJob job) throws java.io.IOException {
+    void scan(TransferJob job) throws java.io.IOException {
         StorageConnection source = connections.active(job.getSourceConnectionId());
+        reservations.verifyScan(job, source);
         StorageConnector connector = connectors.resolve(source.getProviderType());
         List<ScannedFileInfo> discovered = connector.listFiles(source, "");
         jobs.checkpoint(job);

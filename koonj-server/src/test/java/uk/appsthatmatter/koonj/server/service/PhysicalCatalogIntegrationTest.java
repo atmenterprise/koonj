@@ -956,9 +956,15 @@ class PhysicalCatalogIntegrationTest {
         }
 
         ReadGate blockRead(String pathPrefix, int readers) {
-            gate = new ReadGate(pathPrefix, new CountDownLatch(readers), new CountDownLatch(1));
+            return blockRead(pathPrefix, readers, Duration.ofSeconds(10));
+        }
+
+        ReadGate blockRead(String pathPrefix, int readers, Duration timeout) {
+            gate = new ReadGate(pathPrefix, new CountDownLatch(readers), new CountDownLatch(1), timeout);
             return gate;
         }
+
+        void coldReady(Instant ready) { coldReady = ready; }
 
         void put(String path, byte[] bytes) { objects.put(path, new ObjectData(bytes, Instant.now())); }
 
@@ -987,7 +993,7 @@ class PhysicalCatalogIntegrationTest {
             if (current != null && path.startsWith(current.pathPrefix)) {
                 current.entered.countDown();
                 try {
-                    if (!current.release.await(10, TimeUnit.SECONDS)) throw new IOException("Read gate timed out");
+                    if (!current.release.await(current.timeout.toMillis(), TimeUnit.MILLISECONDS)) throw new IOException("Read gate timed out");
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw new IOException(interrupted);
@@ -1012,9 +1018,9 @@ class PhysicalCatalogIntegrationTest {
         }
     }
 
-    private record ReadGate(String pathPrefix, CountDownLatch entered, CountDownLatch release) {
+    record ReadGate(String pathPrefix, CountDownLatch entered, CountDownLatch release, Duration timeout) {
         void awaitRead() {
-            await().atMost(Duration.ofSeconds(10)).until(() -> entered.getCount() == 0);
+            await().atMost(timeout).until(() -> entered.getCount() == 0);
         }
     }
 }

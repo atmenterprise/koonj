@@ -23,23 +23,30 @@ public class InterruptedJobRecovery implements ApplicationRunner {
     private final FileMetadataRepository files;
     private final JdbcTemplate jdbc;
     private final JobService jobService;
+    private final TransferReservations reservations;
 
-    public InterruptedJobRecovery(TransferJobRepository jobs, FileMetadataRepository files, JdbcTemplate jdbc, JobService jobService) {
+    public InterruptedJobRecovery(TransferJobRepository jobs, FileMetadataRepository files, JdbcTemplate jdbc, JobService jobService,
+                                  TransferReservations reservations) {
         this.jobs = jobs;
         this.files = files;
         this.jdbc = jdbc;
         this.jobService = jobService;
+        this.reservations = reservations;
     }
 
     @Override
     @Transactional
     public void run(ApplicationArguments args) {
         updateLegacyStorageStateConstraint();
+        if (jobService.distributed()) return;
         String reason = "Interrupted by server restart. Resubmit to retry.";
         Instant finished = Instant.now();
         var active = List.of(Status.PENDING, Status.RUNNING, Status.PAUSING, Status.STOPPING);
         var interrupted = jobs.idsWithStatus(active);
-        for (var jobId : interrupted) jobService.log(jobId, finished, Level.ERROR, null, reason);
+        for (var jobId : interrupted) {
+            jobService.log(jobId, finished, Level.ERROR, null, reason);
+            reservations.release(jobId);
+        }
         jobs.finishInterrupted(Status.FAILED, finished, reason, active);
         jobs.findAllById(interrupted).stream().filter(job -> job.getOperation() != TransferJob.Operation.SCAN)
                 .forEach(job -> jobService.publishNotification(NotificationEvent.Type.TRANSFER_FAILED, job, null, reason));

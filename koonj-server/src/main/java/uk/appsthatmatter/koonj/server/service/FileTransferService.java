@@ -24,11 +24,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -44,11 +40,11 @@ public class FileTransferService {
     private final TransactionTemplate transaction;
     private final int maxParallelFiles;
     private final long inFlightBytes;
-    private final ConcurrentHashMap<UUID, CompletableFuture<JobResponse>> interactiveRecalls = new ConcurrentHashMap<>();
+    private final TransferReservations reservations;
 
     public FileTransferService(ConnectionService connections, StorageConnectorFactory connectors,
                                FileMetadataRepository files, FileMovementRepository movements, CatalogScanService catalog, JobService jobs,
-                               TransactionTemplate transaction,
+                               TransactionTemplate transaction, TransferReservations reservations,
                                @Value("${koonj.transfer.max-parallel-files:24}") int maxParallelFiles,
                                @Value("${koonj.transfer.in-flight-mib:512}") long inFlightMiB) {
         this.connections = connections;
@@ -58,6 +54,7 @@ public class FileTransferService {
         this.catalog = catalog;
         this.jobs = jobs;
         this.transaction = transaction;
+        this.reservations = reservations;
         this.maxParallelFiles = Math.clamp(maxParallelFiles, 1, 64);
         this.inFlightBytes = Math.clamp(inFlightMiB, 16, 65536) * 1024L * 1024;
     }
@@ -110,7 +107,7 @@ public class FileTransferService {
     }
 
     public void execute(TransferJob job) {
-        jobs.execute(job, this::transfer);
+        if (!jobs.distributed()) jobs.execute(job, this::transfer);
     }
 
     public record RecallResult(String status, Instant estimatedReadyAt) {}
@@ -123,55 +120,53 @@ public class FileTransferService {
         }
         Endpoints endpoints = endpoints(Operation.RECALL, file.getTargetConnection().getId(), file.getConnection().getId());
         String key = resolveFileId(Operation.RECALL, endpoints, file, new HashMap<>());
-        CompletableFuture<JobResponse> completion = interactiveRecalls.get(fileId);
-        if (completion != null) return awaitRecall(completion, timeoutSeconds);
-        Optional<Instant> ready;
-        try {
-            ready = endpoints.reader().requestColdRestore(endpoints.source(), key);
-        } catch (software.amazon.awssdk.core.exception.SdkException failure) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, StorageErrors.describe(failure), failure);
-        }
-        if (ready.isPresent()) return new RecallResult("RESTORING_GLACIER", ready.get());
-
-        var submitted = interactiveRecalls.computeIfAbsent(fileId, id -> {
-            var plan = new TransferPlan("STANDARD", List.of(key), List.of(), Map.of(key, file.getRelativePath()), Set.of(key), id);
-            TransferJob job = jobs.create(Operation.RECALL, endpoints.source().getId(), endpoints.target().getId(),
-                    List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE, plan, null);
-            return jobs.execute(job, running -> {
-                FileMetadata current = file(id);
-                if (isLocal(current)) {
-                    jobs.skipped(running, 1);
-                    return;
+        TransferJob job = jobs.interactiveJob(fileId, true);
+        if (job == null) {
+            var plan = new TransferPlan("STANDARD", List.of(key), List.of(), Map.of(key, file.getRelativePath()), Set.of(key), fileId);
+            Instant submittedAt = Instant.now();
+            try {
+                job = jobs.create(Operation.RECALL, endpoints.source().getId(), endpoints.target().getId(),
+                        List.of(key), ArchiveMode.COPY, false, JobService.INTERACTIVE, plan, null);
+                execute(job);
+            } catch (ResponseStatusException conflict) {
+                if (!HttpStatus.CONFLICT.equals(conflict.getStatusCode())) throw conflict;
+                job = jobs.interactiveJob(fileId, true);
+                if (job == null) {
+                    if (isLocal(file(fileId))) return new RecallResult("RECALLED", null);
+                    job = jobs.interactiveJob(fileId, false);
+                    if (job == null || job.getCompletedAt() == null || job.getCompletedAt().isBefore(submittedAt)) throw conflict;
                 }
-                String currentKey = resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>());
-                if (!key.equals(currentKey)) throw new IOException("Archive reference changed while recall was queued");
-                ScannedFileInfo found = exact(endpoints.reader(), endpoints.source(), key)
-                        .filter(item -> item.entryType() == EntryType.FILE)
-                        .orElseThrow(() -> new IOException("Archive object was not found"));
-                jobs.totals(running, 1, found.sizeBytes());
-                jobs.beginFile(running, key);
-                move(running, endpoints, found, current.getRelativePath(), null, null, false);
-                jobs.progress(running, found.sizeBytes(), null);
-            });
-        });
-        submitted.whenComplete((result, failure) -> interactiveRecalls.remove(fileId, submitted));
-        return awaitRecall(submitted, timeoutSeconds);
+            }
+        }
+        return awaitRecall(job.getId(), timeoutSeconds);
     }
 
-    private static RecallResult awaitRecall(CompletableFuture<JobResponse> completion, int timeoutSeconds) {
+    private RecallResult awaitRecall(UUID id, int timeoutSeconds) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
         try {
-            JobResponse result = completion.get(timeoutSeconds, TimeUnit.SECONDS);
-            if (result.status() != TransferJob.Status.COMPLETED) {
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Recall failed. See transfer job " + result.id());
+            while (true) {
+                var job = jobs.recallStatus(id);
+                switch (job.getStatus()) {
+                    case COMPLETED -> {
+                        Instant ready = job.getRecallReadyAt();
+                        return new RecallResult(ready == null ? "RECALLED" : "RESTORING_GLACIER", ready);
+                    }
+                    case FAILED, PARTIAL_FAILURE, PAUSED, STOPPED -> throw new ResponseStatusException(
+                            HttpStatus.BAD_GATEWAY, "Recall failed or was interrupted");
+                    case PENDING, RUNNING -> {
+                        if (job.getRecallReadyAt() != null) {
+                            return new RecallResult("RESTORING_GLACIER", job.getRecallReadyAt());
+                        }
+                    }
+                    default -> { }
+                }
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Recall is still queued or running");
+                TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(250)));
             }
-            return new RecallResult("RECALLED", null);
-        } catch (TimeoutException failure) {
-            throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Recall is still queued or running", failure);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Recall wait interrupted", failure);
-        } catch (ExecutionException failure) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Recall could not complete", failure);
         }
     }
 
@@ -211,7 +206,7 @@ public class FileTransferService {
         throw new IllegalArgumentException("Catalog file ID is not transferable between the selected connections");
     }
 
-    private static String recallKey(StorageConnection bucket, UUID id, UUID boundTarget, String reference, String objectKey) {
+    static String recallKey(StorageConnection bucket, UUID id, UUID boundTarget, String reference, String objectKey) {
         if (reference == null || (boundTarget != null && !bucket.getId().equals(boundTarget))) return null;
         String prefix = s3Uri(bucket, "");
         String key = reference.startsWith(prefix) ? reference.substring(prefix.length())
@@ -246,20 +241,29 @@ public class FileTransferService {
         return new Endpoints(source, reader, target, writer);
     }
 
-    private void transfer(TransferJob job) {
+    void transfer(TransferJob job) {
         Endpoints endpoints = endpoints(job.getOperation(), job.getSourceConnectionId(), job.getTargetConnectionId());
         TransferPlan plan = job.getPlan();
+        var footprint = reservations.footprint(job, endpoints.source(), endpoints.target());
         if (plan.interactiveFileId() != null) {
             FileMetadata current = file(plan.interactiveFileId());
             if (isLocal(current)) {
+                jobs.recallAvailable(job);
                 jobs.skipped(job, 1);
                 return;
             }
             String key = plan.sourcePaths().getFirst();
+            String path = current.getRelativePath();
             if (!key.equals(resolveFileId(Operation.RECALL, endpoints, current, new HashMap<>()))
-                    || !current.getRelativePath().equals(plan.restorePaths().get(key))) {
-                throw new IllegalStateException("Archive reference changed while recall was paused or stopped");
+                    || !path.equals(plan.restorePaths().get(key)) || !footprint.covers(key, path)) {
+                throw new IllegalStateException("Archive reference changed while recall was queued");
             }
+            var ready = endpoints.reader().requestColdRestore(endpoints.source(), key);
+            if (ready.isPresent()) {
+                jobs.coldRestore(job, ready.get());
+                return;
+            }
+            jobs.recallAvailable(job);
         }
         var restorePaths = new HashMap<>(plan.restorePaths());
         var handled = jobs.handledPaths(job);
@@ -273,6 +277,7 @@ public class FileTransferService {
                 .filter(folder -> folder.isEmpty() || !coveredByFolder(requested, folder.substring(0, folder.length() - 1)))
                 .toList();
         validateRecallAliases(job, endpoints, mountedFolders, restorePaths);
+        restorePaths.forEach((key, path) -> requireFootprint(footprint, key, path));
         restorePaths.forEach((key, path) -> {
             String previous = restoreKeys.putIfAbsent(path, key);
             if (previous != null && !previous.equals(key)) {
@@ -303,6 +308,7 @@ public class FileTransferService {
             Consumer<ScannedFileInfo> enqueue = file -> {
                 String key = file.relativePath();
                 String target = restorePaths.getOrDefault(key, key);
+                requireFootprint(footprint, key, target);
                 batch.add(key, file.sizeBytes(),
                         () -> move(job, endpoints, file, target, plan.storageClass(), restoreKeys.get(target), false));
             };
@@ -311,6 +317,10 @@ public class FileTransferService {
                     if (selectedFiles.containsKey(key) || unavailable.containsKey(key)
                             || coveredByFolder(folders.keySet(), key)) return;
                     String target = link.getRelativePath();
+                    requireFootprint(footprint, key, target);
+                    if (!key.equals(target) && !target.equals(restorePaths.get(key))) {
+                        throw new IllegalStateException("Recall alias changed after planning. Submit the recall again.");
+                    }
                     var hint = new ScannedFileInfo(key, link.getSizeBytes(), null, null);
                     batch.add(key, hint.sizeBytes(), () -> move(job, endpoints, hint, target, plan.storageClass(), null, true));
                 });
@@ -340,6 +350,12 @@ public class FileTransferService {
                 }
             }
             batch.submitDiscovered();
+        }
+    }
+
+    private static void requireFootprint(TransferReservations.Footprint footprint, String key, String path) {
+        if (!footprint.covers(key, path)) {
+            throw new IllegalStateException("Storage paths changed after reservation. Submit the transfer again.");
         }
     }
 

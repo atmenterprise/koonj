@@ -56,11 +56,10 @@ class NotificationLimitMonitor {
 
     @Scheduled(fixedDelayString = "${koonj.notifications.limits.check-interval}", initialDelayString = "${koonj.notifications.limits.check-interval}")
     void check() {
-        long concurrency = jobs.sampleTransferConcurrency();
         if ((fileLimit > 0 || connectionLimit > 0 || concurrencyLimit > 0) && rules.existsByEventTypeAndEnabledTrue(QUOTA_THRESHOLD)) {
             if (fileLimit > 0) quota("CATALOGED_FILES", files.countByEntryType(EntryType.FILE), fileLimit);
             if (connectionLimit > 0) quota("STORAGE_CONNECTIONS", connections.count(), connectionLimit);
-            if (concurrencyLimit > 0) quota("TRANSFER_CONCURRENCY", concurrency, concurrencyLimit);
+            if (concurrencyLimit > 0) quota("TRANSFER_CONCURRENCY", jobs.sampleTransferConcurrency(), concurrencyLimit);
         }
         if (expiresAt != null && rules.existsByEventTypeAndEnabledTrue(LICENSE_ALERT)) license(Instant.now());
     }

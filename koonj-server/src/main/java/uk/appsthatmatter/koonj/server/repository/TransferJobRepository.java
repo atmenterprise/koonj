@@ -21,6 +21,31 @@ public interface TransferJobRepository extends JpaRepository<TransferJob, UUID> 
     Optional<TransferJob> findByIdAndProjectIdAndOwnerSubject(UUID id, UUID projectId, String ownerSubject);
     boolean existsByIdAndProjectIdAndOwnerSubject(UUID id, UUID projectId, String ownerSubject);
 
+    Optional<TransferJob> findFirstByProjectIdAndInteractiveFileIdAndStatusInOrderByCreatedAtDesc(
+            UUID projectId, UUID fileId, Collection<TransferJob.Status> statuses);
+
+    Optional<TransferJob> findFirstByProjectIdAndInteractiveFileIdOrderByCreatedAtDesc(UUID projectId, UUID fileId);
+
+    long countByProjectIdAndWorkerAttemptIsNotNullAndPriorityLessThan(UUID projectId, int priority);
+
+    long countByProjectIdAndWorkerAttemptIsNotNullAndPriorityGreaterThanEqual(UUID projectId, int priority);
+
+    @Modifying
+    @Query("update TransferJob j set j.workerHeartbeat = :now where j.workerInstance = :instance and j.workerAttempt in :attempts")
+    int heartbeat(UUID instance, Collection<UUID> attempts, Instant now);
+
+    @Query("select count(j) from TransferJob j where j.workerAttempt is not null and j.workerHeartbeat < :cutoff")
+    long countStalled(Instant cutoff);
+
+    long countByStatusAndDispatchGenerationIsNotNull(TransferJob.Status status);
+
+    @Query("""
+            select min(j.createdAt) from TransferJob j
+            where j.status = uk.appsthatmatter.koonj.server.entity.TransferJob.Status.PENDING
+              and j.dispatchGeneration is not null and j.recallReadyAt is null
+            """)
+    Instant oldestWaitingTransfer();
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select j from TransferJob j where j.id = :id")
     Optional<TransferJob> lock(UUID id);

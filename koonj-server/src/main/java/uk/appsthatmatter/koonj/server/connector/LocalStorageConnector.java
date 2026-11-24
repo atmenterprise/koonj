@@ -44,7 +44,7 @@ public class LocalStorageConnector implements StorageConnector {
         return Path.of(config.getBasePathOrBucket());
     }
 
-    private Path root(StorageConnection config) throws IOException {
+    public Path storageRoot(StorageConnection config) throws IOException {
         Path root = configuredPath(config).toRealPath();
         if (!Files.isDirectory(root)) throw new IOException("Storage root must be a directory");
         return root;
@@ -64,12 +64,12 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public void checkConnectivity(StorageConnection config) throws IOException {
-        checkReadable(root(config));
+        checkReadable(storageRoot(config));
     }
 
     @Override
     public Optional<StorageCapacity> capacity(StorageConnection config) throws IOException {
-        var store = Files.getFileStore(root(config));
+        var store = Files.getFileStore(storageRoot(config));
         long total = store.getTotalSpace();
         if (total <= 0) return Optional.empty();
         long free = Math.clamp(store.getUnallocatedSpace(), 0, total);
@@ -85,7 +85,7 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public void testConnection(StorageConnection config) throws IOException {
-        Path root = root(config);
+        Path root = storageRoot(config);
         checkReadable(root);
         if (config.getRole() != StorageRole.SOURCE) {
             Files.delete(Files.createTempFile(root, TEMP_PREFIX, ".koonj.tmp"));
@@ -101,7 +101,7 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public Optional<ScannedFileInfo> statFile(StorageConnection config, String path) throws IOException {
-        Path root = root(config);
+        Path root = storageRoot(config);
         Path entry = resolve(root, path);
         if (Files.isDirectory(entry, NOFOLLOW_LINKS)) {
             if (entry.equals(root)) return Optional.empty();
@@ -113,7 +113,7 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public void visitFiles(StorageConnection config, String subPath, Consumer<ScannedFileInfo> visitor) throws IOException {
-        Path root = root(config);
+        Path root = storageRoot(config);
         Path start = resolve(root, subPath);
         if (Files.notExists(start, NOFOLLOW_LINKS)) {
             if (subPath.isEmpty() || stubTarget(stub(start)) == null) return;
@@ -168,7 +168,7 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public FileAttributes fileAttributes(StorageConnection config, String relativePath) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         var attributes = Files.readAttributes(path, BasicFileAttributes.class, NOFOLLOW_LINKS);
         if (!attributes.isRegularFile()) return FileAttributes.EMPTY;
         String owner = null;
@@ -209,20 +209,20 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public InputStream openReadStream(StorageConnection config, String relativePath) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         if (!Files.isRegularFile(path, NOFOLLOW_LINKS) || stubTarget(path) != null) throw new IOException("Expected a regular file");
         return new BufferedInputStream(Files.newInputStream(path, NOFOLLOW_LINKS));
     }
 
     @Override
     public boolean isSymlink(StorageConnection config, String relativePath) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         return Files.isSymbolicLink(path) || (Files.notExists(path, NOFOLLOW_LINKS) && stubTarget(stub(path)) != null);
     }
 
     @Override
     public void createSymlink(StorageConnection config, String relativePath, String targetReference) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         if (Files.isDirectory(path, NOFOLLOW_LINKS)) throw new IOException("Cannot replace a directory with a symbolic link");
         try (var temporary = new TemporaryFiles(path.getParent())) {
             Path staged = temporary.reserve();
@@ -239,7 +239,7 @@ public class LocalStorageConnector implements StorageConnector {
     @Override
     public void replaceWithSymlink(StorageConnection config, String relativePath, String targetReference,
                                    RestoreCommit commit) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
         try (var temporary = new TemporaryFiles(path.getParent())) {
             Path backup = backup(path, temporary);
@@ -268,7 +268,7 @@ public class LocalStorageConnector implements StorageConnector {
     @Override
     public void restore(StorageConnection config, String relativePath, InputStream stream,
                         long contentLength, RestoreCommit commit) throws IOException {
-        Path destination = resolve(root(config), relativePath);
+        Path destination = resolve(storageRoot(config), relativePath);
         Files.createDirectories(destination.getParent());
         try (var temporary = new TemporaryFiles(destination.getParent())) {
             Path staging = temporary.create();
@@ -321,7 +321,7 @@ public class LocalStorageConnector implements StorageConnector {
 
     @Override
     public void deleteFile(StorageConnection config, String relativePath) throws IOException {
-        Path path = resolve(root(config), relativePath);
+        Path path = resolve(storageRoot(config), relativePath);
         if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) throw new IOException("Expected a regular file");
         Files.delete(path);
     }

@@ -23,11 +23,12 @@ Koonj is a data catalog and explorer application with independently deployable c
 
 | Component        | Technology             | Purpose                              |
 | ---------------- | ---------------------- | ------------------------------------ |
-| **koonj-server** | Spring Boot 3.5 / JDK 21 | REST API, catalog engine, job runner |
+| **koonj-server** | Spring Boot 3.5 / JDK 21 | REST API, catalog access, transfer admission |
+| **koonj-transfer-worker** | Koonj server JAR, worker role | Archive, recall, and catalog scan execution |
 | **koonj-notification-worker** | Spring Boot 3.5 / JDK 21 | Notification routing, RabbitMQ publishing, and delivery |
 | **koonj-ui**     | React SPA / Nginx      | Web console served as static files   |
 
-Scale API replicas, notification workers, and Nginx independently.
+Scale API replicas, transfer workers, notification workers, and Nginx independently. See [transfer workers](TRANSFER-WORKERS.md) for reservation rules and upgrade steps. The deployment ZIP includes the guide at `docs/TRANSFER-WORKERS.md`.
 
 ### External dependencies
 
@@ -35,7 +36,7 @@ Scale API replicas, notification workers, and Nginx independently.
 | -------------- | ------- | -------------------------- |
 | PostgreSQL     | 15+     | Catalog metadata store     |
 | Keycloak       | 24+     | Identity & access management |
-| RabbitMQ       | 4.2     | Durable notification queues and a shared broker for future tasks |
+| RabbitMQ       | 4.2     | Durable transfer and notification queues |
 
 ---
 
@@ -68,7 +69,11 @@ Scale API replicas, notification workers, and Nginx independently.
            └───────────────────────────────┘
 ```
 
-The API writes notification events to a PostgreSQL outbox in the job transaction.
+The API reserves both storage endpoints in PostgreSQL and records a dispatch
+request with the job. RabbitMQ delivers the job ID to an eligible transfer
+worker. Workers update job progress in PostgreSQL.
+
+The API and transfer workers write notification events to a PostgreSQL outbox in the job transaction.
 The notification worker reads the outbox, records each pending delivery, and
 publishes its ID to RabbitMQ. Separate RabbitMQ queues feed SMTP consumers and
 webhook consumers. SMTP and HTTP connections run in the worker process.
@@ -160,7 +165,7 @@ docker compose up -d --build --wait
 ```
 
 Compose starts PostgreSQL and RabbitMQ, then Keycloak and the API. The UI
-waits for the API. The notification worker waits for the API and RabbitMQ.
+waits for the API. The transfer and notification workers wait for the API and RabbitMQ.
 RabbitMQ is reachable within the Docker network and stores its data in the
 `koonj_rabbitmq_data` volume. Compose provisions its user and virtual host on
 initial startup. To use an external cluster, set the worker's broker host,
@@ -186,8 +191,8 @@ open http://localhost    # or http://<server-ip>
 ### 5. Scale services
 
 ```bash
-# Scale the API server to 3 instances
-docker compose up -d --scale koonj-server=3
+# Scale API and transfer workers independently
+docker compose up -d --scale koonj-server=3 --scale koonj-transfer-worker=3
 
 # Scale the UI to 2 instances
 docker compose up -d --scale koonj-ui=2
@@ -408,17 +413,13 @@ installation, or `C:\koonj\bin\koonj-server.cmd restart` on Windows.
 
 ### Horizontal scaling — API Server
 
-Each `koonj-server` instance is stateless (state is in PostgreSQL). Run
-multiple instances on different ports or hosts.
+Enable [RabbitMQ transfer dispatch](TRANSFER-WORKERS.md) and run the API replicas on different ports or hosts. Run separate transfer workers for storage access and job execution.
 
-**On-premise multi-instance:**
-```bash
-# Instance 1
-KOONJ_SERVER_PORT=8080 /opt/koonj/bin/koonj-server.sh start
+**On-premise multi-instance**
 
-# Instance 2 (copy the installation or use a shared mount)
-KOONJ_SERVER_PORT=8081 /opt/koonj/bin/koonj-server.sh start
-```
+Use one configuration file per process. Set `KOONJ_TRANSFER_RABBIT_ENABLED=true`
+throughout the deployment. Set `KOONJ_TRANSFER_WORKER_ENABLED=false` on API
+replicas and give each replica its own port.
 
 Update the Nginx upstream to load-balance:
 ```nginx
