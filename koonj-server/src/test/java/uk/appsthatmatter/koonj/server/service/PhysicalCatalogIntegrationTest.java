@@ -54,6 +54,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.HexFormat;
 import java.util.Map;
@@ -586,10 +587,11 @@ class PhysicalCatalogIntegrationTest {
         Path original = Files.writeString(root.resolve("report"), "original bytes");
         completed(transfers.submit(ARCHIVE, request(source, bucket, ArchiveMode.PURGE, false)));
         UUID fileId = entry(source, "report").id();
-        Instant estimate = Instant.now().plus(Duration.ofHours(5));
+        Instant estimate = Instant.now().plus(Duration.ofHours(5)).truncatedTo(ChronoUnit.MICROS).plusNanos(500);
         s3.coldReady = estimate;
-        assertThat(transfers.recallSync(fileId, 5))
-                .isEqualTo(new FileTransferService.RecallResult("RESTORING_GLACIER", estimate));
+        var coldRecall = transfers.recallSync(fileId, 5);
+        assertThat(coldRecall.status()).isEqualTo("RESTORING_GLACIER");
+        assertThat(coldRecall.estimatedReadyAt()).isCloseTo(estimate, within(1, ChronoUnit.MICROS));
         assertThat(Files.isSymbolicLink(original)).isTrue();
 
         s3.coldReady = null;
