@@ -1,5 +1,7 @@
 package uk.appsthatmatter.koonj.server.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ import java.util.UUID;
 
 @Service
 public class ConnectionService {
+    private static final Logger LOG = LoggerFactory.getLogger(ConnectionService.class);
     private final StorageConnectionRepository connections;
     private final FileMetadataRepository files;
     private final TransferJobRepository jobs;
@@ -119,12 +122,14 @@ public class ConnectionService {
         try {
             connector.checkConnectivity(connection);
         } catch (IOException | RuntimeException failure) {
+            LOG.error("Connectivity check failed for storage connection {} ({})", id, failure.getClass().getName());
             return new ConnectionHealth(id, false, StorageErrors.describe(failure));
         }
         StorageCapacity capacity;
         try {
             capacity = connector.capacity(connection).orElse(null);
         } catch (IOException | RuntimeException failure) {
+            LOG.warn("Capacity check failed for storage connection {} ({})", id, failure.getClass().getName());
             capacity = null;
         }
         return new ConnectionHealth(id, true, "Storage is reachable and can be listed", capacity);
@@ -155,6 +160,8 @@ public class ConnectionService {
             connectors.resolve(connection.getProviderType()).testConnection(connection);
             return new ConnectionHealth(connection.getId(), true, "Storage access verified");
         } catch (IOException | RuntimeException failure) {
+            LOG.error("Storage access test failed for provider {} and connection {} ({})",
+                    connection.getProviderType(), connection.getId(), failure.getClass().getName());
             return new ConnectionHealth(connection.getId(), false, StorageErrors.describe(failure));
         }
     }

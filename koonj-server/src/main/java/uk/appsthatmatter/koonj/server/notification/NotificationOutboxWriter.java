@@ -1,5 +1,7 @@
 package uk.appsthatmatter.koonj.server.notification;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.appsthatmatter.koonj.notification.NotificationEvent;
@@ -11,6 +13,7 @@ import java.util.UUID;
 
 @Service
 public class NotificationOutboxWriter {
+    private static final Logger LOG = LoggerFactory.getLogger(NotificationOutboxWriter.class);
     private final NotificationOutboxRepository outbox;
 
     NotificationOutboxWriter(NotificationOutboxRepository outbox) {
@@ -34,5 +37,6 @@ public class NotificationOutboxWriter {
         row.setEvent(event);
         row.setTestChannelId(testChannelId);
         outbox.save(row);
+        LOG.debug("Recorded notification outbox entry for {} (test: {})", event.type(), testChannelId != null);
     }
 }

@@ -19,7 +19,7 @@ fi
 KOONJ_JAR="${KOONJ_HOME}/lib/koonj-server.jar"
 KOONJ_LOG_DIR="${KOONJ_HOME}/logs"
 KOONJ_PID_FILE="${KOONJ_LOG_DIR}/koonj-server.pid"
-KOONJ_LOG_FILE="${KOONJ_LOG_DIR}/koonj-server.log"
+KOONJ_CONSOLE_LOG="${KOONJ_LOG_DIR}/koonj-server-console.log"
 
 JAVA_OPTS="${JAVA_OPTS:--Xms512m -Xmx2g -XX:+UseG1GC -Djava.security.egd=file:/dev/./urandom}"
 SPRING_PROFILES="${SPRING_PROFILES_ACTIVE:-production}"
@@ -50,9 +50,9 @@ do_start() {
     -Dspring.profiles.active="${SPRING_PROFILES}" \
     -Dserver.port="${SERVER_PORT}" \
     -jar "${KOONJ_JAR}" ${SPRING_CONFIG_FLAG} \
-    >> "${KOONJ_LOG_FILE}" 2>&1 &
+    >> "${KOONJ_CONSOLE_LOG}" 2>&1 &
   echo $! > "${KOONJ_PID_FILE}"
-  echo "  ✓ Started (PID $(cat "${KOONJ_PID_FILE}"))  Log: ${KOONJ_LOG_FILE}"
+  echo "  ✓ Started (PID $(cat "${KOONJ_PID_FILE}"))  Log: ${KOONJ_CONSOLE_LOG}"
 }
 
 do_stop() {
@@ -73,7 +73,7 @@ do_status() {
 }
 
 do_logs() {
-  [[ -f "${KOONJ_LOG_FILE}" ]] && tail -f "${KOONJ_LOG_FILE}" || echo "No log file."
+  [[ -f "${KOONJ_CONSOLE_LOG}" ]] && tail -f "${KOONJ_CONSOLE_LOG}" || echo "No log file."
 }
 
 case "${1:-}" in

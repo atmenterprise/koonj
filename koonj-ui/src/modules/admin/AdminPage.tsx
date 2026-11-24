@@ -60,10 +60,10 @@ const signals = [
   { id: 'traces', title: 'Traces', icon: 'link', description: 'Inspect request spans and latency across services.' },
 ] as const
 
-function observeUrl(base: string, organization: string, signal: TelemetrySignal) {
+function observeUrl(base: string, organization: string, page: TelemetrySignal | 'dashboards') {
   const url = new URL(base)
   const path = url.pathname.replace(/\/+$/, '')
-  url.pathname = (path.endsWith('/web') ? path : path + '/web') + '/' + signal
+  url.pathname = (path.endsWith('/web') ? path : path + '/web') + '/' + page
   url.searchParams.set('org_identifier', organization)
   return url.href
 }
@@ -80,7 +80,8 @@ function Observability() {
   return <section className="panel admin-group">
     <div className="panel-heading"><div><h2>OpenTelemetry and OpenObserve</h2>
       <p>Koonj exports telemetry over OTLP. OpenObserve provides the search and investigation tools.</p>
-    </div></div>
+    </div>{openObserveUrl && <a className="button ops-link" href={observeUrl(openObserveUrl, organization, 'dashboards')}
+      target="_blank" rel="noopener noreferrer">Open dashboards <Icon name="external" size={14} /></a>}</div>
     {!openObserveUrl && <p className="ops-observability-note">Set <code>KOONJ_OPENOBSERVE_URL</code> to the browser-accessible OpenObserve URL to enable these links.</p>}
     <div className="ops-signal-grid">
       {signals.map(signal => <article className="endpoint" key={signal.id}>

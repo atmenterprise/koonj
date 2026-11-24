@@ -39,8 +39,8 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 
-StandardOutput=append:/opt/koonj/logs/koonj-server.log
-StandardError=append:/opt/koonj/logs/koonj-server.log
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=koonj-server
 LimitNOFILE=65536
 
