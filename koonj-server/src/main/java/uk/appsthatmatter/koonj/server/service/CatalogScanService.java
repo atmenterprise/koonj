@@ -15,6 +15,7 @@ import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -202,6 +203,11 @@ public class CatalogScanService {
     }
 
     public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix, Pageable pageable) {
+        return list(connectionId, state, prefix, null, null, pageable);
+    }
+
+    public PageResponse<FileResponse> list(UUID connectionId, StorageState state, String prefix,
+                                           Instant modifiedAfter, Instant modifiedThrough, Pageable pageable) {
         UUID projectId = ProjectScope.id();
         Specification<FileMetadata> filter = (root, query, cb) ->
                 cb.and(cb.equal(root.get("connection").get("projectId"), projectId),
@@ -215,6 +221,12 @@ public class CatalogScanService {
             if (!normalized.isEmpty() && prefix.endsWith("/")) normalized += "/";
             String value = normalized.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
             filter = filter.and((root, query, cb) -> cb.like(root.get("relativePath"), value, '!'));
+        }
+        if (modifiedAfter != null) {
+            filter = filter.and((root, query, cb) -> cb.greaterThan(root.get("lastModifiedAt"), modifiedAfter));
+        }
+        if (modifiedThrough != null) {
+            filter = filter.and((root, query, cb) -> cb.lessThanOrEqualTo(root.get("lastModifiedAt"), modifiedThrough));
         }
         return PageResponse.from(files.findAll(filter, pageable).map(FileResponse::from));
     }

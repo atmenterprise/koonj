@@ -17,6 +17,7 @@ import java.util.UUID;
 
 public interface FileMetadataRepository extends JpaRepository<FileMetadata, UUID>, JpaSpecificationExecutor<FileMetadata> {
     long countByEntryType(EntryType entryType);
+    long countByConnectionProjectIdAndStorageStateNot(UUID projectId, StorageState state);
 
     @Modifying
     @Query("update FileMetadata f set f.storageState = :state, f.errorMessage = :error where f.storageState in :active")

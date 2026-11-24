@@ -1,6 +1,7 @@
 package uk.appsthatmatter.koonj.server.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +21,8 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
@@ -37,7 +40,7 @@ import java.util.List;
 public class SecurityConfiguration {
     @Bean
     SecurityFilterChain apiSecurity(HttpSecurity http, ObjectMapper mapper,
-                                   ObjectProvider<DaoAuthenticationProvider> basicProvider,
+                                   ObjectProvider<DaoAuthenticationProvider> basicProvider, ApiKeyService keys,
                                    UrlBasedCorsConfigurationSource corsSource) throws Exception {
         DaoAuthenticationProvider basic = basicProvider.getIfAvailable();
         var bearer = new BearerTokenAuthenticationEntryPoint();
@@ -51,16 +54,22 @@ public class SecurityConfiguration {
         var converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(new KeycloakAuthorities());
 
-        http.csrf(AbstractHttpConfigurer::disable)
+        var bearerTokens = new DefaultBearerTokenResolver();
+        http.addFilterBefore(new ApiKeyAuthenticationFilter(keys, unauthorized), BearerTokenAuthenticationFilter.class)
+                .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsSource))
                 .requestCache(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(routes -> routes
+                        .requestMatchers(request -> request.getDispatcherType() == DispatcherType.ASYNC
+                                && ApiKeyAuthenticationFilter.isMcp(request)
+                                && request.getAttribute(ProjectScope.ATTRIBUTE) != null).permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui/**").permitAll()
                         .requestMatchers("/api/v1/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden))
-                .oauth2ResourceServer(oauth -> oauth.authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden)
+                .oauth2ResourceServer(oauth -> oauth.bearerTokenResolver(request -> ApiKeyAuthenticationFilter.isMcp(request)
+                                ? null : bearerTokens.resolve(request)).authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden)
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(converter)));
         if (basic != null) {
             http.authenticationProvider(basic).httpBasic(config -> config.authenticationEntryPoint(unauthorized));

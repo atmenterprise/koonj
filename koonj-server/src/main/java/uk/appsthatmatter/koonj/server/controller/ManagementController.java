@@ -8,18 +8,17 @@ import org.springframework.web.bind.annotation.*;
 import uk.appsthatmatter.koonj.server.entity.ProjectTemperatureSettings;
 import uk.appsthatmatter.koonj.server.repository.ProjectTemperatureSettingsRepository;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
-import uk.appsthatmatter.koonj.server.repository.TemperatureSettingsRepository;
+import uk.appsthatmatter.koonj.server.service.TemperaturePolicyService;
 import uk.appsthatmatter.koonj.server.security.PermissionRules;
 
 @RestController
 @RequestMapping("/api/v1/management")
 public class ManagementController {
-    private static final int POLICY_ID = 1;
-    private final TemperatureSettingsRepository legacySettings;
+    private final TemperaturePolicyService policy;
     private final ProjectTemperatureSettingsRepository settings;
 
-    public ManagementController(TemperatureSettingsRepository legacySettings, ProjectTemperatureSettingsRepository settings) {
-        this.legacySettings = legacySettings;
+    public ManagementController(TemperaturePolicyService policy, ProjectTemperatureSettingsRepository settings) {
+        this.policy = policy;
         this.settings = settings;
     }
 
@@ -28,11 +27,8 @@ public class ManagementController {
     @GetMapping("/temperature-policy")
     @PreAuthorize(PermissionRules.POLICY_READ)
     public TemperaturePolicy temperaturePolicy() {
-        var projectId = ProjectScope.id();
-        return settings.findById(projectId).map(policy -> new TemperaturePolicy(policy.getHotDays(), policy.getColdDays()))
-                .orElseGet(() -> ProjectScope.LEGACY.equals(projectId) ? legacySettings.findById(POLICY_ID)
-                        .map(policy -> new TemperaturePolicy(policy.getHotDays(), policy.getColdDays()))
-                        .orElse(new TemperaturePolicy(15, 30)) : new TemperaturePolicy(15, 30));
+        var thresholds = policy.current();
+        return new TemperaturePolicy(thresholds.hotDays(), thresholds.coldDays());
     }
 
     @PutMapping("/temperature-policy")

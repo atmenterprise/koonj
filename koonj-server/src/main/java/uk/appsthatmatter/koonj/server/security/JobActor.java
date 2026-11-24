@@ -8,6 +8,7 @@ public final class JobActor {
 
     public static String displayName() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof ApiKeyService.Principal key) return key.ownerName();
         if (!(authentication instanceof JwtAuthenticationToken token)) return null;
         String name = token.getToken().getClaimAsString("name");
         if (name != null && !name.isBlank()) return name.strip();
@@ -20,6 +21,7 @@ public final class JobActor {
     public static String subject() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null) return null;
+        if (authentication.getPrincipal() instanceof ApiKeyService.Principal key) return key.ownerSubject();
         if (authentication instanceof JwtAuthenticationToken jwt) return "oidc:" + jwt.getToken().getSubject();
         return "basic:" + authentication.getName();
     }

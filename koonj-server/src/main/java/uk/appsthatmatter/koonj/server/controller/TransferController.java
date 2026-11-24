@@ -85,7 +85,7 @@ public class TransferController {
     @PostMapping("/jobs/{jobId}/control")
     @PreAuthorize(PermissionRules.JOB_CONTROL)
     public JobResponse control(@PathVariable UUID jobId, @Valid @RequestBody ControlRequest request, Authentication authentication) {
-        boolean startsWork = request.action() == JobService.Action.RESUME || request.action() == JobService.Action.RESTART;
+        boolean startsWork = request.action().startsWork();
         var grants = permissions.effective(authentication);
         if (startsWork) {
             var operation = jobs.get(jobId).operation();

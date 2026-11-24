@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { adminService, type IntegrationEndpoint, type IntegrationKind } from '../../api/services/adminService'
+import { adminService, type IntegrationEndpoint } from '../../api/services/adminService'
 import { apiClient } from '../../api/client'
 import { ApiPageState } from '../../shared/ui/ApiPageState'
 import { Dialog } from '../../shared/ui/feedback'
@@ -10,18 +10,16 @@ function apiReference() {
   return new URL('/swagger-ui/start', new URL(apiClient.defaults.baseURL ?? '/', window.location.origin)).href
 }
 
-export function IntegrationSettings({ kind }: { kind: IntegrationKind }) {
+export function ApiSettings() {
   const client = useQueryClient()
-  const queryKey = ['admin', 'integrations', kind]
-  const entries = useQuery({ queryKey, queryFn: ({ signal }) => adminService.getIntegrations(kind, signal),
+  const queryKey = ['integrations', 'API']
+  const entries = useQuery({ queryKey, queryFn: ({ signal }) => adminService.getIntegrations('API', signal),
     meta: { errorTitle: 'Could not load integrations' } })
   const [editing, setEditing] = useState<IntegrationEndpoint | 'new'>()
   const [deleting, setDeleting] = useState<IntegrationEndpoint>()
-  const isApi = kind === 'API'
-  const label = isApi ? 'API endpoint' : 'MCP server'
   const save = useMutation({
     mutationFn: (form: FormData) => adminService.saveIntegration({
-      kind, name: String(form.get('name')), url: String(form.get('url')), enabled: form.has('enabled'),
+      kind: 'API', name: String(form.get('name')), url: String(form.get('url')), enabled: form.has('enabled'),
     }, editing === 'new' ? undefined : editing?.id),
     onSuccess: async () => { setEditing(undefined); await client.invalidateQueries({ queryKey }) },
   })
@@ -37,15 +35,15 @@ export function IntegrationSettings({ kind }: { kind: IntegrationKind }) {
   }
 
   return <div className="admin-stack">
-    {isApi && <section className="panel admin-group">
+    <section className="panel admin-group">
       <div className="panel-heading"><div><h2>Koonj API</h2><p>Inspect endpoint definitions and authentication requirements.</p></div>
         <a className="button ops-link" href={apiReference()} target="_blank" rel="noopener noreferrer">Open API reference <Icon name="external" size={14} /></a>
       </div>
-    </section>}
+    </section>
     <section className="panel admin-group">
-      <div className="panel-heading"><div><h2>{isApi ? 'API endpoints' : 'MCP servers'}</h2>
+      <div className="panel-heading"><div><h2>API endpoints</h2>
         <p>Maintain a shared registry of endpoints for administrators. Enabled entries are marked available for use by external clients.</p>
-      </div><Button variant="primary" icon="link" onClick={() => { save.reset(); setEditing('new') }}>Add {label}</Button></div>
+      </div><Button variant="primary" icon="link" onClick={() => { save.reset(); setEditing('new') }}>Add API endpoint</Button></div>
       {entries.isError ? <ApiPageState error={entries.error} loadingLabel="Loading integrations" retry={() => void entries.refetch()} retrying={entries.isFetching} />
         : entries.isPending ? <p className="empty compact" role="status">Loading endpoints…</p>
           : entries.data.length ? <ul className="ops-integrations">{entries.data.map(entry => <li key={entry.id}>
@@ -55,13 +53,13 @@ export function IntegrationSettings({ kind }: { kind: IntegrationKind }) {
               <Button onClick={() => { save.reset(); setEditing(entry) }} aria-label={`Edit ${entry.name}`}>Edit</Button>
               <Button onClick={() => { remove.reset(); setDeleting(entry) }} aria-label={`Delete ${entry.name}`}>Delete</Button>
             </div>
-          </li>)}</ul> : <p className="empty compact">No {isApi ? 'API endpoints' : 'MCP servers'} configured.</p>}
+          </li>)}</ul> : <p className="empty compact">No API endpoints configured.</p>}
     </section>
-    {editing && <Dialog title={(selected ? 'Edit ' : 'Add ') + label} onClose={() => { if (!save.isPending) setEditing(undefined) }}>
+    {editing && <Dialog title={(selected ? 'Edit' : 'Add') + ' API endpoint'} onClose={() => { if (!save.isPending) setEditing(undefined) }}>
       <form onSubmit={submit}>
         <div className="dialog-body">
           <label>Name<input name="name" defaultValue={selected?.name} maxLength={120} required /></label>
-          <label>Endpoint URL<input name="url" type="url" defaultValue={selected?.url} maxLength={2048} placeholder={isApi ? 'https://example.com/api' : 'https://example.com/mcp'} required /></label>
+          <label>Endpoint URL<input name="url" type="url" defaultValue={selected?.url} maxLength={2048} placeholder="https://example.com/api" required /></label>
           <label className="check-label"><input name="enabled" type="checkbox" defaultChecked={selected?.enabled ?? true} />Enabled</label>
           {save.isError && <p className="ops-error" role="alert">{save.error.message}</p>}
         </div>
@@ -71,7 +69,7 @@ export function IntegrationSettings({ kind }: { kind: IntegrationKind }) {
         </div>
       </form>
     </Dialog>}
-    {deleting && <Dialog title={`Delete ${label}`} onClose={() => { if (!remove.isPending) setDeleting(undefined) }}>
+    {deleting && <Dialog title="Delete API endpoint" onClose={() => { if (!remove.isPending) setDeleting(undefined) }}>
       <div className="dialog-body"><p>Remove {deleting.name} from the registry?</p>
         {remove.isError && <p className="ops-error" role="alert">{remove.error.message}</p>}
       </div>
