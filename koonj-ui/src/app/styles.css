@@ -1285,3 +1285,17 @@ body:has(.explorer-fullscreen) .topbar { position: fixed; inset: 0 0 auto; z-ind
 .settings-profile > div { display: grid; gap: 5px; }
 .settings-profile dt { color: var(--muted); font-size: 12px; }
 .settings-profile dd { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; overflow-wrap: anywhere; }
+
+.mcp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.mcp-actions code, .mcp-secret { overflow-wrap: anywhere; }
+.mcp-subheading { margin: 18px 0 8px; font-size: 0.9rem; }
+.mcp-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 370px), 1fr)); gap: 6px 20px; margin: 0; padding: 0; list-style: none; }
+.mcp-tools li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.mcp-token-table { margin-top: 10px; }
+.mcp-token-table table { width: 100%; border-collapse: collapse; }
+.mcp-token-table th, .mcp-token-table td { padding: 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.mcp-instructions { margin: 12px 0; }
+.mcp-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.mcp-paths label { display: grid; gap: 4px; }
+.mcp-paths input, .mcp-code { padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.mcp-code { margin: 12px 0 0; overflow: auto; }

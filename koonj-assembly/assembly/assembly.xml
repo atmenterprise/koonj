@@ -122,6 +122,26 @@
             <lineEnding>unix</lineEnding>
         </file>
         <file>
+            <source>../deploy/migrations/user-api-keys.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../scripts/mcp-bridge.mjs</source>
+            <outputDirectory>mcp</outputDirectory>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/nginx.conf</source>
+            <outputDirectory>deploy</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../docs/MCP-INTEGRATION.md</source>
+            <outputDirectory>/</outputDirectory>
+        </file>
+        <file>
             <source>../docs/DEPLOYMENT-GUIDE.md</source>
             <outputDirectory>/</outputDirectory>
         </file>

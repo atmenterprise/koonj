@@ -13,21 +13,25 @@ import { LoadingRows } from '../shared/ui/feedback'
 const AuditLogPage = lazy(() => import('../modules/activity/AuditLogPage'))
 const StorageStatusPage = lazy(() => import('../modules/storage/StorageStatusPage'))
 const AdminPage = lazy(() => import('../modules/admin/AdminPage'))
+const IntegrationPage = lazy(() => import('../modules/integration/IntegrationPage'))
 const ManagementPage = lazy(() => import('../modules/management/ManagementPage'))
 
 const pages = [
   { path: '/Home', title: 'Home', icon: 'home', access: [] },
   { path: '/explorer', title: 'Catalog', icon: 'folder', access: ['CATALOG_VIEW'] },
   { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: ['ACTIVITY_VIEW'] },
-  { path: '/storage', title: 'Storage status', shortTitle: 'Storage', icon: 'drive', access: ['STORAGE_VIEW'] },
-  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'INTEGRATIONS_MANAGE', 'PROJECTS_MANAGE', 'PERMISSIONS_MANAGE'] },
+  { path: '/storage', title: 'Storage Status', shortTitle: 'Storage', icon: 'drive', access: ['STORAGE_VIEW'] },
   { path: '/management', title: 'Management', icon: 'server', access: ['STORAGE_MANAGE', 'POLICY_MANAGE'] },
+  { path: '/integration', title: 'Integration', icon: 'link', access: [] },
+  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'PROJECTS_MANAGE', 'PERMISSIONS_MANAGE'] },
 ] as const
 const browserLocation = () => window.location.pathname + window.location.search
 function currentLocation() {
   const location = browserLocation()
   if (window.location.pathname.toLowerCase().replace(/\/+$/, '') !== '/admin') return location
   const params = new URLSearchParams(window.location.search)
+  if (params.get('section') === 'mcp') return '/integration'
+  if (params.get('section') === 'api') return '/integration?section=api'
   if (params.get('section') === 'storage') return '/management'
   if (params.get('section') !== 'activity') return location
   const job = params.get('job')
@@ -48,7 +52,8 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
   const { notify } = useActivityNotifications()
   const deniedLocation = useRef<string | undefined>(undefined)
   const canViewActivity = can('ACTIVITY_VIEW')
-  const canView = (item: typeof pages[number]) => !item.access.length || item.access.some(can) || (item.path === '/admin' && hasRole('KOONJ_ADMIN'))
+  const canView = (item: typeof pages[number]) => !item.access.length || item.access.some(can)
+    || (item.path === '/admin' && hasRole('KOONJ_ADMIN'))
   const [path, query] = location.split('?')
   const params = new URLSearchParams(query)
   const page = pages.find(item => item.path.toLowerCase() === path.toLowerCase().replace(/\/+$/, '')) ?? pages[0]
@@ -126,6 +131,9 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
             initialPath={params.get('path')} navigate={navigate} />
           : page.path === '/activities' ? <Suspense fallback={<LoadingRows label="Loading activity" />}>
             <AuditLogPage key={location} initialJob={params.get('job')} />
+          </Suspense>
+          : page.path === '/integration' ? <Suspense fallback={<LoadingRows label="Loading integrations" />}>
+            <IntegrationPage section={params.get('section')} navigate={navigate} projectId={project.id} />
           </Suspense>
           : page.path === '/admin' ? <Suspense fallback={<LoadingRows label="Loading administration" />}>
             <AdminPage section={params.get('section')} navigate={navigate} projectId={project.id} refreshMemberships={refreshMemberships} />

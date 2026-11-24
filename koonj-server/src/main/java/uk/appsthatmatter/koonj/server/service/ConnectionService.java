@@ -135,6 +135,10 @@ public class ConnectionService {
         return new StorageUsage(files.storageFootprints(ProjectScope.id()), files.reclaimedStorage(ProjectScope.id()));
     }
 
+    public long catalogedItems() {
+        return files.countByConnectionProjectIdAndStorageStateNot(ProjectScope.id(), StorageState.PURGED_LOCAL);
+    }
+
     public ConnectionHealth testConnection(UUID id) {
         return probe(get(id));
     }

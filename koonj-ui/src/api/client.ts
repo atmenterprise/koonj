@@ -1,13 +1,13 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios'
 import { accessToken } from '../auth/keycloak'
 
-const defaultBaseURL = 'http://localhost:8080/api/v1'
-const configuredBaseURL = import.meta.env.VITE_API_BASE_URL || defaultBaseURL
+const localServerURL = 'http://localhost:8080/api/v1'
+const configuredBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 export const projectHeader = 'X-Koonj-Project'
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.DEV && configuredBaseURL === defaultBaseURL ? '/api/v1' : configuredBaseURL,
+  baseURL: import.meta.env.DEV && configuredBaseURL === localServerURL ? '/api/v1' : configuredBaseURL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 15_000,
 })

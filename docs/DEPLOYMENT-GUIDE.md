@@ -715,3 +715,32 @@ docker inspect --format='{{json .State.Health}}' <container>
 - If OpenObserve returns HTTP 401, check that `OPENOBSERVE_AUTHORIZATION`
   contains `Basic ` followed by the Base64-encoded ingestion credentials.
   Recreate `koonj-server` with both Compose files after updating `.env`.
+
+## MCP server
+
+For a PostgreSQL deployment with `KOONJ_DDL_AUTO=validate` or `none`, apply the
+[PAT migration](../deploy/migrations/user-api-keys.sql) after the project workspace
+migration and before starting the updated server.
+
+```bash
+psql -v ON_ERROR_STOP=1 -f deploy/migrations/user-api-keys.sql
+```
+
+The shipped Docker and on-premise Nginx configurations include dedicated SSE and
+message locations. When using another reverse proxy, apply the
+[MCP Nginx locations](../deploy/nginx.conf) or equivalent rules. Serve both routes
+over HTTPS. The SSE location disables buffering, caching, compression, and access
+logging and has a 24-hour read timeout. If another gateway logs URLs, redact the
+`token` query parameter on the SSE route. Set `KOONJ_CORS_ALLOWED_ORIGINS` to the
+browser workspace origin if the API is hosted on a separate origin.
+
+SSE sessions are held in memory. Route `/api/v1/mcp/sse` and
+`/api/v1/mcp/message` to the same Koonj instance, including when the rest of the API
+uses multiple replicas. A single upstream for these paths works with all supported
+clients. The server sends a heartbeat every 20 seconds and renews the session through
+client reconnection after a restart or the 24-hour session timeout. Each instance
+defaults to 512 open SSE sessions and 64 simultaneous MCP requests, configurable
+with `KOONJ_MCP_MAX_SESSIONS` and `KOONJ_MCP_MAX_CALLS`. Each PAT can open up to
+16 streams and each stream can run up to eight requests concurrently.
+
+See [MCP integration](MCP-INTEGRATION.md) for client setup and smoke tests.

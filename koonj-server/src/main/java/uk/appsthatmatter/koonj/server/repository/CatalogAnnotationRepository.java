@@ -11,5 +11,6 @@ import java.util.UUID;
 public interface CatalogAnnotationRepository extends JpaRepository<CatalogAnnotation, UUID> {
     List<CatalogAnnotation> findByConnectionIdOrderByPathAscScopeAsc(UUID connectionId);
     Optional<CatalogAnnotation> findByConnectionIdAndScopeAndPath(UUID connectionId, Scope scope, String path);
+    List<CatalogAnnotation> findByConnectionIdAndScopeAndPathInOrderByPathAsc(UUID connectionId, Scope scope, List<String> paths);
     void deleteByConnectionId(UUID connectionId);
 }

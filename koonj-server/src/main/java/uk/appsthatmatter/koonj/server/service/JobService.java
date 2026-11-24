@@ -58,7 +58,11 @@ public class JobService {
     private final AtomicLong peakTransferConcurrency = new AtomicLong();
     public static final int INTERACTIVE = 100;
     static final int BACKGROUND = 5;
-    public enum Action { PAUSE, RESUME, STOP, RESTART }
+    public enum Action {
+        PAUSE, RESUME, STOP, RESTART, RETRY;
+
+        public boolean startsWork() { return this == RESUME || this == RESTART || this == RETRY; }
+    }
     private final ConcurrentHashMap<UUID, Status> interruptions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Set<String>> activeFiles = new ConcurrentHashMap<>();
 
@@ -129,13 +133,15 @@ public class JobService {
             ProjectScope.require(job.getProjectId(), "Transfer job was not found");
             if (!Objects.equals(job.getOwnerSubject(), JobActor.subject())) throw missingJob();
             if (job.getOperation() != Operation.SCAN && job.getPlan() == null) throw conflict("This job has no saved execution plan");
-            if ((action == Action.RESUME || action == Action.RESTART) && job.getOperation() == Operation.ARCHIVE
+            if (action.startsWork() && job.getOperation() == Operation.ARCHIVE
                     && job.getArchiveMode() == ArchiveMode.PURGE && !canPurge) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Resuming or restarting a purge archive requires the purge permission");
             }
             Status previous = job.getStatus();
-            if (action == Action.RESTART) {
-                if (previous != Status.STOPPED || job.getRestartedAs() != null) throw conflict("This job cannot be restarted");
+            if (action == Action.RESTART || action == Action.RETRY) {
+                boolean eligible = previous == Status.STOPPED || (action == Action.RETRY
+                        && (previous == Status.FAILED || previous == Status.PARTIAL_FAILURE));
+                if (!eligible || job.getRestartedAs() != null) throw conflict("This job cannot be restarted");
                 TransferJob replacement = create(job.getOperation(), job.getSourceConnectionId(), job.getTargetConnectionId(),
                         job.getRequestedPaths(), job.getArchiveMode(), job.isDeleteFromTarget(), BACKGROUND, job.getPlan(), id);
                 job.setRestartedAs(replacement.getId());

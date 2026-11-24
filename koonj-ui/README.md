@@ -4,7 +4,7 @@
 
 1. Follow the [server setup](../koonj-server/README-SERVER.md#start-the-development-stack) to start PostgreSQL, LocalStack, and Keycloak with Docker Compose and run the Spring Boot server on port 8080.
 2. From `koonj-ui`, run `npm ci` and `npm run dev`. Open [http://localhost:5173](http://localhost:5173).
-3. The development client sends same-origin requests to `/api/v1`. Vite proxies them to the server on port 8080. `.env.example` shows the default backend URL. For a production build behind a same-origin reverse proxy, set `VITE_API_BASE_URL=/api/v1` at build time. An absolute custom API URL is used directly and needs CORS permission if it has a different origin.
+3. The client sends same-origin requests to `/api/v1` by default. Vite proxies them to port 8080 in development and Nginx proxies them in the deployment bundle. Set `VITE_API_BASE_URL` at build time for a separate API origin and allow the UI origin in the server CORS configuration.
 4. Use **Sign In** or **Create Account** at the Koonj welcome screen. See the [Keycloak verification guide](../koonj-server/README-SERVER.md#keycloak-and-role-verification) for the three seeded accounts and expected permissions. `.env.example` lists the Keycloak URL, realm, and client ID. Keycloak issues short-lived Bearer tokens and the UI refreshes them before API requests. Admin has Home, Explorer, Activity, Administration, and Storage. Operator has Home, Explorer, and Activity. Viewer has read-only Home and Explorer.
 
 ## Verify archive and recall

@@ -38,6 +38,25 @@ public class CatalogMetadataService {
                 .map(item -> new CatalogMetadataResponse(item.getScope(), item.getPath(), item.getAttributes())).toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<String> fileTags(UUID connectionId, String path) {
+        if (!connections.existsByIdAndProjectId(connectionId, ProjectScope.id())) throw missingConnection();
+        var parents = new ArrayList<String>();
+        for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+            parents.add(path.substring(0, slash));
+        }
+        var tags = new LinkedHashMap<String, String>();
+        if (!parents.isEmpty()) {
+            for (var folder : annotations.findByConnectionIdAndScopeAndPathInOrderByPathAsc(connectionId,
+                    CatalogMetadataWriteRequest.Scope.FOLDER, parents)) {
+                folder.getAttributes().tags().forEach(tag -> tags.put(tag.toLowerCase(Locale.ROOT), tag));
+            }
+        }
+        annotations.findByConnectionIdAndScopeAndPath(connectionId, CatalogMetadataWriteRequest.Scope.FILE, path)
+                .ifPresent(file -> file.getAttributes().tags().forEach(tag -> tags.put(tag.toLowerCase(Locale.ROOT), tag)));
+        return List.copyOf(tags.values());
+    }
+
     @Transactional
     public void save(UUID connectionId, CatalogMetadataWriteRequest request) {
         var connection = connections.findByIdForUpdate(connectionId, ProjectScope.id()).orElseThrow(CatalogMetadataService::missingConnection);
