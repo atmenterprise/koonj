@@ -3,6 +3,8 @@ package uk.appsthatmatter.koonj.server.service;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.domain.PageRequest;
@@ -52,6 +54,8 @@ import java.util.function.Consumer;
 
 @Service
 public class JobService {
+    private static final Logger LOG = LoggerFactory.getLogger(JobService.class);
+
     private final TransferJobRepository jobs;
     private final JobEventRepository events;
     private final FileMovementRepository movements;
@@ -165,7 +169,8 @@ public class JobService {
                 TransferJob replacement = create(job.getOperation(), job.getSourceConnectionId(), job.getTargetConnectionId(),
                         job.getRequestedPaths(), job.getArchiveMode(), job.isDeleteFromTarget(), BACKGROUND, job.getPlan(), id);
                 job.setRestartedAs(replacement.getId());
-                log(id, Instant.now(), Level.INFO, null, "Restarted as " + replacement.getId() + " by " + actor());
+                log(id, Instant.now(), Level.INFO, null, "Restarted as " + replacement.getId() + " by " + actor(),
+                        "Restarted as " + replacement.getId());
                 return replacement;
             }
             Status next = switch (action) {
@@ -201,7 +206,7 @@ public class JobService {
                 case RESUME -> "Resume requested by " + actor();
                 case STOP -> (next == Status.STOPPING ? "Stop requested by " : "Stopped by ") + actor();
                 default -> throw new IllegalStateException();
-            });
+            }, "Control action " + action + " set status to " + next);
             return job;
         });
     }
@@ -406,6 +411,10 @@ public class JobService {
     }
 
     void log(UUID jobId, Instant recordedAt, Level level, String path, String message) {
+        log(jobId, recordedAt, level, path, message, message);
+    }
+
+    private void log(UUID jobId, Instant recordedAt, Level level, String path, String message, String logMessage) {
         var event = new JobEvent();
         event.setJobId(jobId);
         event.setRecordedAt(recordedAt);
@@ -413,6 +422,12 @@ public class JobService {
         event.setPath(path);
         event.setMessage(message);
         events.save(event);
+        var entry = switch (level) {
+            case INFO -> LOG.atInfo();
+            case WARNING -> LOG.atWarn();
+            case ERROR -> LOG.atError();
+        };
+        entry.addKeyValue("job.id", jobId).log("Job {}: {}", jobId, logMessage);
     }
 
     public CompletableFuture<JobResponse> execute(TransferJob job, JobWork work) {
@@ -424,6 +439,8 @@ public class JobService {
                 completion.complete(JobResponse.from(jobs.findByIdAndProjectId(job.getId(), job.getProjectId())
                         .orElseThrow(JobService::missingJob)));
             } catch (RuntimeException failure) {
+                LOG.atError().addKeyValue("job.id", job.getId())
+                        .log("Job {} could not finalize embedded execution ({})", job.getId(), failure.getClass().getName());
                 completion.completeExceptionally(failure);
             }
         })));
@@ -472,11 +489,13 @@ public class JobService {
 
     void runClaimed(TransferJob job, JobWork work) {
         UUID id = job.getId();
+        LOG.atDebug().addKeyValue("job.id", id).log("Running job {} operation {}", id, job.getOperation());
         Observation activity = Observation.createNotStarted("koonj.job.execution", observations)
                 .lowCardinalityKeyValue("operation", job.getOperation().name());
         try {
             activity.start();
             String executionError = null;
+            String executionFailureType = null;
             String executionPath = null;
             boolean interrupted = false;
             Instant coldReady = null;
@@ -489,9 +508,11 @@ public class JobService {
                 interrupted = true;
             } catch (Exception failure) {
                 executionError = StorageErrors.describe(failure);
+                executionFailureType = failure.getClass().getName();
                 if (failure instanceof FileSystemException filesystem) executionPath = filesystem.getFile();
             }
             String error = executionError;
+            String failureType = executionFailureType;
             String path = executionPath;
             boolean yielded = interrupted;
             Instant readyForRecall = coldReady;
@@ -525,7 +546,7 @@ public class JobService {
                 if (next != Status.PAUSED) current.setCompletedAt(now);
                 if (error != null) {
                     appendError(current, error);
-                    log(id, now, Level.ERROR, path, error);
+                    log(id, now, Level.ERROR, path, error, "Execution failed (" + failureType + ")");
                 }
                 String result = switch (next) {
                     case COMPLETED -> "Execution completed";
@@ -600,6 +621,12 @@ public class JobService {
             errors.forEach(error -> appendError(current, error));
             if (!errors.isEmpty()) publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, failedPath, failureReason);
         });
+        LOG.atTrace().addKeyValue("job.id", job.getId()).log("Job {} processed {} transfer items and {} bytes in a batch",
+                job.getId(), processed, bytes);
+        if (!errors.isEmpty()) {
+            LOG.atError().addKeyValue("job.id", job.getId()).log("Job {} had {} failed transfer items in a batch",
+                    job.getId(), errors.size());
+        }
     }
 
     private void increment(TransferJob current, long successfulBytes, String error) {
@@ -623,7 +650,7 @@ public class JobService {
     public void selectionFailed(TransferJob job, String path, String reason) {
         update(job, current -> {
             increment(current, 0, path + ": " + reason);
-            log(job.getId(), Instant.now(), Level.ERROR, path, reason);
+            log(job.getId(), Instant.now(), Level.ERROR, path, reason, "Could not process a selected path");
             if (current.getOperation() != Operation.SCAN) {
                 publishNotification(NotificationEvent.Type.TRANSFER_FAILED, current, path, reason);
             }
@@ -633,6 +660,8 @@ public class JobService {
     public void scanned(TransferJob job, int entries, int files) {
         update(job, current -> current.setProcessedFiles(entries));
         job.setScannedFileCount(files);
+        LOG.atTrace().addKeyValue("job.id", job.getId()).log("Job {} scanned {} entries including {} files",
+                job.getId(), entries, files);
     }
 
     private void appendError(TransferJob job, String error) {

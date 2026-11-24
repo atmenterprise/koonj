@@ -40,6 +40,14 @@ spring:
       ddl-auto: ${KOONJ_DDL_AUTO:update}
 
 
+logging:
+  level:
+    uk.appsthatmatter.koonj: ${KOONJ_LOG_LEVEL:INFO}
+  pattern:
+    level: "%6replace(%level){'^TRACE$','DETAIL'}"
+  file:
+    name: "${KOONJ_LOG_FILE:}"
+
 management:
   health:
     rabbit:
@@ -59,6 +67,9 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
+  opentelemetry:
+    resource-attributes:
+      "[service.instance.id]": "${HOSTNAME:${COMPUTERNAME:${random.uuid}}}"
   otlp:
     tracing:
       export:

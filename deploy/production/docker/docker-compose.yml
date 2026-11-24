@@ -103,6 +103,8 @@ services:
         condition: service_healthy
     environment: &koonj-server-env
       SPRING_PROFILES_ACTIVE: production
+      KOONJ_LOG_LEVEL: ${KOONJ_LOG_LEVEL:-INFO}
+      KOONJ_LOG_FILE: ${KOONJ_LOG_FILE:-}
       KOONJ_DB_URL: "jdbc:postgresql://postgres:5432/${KOONJ_DB_NAME:-koonj}?reWriteBatchedInserts=true"
       KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
       KOONJ_DB_PASSWORD: ${KOONJ_DB_PASSWORD}
@@ -166,6 +168,7 @@ services:
         condition: service_healthy
     environment:
       <<: *koonj-server-env
+      KOONJ_LOG_FILE: ${KOONJ_TRANSFER_WORKER_LOG_FILE:-}
       KOONJ_TRANSFER_RELAY_ENABLED: "false"
       KOONJ_TRANSFER_WORKER_ENABLED: "true"
       KOONJ_TRANSFER_WORKER_POOL: ${KOONJ_TRANSFER_WORKER_POOL:-default}

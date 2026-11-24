@@ -1,0 +1,319 @@
+{
+  "version": 8,
+  "dashboardId": "koonj-api-runtime",
+  "title": "Koonj | API and JVM",
+  "description": "HTTP traffic, request latency, JVM resources, and database connection pool pressure.",
+  "role": "",
+  "owner": "",
+  "created": "2025-01-01T00:00:00.000Z",
+  "tabs": [
+    {
+      "tabId": "overview",
+      "name": "Overview",
+      "panels": [
+        {
+          "id": "http-rate",
+          "type": "line",
+          "title": "HTTP requests per second",
+          "description": "Five-minute request rate by HTTP status. Excludes Actuator endpoints.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "short",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum by (status) (rate(http_server_requests_count{application=\"koonj-server\",uri!~\"/actuator(/.*)?\"}[5m]))",
+              "customQuery": true,
+              "fields": {
+                "stream": "http_server_requests_count",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "{status}",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 96,
+            "h": 10,
+            "i": 1
+          }
+        },
+        {
+          "id": "http-latency",
+          "type": "line",
+          "title": "HTTP p95 latency (ms)",
+          "description": "95th percentile computed from the HTTP duration histogram. Excludes Actuator endpoints.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "milliseconds",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_bucket{application=\"koonj-server\",uri!~\"/actuator(/.*)?\"}[5m])))",
+              "customQuery": true,
+              "fields": {
+                "stream": "http_server_requests_bucket",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "p95",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 96,
+            "y": 0,
+            "w": 96,
+            "h": 10,
+            "i": 2
+          }
+        },
+        {
+          "id": "http-errors",
+          "type": "line",
+          "title": "HTTP 5xx percentage",
+          "description": "Server errors as a share of requests with traffic. Excludes Actuator endpoints.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "percent",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "100 * (sum(rate(http_server_requests_count{application=\"koonj-server\",uri!~\"/actuator(/.*)?\",status=~\"5..\"}[5m])) or 0 * sum(rate(http_server_requests_count{application=\"koonj-server\",uri!~\"/actuator(/.*)?\"}[5m]))) / (sum(rate(http_server_requests_count{application=\"koonj-server\",uri!~\"/actuator(/.*)?\"}[5m])) > 0)",
+              "customQuery": true,
+              "fields": {
+                "stream": "http_server_requests_count",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "5xx",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 10,
+            "w": 96,
+            "h": 10,
+            "i": 3
+          }
+        },
+        {
+          "id": "process-cpu",
+          "type": "line",
+          "title": "Peak process CPU (%)",
+          "description": "Highest recent JVM process CPU utilization across reporting replicas.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "percent",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "100 * max(process_cpu_usage{application=\"koonj-server\"})",
+              "customQuery": true,
+              "fields": {
+                "stream": "process_cpu_usage",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "Peak CPU",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 96,
+            "y": 10,
+            "w": 96,
+            "h": 10,
+            "i": 4
+          }
+        },
+        {
+          "id": "heap-used",
+          "type": "line",
+          "title": "JVM heap used",
+          "description": "Heap bytes summed across memory pools and reporting replicas.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "bytes",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(jvm_memory_used{application=\"koonj-server\",area=\"heap\"})",
+              "customQuery": true,
+              "fields": {
+                "stream": "jvm_memory_used",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "Heap used",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 20,
+            "w": 96,
+            "h": 10,
+            "i": 5
+          }
+        },
+        {
+          "id": "db-wait",
+          "type": "line",
+          "title": "Database connection waiters",
+          "description": "Maximum HikariCP pool waiters across reporting replicas.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "unit": "short",
+            "decimals": 2,
+            "connect_nulls": false,
+            "show_symbol": false,
+            "table_pagination": true,
+            "table_pagination_rows_per_page": 10
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "max(hikaricp_connections_pending{application=\"koonj-server\"})",
+              "customQuery": true,
+              "fields": {
+                "stream": "hikaricp_connections_pending",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "Waiters",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "time_shift": []
+              }
+            }
+          ],
+          "layout": {
+            "x": 96,
+            "y": 20,
+            "w": 96,
+            "h": 10,
+            "i": 6
+          }
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "list": [],
+    "showDynamicFilters": false
+  },
+  "defaultDatetimeDuration": {
+    "type": "relative",
+    "relativeTimePeriod": "24h"
+  }
+}

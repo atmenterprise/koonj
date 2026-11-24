@@ -21,7 +21,7 @@ if exist "%ENV_FILE%" (
 set "KOONJ_JAR=%KOONJ_HOME%\lib\koonj-server.jar"
 set "KOONJ_LOG_DIR=%KOONJ_HOME%\logs"
 set "KOONJ_PID_FILE=%KOONJ_LOG_DIR%\koonj-server.pid"
-set "KOONJ_LOG_FILE=%KOONJ_LOG_DIR%\koonj-server.log"
+set "KOONJ_CONSOLE_LOG=%KOONJ_LOG_DIR%\koonj-server-console.log"
 if not defined JAVA_OPTS set "JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseG1GC"
 if not defined SPRING_PROFILES_ACTIVE set "SPRING_PROFILES_ACTIVE=production"
 if not defined KOONJ_SERVER_PORT set "KOONJ_SERVER_PORT=8080"
@@ -47,7 +47,7 @@ if exist "%KOONJ_PID_FILE%" (
   del "%KOONJ_PID_FILE%" 2>nul
 )
 echo Starting Koonj Server ...
-start /B "" javaw %JAVA_OPTS% -Dspring.profiles.active=%SPRING_PROFILES_ACTIVE% -Dserver.port=%KOONJ_SERVER_PORT% -jar "%KOONJ_JAR%" %SPRING_CONFIG_FLAG% >> "%KOONJ_LOG_FILE%" 2>&1
+start /B "" javaw %JAVA_OPTS% -Dspring.profiles.active=%SPRING_PROFILES_ACTIVE% -Dserver.port=%KOONJ_SERVER_PORT% -jar "%KOONJ_JAR%" %SPRING_CONFIG_FLAG% >> "%KOONJ_CONSOLE_LOG%" 2>&1
 timeout /t 3 /nobreak >nul
 for /f "tokens=2" %%p in ('tasklist /FI "IMAGENAME eq javaw.exe" /FO LIST 2^>nul ^| findstr "PID:"') do set "NEW_PID=%%p"
 if defined NEW_PID ( echo !NEW_PID!>"%KOONJ_PID_FILE%" & echo   Started ^(PID !NEW_PID!^) )

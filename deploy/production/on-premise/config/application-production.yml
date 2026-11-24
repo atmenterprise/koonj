@@ -62,9 +62,6 @@ spring.lifecycle:
 logging:
   level:
     root: WARN
-    uk.appsthatmatter.koonj: INFO
-  file:
-    name: ${KOONJ_LOG_FILE:/opt/koonj/logs/koonj-server.log}
   logback:
     rollingpolicy:
       max-file-size: 100MB

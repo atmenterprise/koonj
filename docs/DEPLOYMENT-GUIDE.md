@@ -7,6 +7,7 @@
 - [Build the Deployment ZIP](#build-the-deployment-zip)
 - [Prerequisites](#prerequisites)
 - [Option A: Docker Deployment](#option-a-docker-deployment)
+- [Server logging](#server-logging)
 - [Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve)
 - [Option B: On-Premise Deployment](#option-b-on-premise-deployment)
 - [Scaling](#scaling)
@@ -211,6 +212,22 @@ docker compose up -d --wait  # restart
 
 ---
 
+## Server logging
+
+The API and transfer worker write to the console at INFO by default. Request
+logs use HTTP route templates and status codes, and scan and transfer logs use
+job IDs. Set `KOONJ_LOG_LEVEL=DEBUG` for diagnostics or `KOONJ_LOG_LEVEL=TRACE`
+for DETAIL events such as batch progress. DETAIL uses Logback's TRACE level.
+WARN and ERROR are visible at the default setting.
+
+Set `KOONJ_LOG_FILE` to a file on a writable shared mount to also write rolling
+logs. With Docker, set `KOONJ_LOG_FILE` for the API and
+`KOONJ_TRANSFER_WORKER_LOG_FILE` for the worker in `docker/.env`. Use container
+paths on a mounted directory. Each replica needs its own file for safe rotation.
+With systemd, console output is available through `journalctl -u koonj-server`.
+For file output outside `/opt/koonj/logs` or `/mnt/koonj`, add the writable
+mount directory to the unit's `ReadWritePaths`.
+
 ## Optional Docker Observability with OpenObserve
 
 The standard Docker command leaves telemetry export disabled. To enable it, set
@@ -241,15 +258,35 @@ docker compose -f docker-compose.yml -f docker-compose.otel.yml ps
 curl -fsS http://127.0.0.1:5080/healthz
 ```
 
-Open **Administration → Observability** in Koonj to open the Logs, Metrics, or
-Traces view in OpenObserve. For remote browsers, set `KOONJ_OPENOBSERVE_URL` to
+Open **Administration → Observability → Open dashboards** in Koonj. On startup,
+Koonj imports these dashboards into the default folder of the configured OpenObserve
+organization:
+
+- **Koonj | API and JVM** shows request rate, 5xx percentage, p95 latency, JVM heap
+  and CPU usage, and database connection waiters.
+- **Koonj | Transfer Jobs and Traces** shows execution outcomes, p95 job duration,
+  queue pressure, and trace IDs for recent failed jobs. Queue metrics require
+  RabbitMQ transfer dispatch.
+- **Koonj | Server Logs** shows volume by severity, errors grouped by logger, and
+  recent warnings and errors. Search for a job ID in Logs to follow its activity.
+
+Startup imports missing dashboard titles and preserves dashboards you have edited.
+The importer retries temporary OpenObserve outages in the background. If the OTLP
+credentials can only ingest telemetry, set `KOONJ_OPENOBSERVE_DASHBOARDS_AUTHORIZATION`
+to a credential with dashboard list and create permissions. Use the same
+authorization header format as for OTLP.
+
+For remote browsers, set `KOONJ_OPENOBSERVE_URL` to
 the reachable browser URL. Set `KOONJ_OPENOBSERVE_ORGANIZATION` if the ingestion
 organization is different from `default`. Sign in to OpenObserve and open
 **Traces** in the `default` organization after running a scan or transfer.
 Look for the `koonj.job.execution` span and its `operation` and `outcome`
 attributes. **Metrics** shows aggregates such as job execution count and
 duration. Allow a minute for the first metrics export. **Logs** shows events from
-Koonj application loggers in the `koonj_server` stream. Koonj sends all three signals directly over OTLP/HTTP.
+the API and transfer worker in the `koonj_server` stream. Search for ERROR
+records and use the job ID to correlate related events. Framework errors emitted
+while the exporter is running also appear in this stream. Koonj sends telemetry
+directly over OTLP/HTTP.
 For a host installation, set `KOONJ_OTLP_LOGS_ENDPOINT` to the complete OTLP/HTTP
 logs endpoint, such as `http://127.0.0.1:5080/api/default/v1/logs`. The OpenObserve data volume persists
 across container restarts.
@@ -390,16 +427,23 @@ curl -sf http://localhost:8080/actuator/health
 # Open http://<server-hostname> in a browser
 ```
 
-### Optional OTLP metrics
+### Optional OpenObserve dashboards and OTLP
 
-To send metrics to an existing OpenObserve instance, add these settings to
-the installed `config/koonj.env`. Use the full metrics endpoint for your
+To provision the dashboards and send telemetry to an existing OpenObserve instance, add these settings
+to the installed `config/koonj.env`. Use the full endpoints for your
 organization and the ingestion authorization value described in
 [Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve).
 
 ```dotenv
+KOONJ_OPENOBSERVE_URL=https://observe.example.com/web
+KOONJ_OPENOBSERVE_ORGANIZATION=default
+KOONJ_OPENOBSERVE_DASHBOARDS_ENDPOINT=https://observe.example.com/api/default/dashboards
+KOONJ_OTLP_LOGS_ENDPOINT=https://observe.example.com/api/default/v1/logs
 MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=true
 MANAGEMENT_OTLP_METRICS_EXPORT_URL=https://observe.example.com/api/default/v1/metrics
+MANAGEMENT_OTLP_TRACING_EXPORT_ENABLED=true
+MANAGEMENT_OTLP_TRACING_ENDPOINT=https://observe.example.com/api/default/v1/traces
+MANAGEMENT_TRACING_SAMPLING_PROBABILITY=1.0
 OPENOBSERVE_AUTHORIZATION="Basic <base64(email:password)>"
 ```
 
@@ -676,7 +720,7 @@ container with `docker compose -f deploy/docker-compose.yml up -d --build keyclo
 ### Server won't start
 
 1. Check Java version: `java -version` (must be 21+)
-2. Check the log: `/opt/koonj/logs/koonj-server.log`
+2. Check `journalctl -u koonj-server` or the manual launcher's `logs/koonj-server-console.log`
 3. Verify database connectivity: `psql -h <host> -U koonj -d koonj`
 4. Verify Keycloak is reachable: `curl <KOONJ_AUTH_JWK_SET_URI>`
 

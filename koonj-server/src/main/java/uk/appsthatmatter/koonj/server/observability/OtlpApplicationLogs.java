@@ -1,7 +1,9 @@
 package uk.appsthatmatter.koonj.server.observability;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.logs.Severity;
@@ -20,19 +22,23 @@ import java.time.Duration;
 
 @Component
 public class OtlpApplicationLogs {
+    private static final String APPLICATION_PACKAGE = "uk.appsthatmatter.koonj.";
     private final String endpoint;
     private final String authorization;
     private final String serviceName;
-    private Logger applicationLogger;
+    private final String instanceId;
+    private Logger rootLogger;
     private SdkLoggerProvider provider;
     private UnsynchronizedAppenderBase<ILoggingEvent> appender;
 
     public OtlpApplicationLogs(@Value("${koonj.observability.logs-endpoint:}") String endpoint,
                                @Value("${OPENOBSERVE_AUTHORIZATION:}") String authorization,
-                               @Value("${spring.application.name}") String serviceName) {
+                               @Value("${spring.application.name}") String serviceName,
+                               @Value("${HOSTNAME:${COMPUTERNAME:}}") String instanceId) {
         this.endpoint = endpoint;
         this.authorization = authorization;
         this.serviceName = serviceName;
+        this.instanceId = instanceId;
     }
 
     @PostConstruct
@@ -41,40 +47,54 @@ public class OtlpApplicationLogs {
         var exporter = OtlpHttpLogRecordExporter.builder().setEndpoint(endpoint).setTimeout(Duration.ofSeconds(5))
                 .addHeader("stream-name", "koonj_server");
         if (!authorization.isBlank()) exporter.addHeader("Authorization", authorization);
+        var attributes = Attributes.builder().put("service.name", serviceName);
+        if (!instanceId.isBlank()) attributes.put("service.instance.id", instanceId);
         provider = SdkLoggerProvider.builder()
-                .setResource(Resource.getDefault().merge(Resource.create(Attributes.builder().put("service.name", serviceName).build())))
+                .setResource(Resource.getDefault().merge(Resource.create(attributes.build())))
                 .addLogRecordProcessor(BatchLogRecordProcessor.builder(exporter.build()).build())
                 .build();
         var logger = provider.get(serviceName);
-        applicationLogger = (Logger) LoggerFactory.getLogger("uk.appsthatmatter.koonj");
+        rootLogger = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
         appender = new UnsynchronizedAppenderBase<>() {
             @Override
             protected void append(ILoggingEvent event) {
+                String name = event.getLoggerName();
+                Level level = event.getLevel();
+                // Export framework failures without feeding SDK export diagnostics back into the batch.
+                if (name.startsWith("io.opentelemetry")
+                        || (!name.startsWith(APPLICATION_PACKAGE) && !level.isGreaterOrEqual(Level.ERROR))) return;
                 var record = logger.logRecordBuilder().setTimestamp(event.getInstant()).setContext(Context.current())
-                        .setSeverity(switch (event.getLevel().toInt()) {
-                            case ch.qos.logback.classic.Level.ERROR_INT -> Severity.ERROR;
-                            case ch.qos.logback.classic.Level.WARN_INT -> Severity.WARN;
-                            case ch.qos.logback.classic.Level.DEBUG_INT -> Severity.DEBUG;
-                            case ch.qos.logback.classic.Level.TRACE_INT -> Severity.TRACE;
+                        .setSeverity(switch (level.toInt()) {
+                            case Level.ERROR_INT -> Severity.ERROR;
+                            case Level.WARN_INT -> Severity.WARN;
+                            case Level.DEBUG_INT -> Severity.DEBUG;
+                            case Level.TRACE_INT -> Severity.TRACE;
                             default -> Severity.INFO;
-                        }).setSeverityText(event.getLevel().toString()).setBody(event.getFormattedMessage())
-                        .setAttribute("logger.name", event.getLoggerName());
-                if (event.getThrowableProxy() != null) {
-                    record.setAttribute("exception.type", event.getThrowableProxy().getClassName());
+                        }).setSeverityText(level == Level.TRACE ? "DETAIL" : level.toString())
+                        .setBody(event.getFormattedMessage())
+                        .setAttribute("logger.name", name);
+                var fields = event.getKeyValuePairs();
+                if (fields != null) {
+                    fields.forEach(field -> record.setAttribute(field.key, String.valueOf(field.value)));
+                }
+                var failure = event.getThrowableProxy();
+                if (failure != null) {
+                    record.setAttribute("exception.type", failure.getClassName());
+                    record.setAttribute("exception.stacktrace", ThrowableProxyUtil.asString(failure));
                 }
                 record.emit();
             }
         };
-        appender.setContext(applicationLogger.getLoggerContext());
+        appender.setContext(rootLogger.getLoggerContext());
         appender.setName("KOONJ_OTLP_LOGS");
         appender.start();
-        applicationLogger.addAppender(appender);
+        rootLogger.addAppender(appender);
     }
 
     @PreDestroy
     void stop() {
         if (appender == null) return;
-        applicationLogger.detachAppender(appender);
+        rootLogger.detachAppender(appender);
         appender.stop();
         provider.close();
     }
