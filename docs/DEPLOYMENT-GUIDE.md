@@ -546,7 +546,108 @@ Koonj defaults to host or workload identity where available. Object storage can 
 
 Custom S3 endpoints use HTTPS. The server setting `KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS=true` is available for isolated development environments such as LocalStack. Deploy shared SaaS workers with egress restricted to approved object storage destinations, a trusted DNS resolver and separate worker roles from other services. Allow administrators to provision only the targets their projects need. Match worker mount permissions to Koonj project boundaries.
 
+### Test with LocalStack from Docker Compose
+
+Run these steps from the release bundle’s `docker/` directory. Start LocalStack with S3 enabled and its edge port published to the Docker Desktop host. Use a bucket created in LocalStack. The examples below use the development bucket `koonj-local-archive` in `eu-west-2`. If your LocalStack container or bucket uses a different name, substitute it when checking the bucket.
+
+```sh
+docker exec localstack-localstack-1 awslocal s3api get-bucket-location \
+  --bucket koonj-local-archive --query LocationConstraint --output text
+```
+
+Configure a local wrapping key so Koonj can save the LocalStack test keys. Generate the wrapping key once with `openssl rand -base64 32` and keep it in a protected location outside PostgreSQL. If you already use a wrapping key, keep that configuration. For a new local keyring, set these values in the deployment environment or its restricted `.env` file.
+
+```dotenv
+KOONJ_STORAGE_KEY_PROVIDER=local
+KOONJ_STORAGE_LOCAL_ACTIVE_KEY=v1
+KOONJ_STORAGE_LOCAL_KEYS=v1:<generated-base64-key>
+```
+
+For an HTTP LocalStack endpoint, create `docker-compose.localstack-auth.yml` in the same directory. Use this override only in an isolated development deployment.
+
+```yaml
+services:
+  koonj-server:
+    environment:
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+  koonj-transfer-worker:
+    environment:
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+```
+
+```sh
+docker compose -f docker-compose.yml \
+  -f docker-compose.otel.yml \
+  -f docker-compose.localstack-auth.yml \
+  up -d koonj-server koonj-transfer-worker
+```
+
+Use the Compose overlays already enabled for your stack. You can omit the telemetry overlay if you run without OpenObserve. On Docker Desktop, both containers can reach a published host port through `host.docker.internal`. If LocalStack is on a shared Docker network with Koonj, use its service DNS name on that network. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/) · [Docker Compose networking](https://docs.docker.com/compose/how-tos/networking/)
+
+In **Storage**, add the connection with these settings.
+
+| Field | Example |
+|---|---|
+| Provider | **Custom S3** |
+| Endpoint URL | `http://host.docker.internal:4566` |
+| Bucket | `koonj-local-archive` |
+| Region | `eu-west-2` |
+| Path-style access | Enabled |
+| Authentication | **Encrypted access keys** |
+| Access key ID and secret access key | `test` and `test` for the standard LocalStack test setup |
+
+Choose **Test Connection**. A successful test enables **Save connection** for a new connection.
+
 ### AWS workload identity and customer roles
+
+#### Test Amazon S3 from local Docker Compose
+
+Use temporary AWS CLI session credentials for local testing against real Amazon S3. Both the API and transfer worker need the session. If your organization uses IAM Identity Center, configure the host’s AWS CLI v2 profile once with `aws configure sso --profile koonj-dev`. The profile needs access to the bucket you want to test. [AWS CLI IAM Identity Center setup](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
+
+In the release bundle’s `docker/` directory, set `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` in `.env` and create `docker-compose.aws-dev.yml`.
+
+```yaml
+services:
+  koonj-server:
+    environment: &aws-session
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Export an AWS session first}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Export an AWS session first}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:?Export an AWS session first}
+  koonj-transfer-worker:
+    environment: *aws-session
+```
+
+Sign in to the profile and check which AWS identity it uses. The following example requires `jq`. The subshell passes the three credentials to Compose without writing them to a configuration file or leaving them exported in the parent shell. [AWS CLI credential export](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
+
+```sh
+(
+  set -eu
+  aws sso login --profile koonj-dev
+  aws sts get-caller-identity --profile koonj-dev
+
+  koonj_aws_session=$(aws configure export-credentials --profile koonj-dev --format process)
+  AWS_ACCESS_KEY_ID=$(printf '%s' "$koonj_aws_session" | jq -er '.AccessKeyId | strings | select(length > 0)')
+  AWS_SECRET_ACCESS_KEY=$(printf '%s' "$koonj_aws_session" | jq -er '.SecretAccessKey | strings | select(length > 0)')
+  AWS_SESSION_TOKEN=$(printf '%s' "$koonj_aws_session" | jq -er '.SessionToken | strings | select(length > 0)')
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  unset koonj_aws_session
+
+  docker compose -f docker-compose.yml \
+    -f docker-compose.otel.yml \
+    -f docker-compose.aws-dev.yml \
+    up -d koonj-server koonj-transfer-worker
+)
+```
+
+Keep any existing overlays in the Compose command, including the LocalStack override if you use both services. Avoid printing the resolved Compose configuration while the credentials are set. Repeat the session setup when the credentials expire so Compose recreates the affected containers with fresh credentials.
+
+In **Storage**, select **AWS S3 → AWS workload identity**. Enter the real bucket name and its AWS region, leave the endpoint override unset, and turn off **Path-style access** for a standard Amazon S3 bucket. Choose **Test Connection**, then **Save connection**. The bucket and prefix permissions below also apply to the local AWS CLI session.
+
+#### Attach a workload role in production
+
+On Amazon ECS, assign IAM **task roles** to the API and transfer worker tasks. On a dedicated EC2 deployment, attach an **instance profile** and ensure both containers can reach the EC2 Instance Metadata Service (IMDSv2). Keep `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` for a dedicated deployment using its own bucket. Start the production workloads without the local development credential overlay. The AWS SDK retrieves and refreshes the role’s temporary credentials. [ECS task IAM roles](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) · [EC2 role credentials for the AWS SDK for Java](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/ec2-iam-roles.html)
+
+#### Assume a role in a customer AWS account
 
 1. Configure the API and transfer workers with a temporary AWS workload identity. If the SDK chain selects a long-lived environment or profile key, remove that key so it reaches the workload's credential source. In shared SaaS deployments set `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=false` so customers cannot use the deployment's S3 permissions directly.
 2. Generate a UUID with `uuidgen` for `KOONJ_AWS_EXTERNAL_ID_NAMESPACE`. Keep it identical across API replicas and workers and include it in configuration backups. Give the deployment identity `sts:AssumeRole` access to the approved customer role ARNs.
