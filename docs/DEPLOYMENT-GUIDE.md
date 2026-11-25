@@ -700,6 +700,59 @@ Realm settings → Themes → Login theme → koonj** and save. Keycloak skips
 startup imports for realms that already exist. Rebuild the development Keycloak
 container with `docker compose -f deploy/docker-compose.yml up -d --build keycloak`.
 
+### Google and GitHub sign-in and registration
+
+The Koonj login theme shipped alongside Keycloak 26.8.2 in the Docker deployment
+shows enabled providers on the registration form. In the `koonj` realm, open
+**Identity providers**. New realm imports include Google and GitHub entries that
+stay disabled until you configure them. For an existing realm, use **Add provider**
+to add the built-in **Google** and **GitHub** providers with the aliases `google`
+and `github`, or open the entries if they already exist. You can enable either
+provider independently. Rebuilding or recreating the Docker containers leaves the
+realm settings in PostgreSQL, so configure the providers in that existing realm.
+
+1. Use the **Redirect URI** displayed by Keycloak for each provider. It uses the
+   public Keycloak URL and the provider alias, as in the examples below.
+
+   | Provider | OAuth application | Example callback |
+   | -------- | ----------------- | ---------------- |
+   | Google | [Web application OAuth client](https://developers.google.com/identity/protocols/oauth2/web-server) | `https://auth.yourcompany.com/realms/koonj/broker/google/endpoint` |
+   | GitHub | [GitHub OAuth App](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) | `https://auth.yourcompany.com/realms/koonj/broker/github/endpoint` |
+
+2. In each OAuth application, register that URL as the authorized redirect URI
+   for Google or the authorization callback URL for GitHub. For local development,
+   copy the full redirect URI shown by the local Keycloak instance.
+3. Enter the provider's **Client ID** and **Client Secret** in Keycloak, then
+   enable the provider and save. Use the default scopes for Google and
+   `user:email` for GitHub so Keycloak can retrieve a private primary email
+   address. Leave **Trust email** off and use the default **First Broker Login**
+   flow. Keep **Hide on login page** off.
+
+Open Koonj in a private browser window and use **Continue with Google** or
+**Continue with GitHub** below **Sign In** and **Create Account**. The shortcuts
+use Keycloak's **Identity Provider Redirector** in the browser flow. If a shortcut
+opens the regular Keycloak sign-in form, check that the provider is enabled with
+the matching alias and that the browser flow includes the redirector. Enabled
+providers also appear on Keycloak's sign-in and registration pages. The first
+successful social sign-in creates a Keycloak user. If the email already belongs
+to a realm user, Keycloak asks the person to verify ownership before linking the
+accounts.
+
+### Default role for new accounts
+
+New realm imports assign the **Koonj Administrators** default group to new
+accounts. The group grants `KOONJ_ADMIN` on the first sign-in after registration
+by email, Google, or GitHub. The default group applies realm-wide to newly
+created accounts. Existing accounts keep their current role assignments,
+including when linking a social provider.
+
+For an existing realm, open **Groups** in the Keycloak Admin Console. Create
+**Koonj Administrators** and assign the `KOONJ_ADMIN` realm role under the group's
+**Role mapping** tab. Then open **Realm settings → User registration → Default
+Groups** and add **Koonj Administrators**. This gives anyone who can complete
+registration full access to Koonj, including access to the Default project and
+administrative operations.
+
 ## Security Checklist
 
 - [ ] Change all default passwords in `.env` / `koonj.env`

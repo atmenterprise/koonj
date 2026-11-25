@@ -2,6 +2,7 @@ import Keycloak from 'keycloak-js'
 
 const roles = ['KOONJ_ADMIN', 'KOONJ_OPERATOR', 'KOONJ_VIEWER'] as const
 export type KoonjRole = typeof roles[number]
+export type SocialProvider = 'google' | 'github'
 
 export interface AuthUser {
   id: string
@@ -64,6 +65,7 @@ keycloak.onAuthLogout = publishSession
 keycloak.onAuthRefreshSuccess = publishSession
 
 export const login = () => keycloak.login()
+export const loginWithProvider = (provider: SocialProvider) => keycloak.login({ idpHint: provider })
 export const register = () => keycloak.register()
 export const logout = () => keycloak.logout({ redirectUri: window.location.origin + '/' })
 

@@ -53,6 +53,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
               <Button disabled={redirecting} onClick={() => void redirect(auth.register)}>Create Account</Button>
             </>}
       </div>
+      {auth.status === 'anonymous' && <>
+        <div className="auth-alternative">-or-</div>
+        <div className="row-actions auth-actions auth-actions--social">
+          <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('google'))}>Continue with Google</Button>
+          <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('github'))}>Continue with GitHub</Button>
+        </div>
+      </>}
     </section>
     <footer className="auth-copyright">© {new Date().getFullYear()} Apps That Matter</footer>
   </main><NotificationPopup /></>

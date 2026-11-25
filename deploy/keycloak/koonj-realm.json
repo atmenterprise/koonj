@@ -10,6 +10,34 @@
   "resetPasswordAllowed": true,
   "duplicateEmailsAllowed": false,
   "bruteForceProtected": true,
+  "identityProviders": [
+    {
+      "alias": "google",
+      "displayName": "Google",
+      "providerId": "google",
+      "enabled": false,
+      "trustEmail": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "defaultScope": "openid profile email",
+        "issuer": "https://accounts.google.com",
+        "validateSignature": "true",
+        "syncMode": "IMPORT"
+      }
+    },
+    {
+      "alias": "github",
+      "displayName": "GitHub",
+      "providerId": "github",
+      "enabled": false,
+      "trustEmail": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "defaultScope": "user:email",
+        "syncMode": "IMPORT"
+      }
+    }
+  ],
   "roles": {
     "realm": [
       {
@@ -26,6 +54,13 @@
       }
     ]
   },
+  "groups": [
+    {
+      "name": "Koonj Administrators",
+      "realmRoles": ["KOONJ_ADMIN"]
+    }
+  ],
+  "defaultGroups": ["/Koonj Administrators"],
   "clients": [
     {
       "clientId": "koonj-server",
