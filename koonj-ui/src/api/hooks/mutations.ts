@@ -84,19 +84,7 @@ export function useScanSourcesMutation() {
   })
 }
 
-export function useSaveConnection() {
-  const client = useQueryClient()
-  const { run } = useActivityNotifications()
-  return useMutation({ mutationFn: ({ id, payload }: { id?: string; payload: CreateConnectionRequest }) =>
-    run({
-      started: id ? 'Updating connection' : 'Adding connection',
-      failed: 'Could not save connection',
-      complete: connection => ({ tone: 'success', title: id ? 'Connection updated' : 'Connection added', detail: connection.name }),
-    }, () => id ? connectionService.updateConnection(id, payload) : connectionService.createConnection(payload)),
-    onSuccess: () => invalidateConnections(client) })
-}
-
-function invalidateConnections(client: QueryClient) {
+export function invalidateConnections(client: QueryClient) {
   return Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.connections }),
     client.invalidateQueries({ queryKey: queryKeys.catalogLocations }),

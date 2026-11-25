@@ -16,6 +16,7 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import uk.appsthatmatter.koonj.server.dto.ErrorResponse;
+import uk.appsthatmatter.koonj.server.storageauth.StorageCredentialException;
 
 import java.util.stream.Collectors;
 
@@ -40,6 +41,11 @@ public class GlobalExceptionHandler {
             HandlerMethodValidationException.class})
     ResponseEntity<ErrorResponse> invalidInput(Exception failure) {
         return error(HttpStatus.BAD_REQUEST, "Malformed JSON or invalid path or query parameter");
+    }
+
+    @ExceptionHandler(StorageCredentialException.class)
+    ResponseEntity<ErrorResponse> storageCredentials(StorageCredentialException failure) {
+        return error(HttpStatus.BAD_GATEWAY, failure.getMessage());
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

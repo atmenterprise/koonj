@@ -532,6 +532,167 @@ first available project. FUSE uses Default project unless
 UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
 `KOONJ_AGENT_PROJECT_ID` on the mount.
 
+## Storage authentication and secret stores
+
+Koonj defaults to host or workload identity where available. Object storage can also use an AWS Secrets Manager reference or credentials encrypted by Koonj before PostgreSQL receives them.
+
+| Storage | Authentication method |
+|---|---|
+| LOCAL, SMB/CIFS, NAS | `HOST_IDENTITY`. Register the path the API and worker service accounts can access. Mount SMB shares on Linux using the host's Kerberos identity or protected mount credentials. For Windows UNC paths, grant the Windows service account or gMSA access to the share and its filesystem ACLs. |
+| AWS S3 in a dedicated deployment | `AWS_DEFAULT_CHAIN`. The AWS SDK uses the deployment's temporary session credentials, for example an ECS task role, EC2 instance role, Kubernetes web identity, or IAM Roles Anywhere. |
+| AWS S3 in a customer account | `AWS_ASSUME_ROLE`. Configure the customer IAM role and use Koonj's external ID in its trust policy. |
+| MinIO, RustFS, Scality and Custom S3 | `ENCRYPTED_CREDENTIALS` for access keys encrypted by Koonj, or `SECRET_REF` for AWS Secrets Manager. Prefer temporary sessions supplied through Secrets Manager where the provider supports them. |
+| AWS S3 using a legacy static key | `ENCRYPTED_CREDENTIALS` or `SECRET_REF`. Omit `endpointUrl` for AWS S3. |
+
+Custom S3 endpoints use HTTPS. The server setting `KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS=true` is available for isolated development environments such as LocalStack. Deploy shared SaaS workers with egress restricted to approved object storage destinations, a trusted DNS resolver and separate worker roles from other services. Allow administrators to provision only the targets their projects need. Match worker mount permissions to Koonj project boundaries.
+
+### Test with LocalStack from Docker Compose
+
+Run these steps from the release bundle’s `docker/` directory. Start LocalStack with S3 enabled and its edge port published to the Docker Desktop host. Use a bucket created in LocalStack. The examples below use the development bucket `koonj-local-archive` in `eu-west-2`. If your LocalStack container or bucket uses a different name, substitute it when checking the bucket.
+
+```sh
+docker exec localstack-localstack-1 awslocal s3api get-bucket-location \
+  --bucket koonj-local-archive --query LocationConstraint --output text
+```
+
+Configure a local wrapping key so Koonj can save the LocalStack test keys. Generate the wrapping key once with `openssl rand -base64 32` and keep it in a protected location outside PostgreSQL. If you already use a wrapping key, keep that configuration. For a new local keyring, set these values in the deployment environment or its restricted `.env` file.
+
+```dotenv
+KOONJ_STORAGE_KEY_PROVIDER=local
+KOONJ_STORAGE_LOCAL_ACTIVE_KEY=v1
+KOONJ_STORAGE_LOCAL_KEYS=v1:<generated-base64-key>
+```
+
+For an HTTP LocalStack endpoint, create `docker-compose.localstack-auth.yml` in the same directory. Use this override only in an isolated development deployment.
+
+```yaml
+services:
+  koonj-server:
+    environment:
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+  koonj-transfer-worker:
+    environment:
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+```
+
+```sh
+docker compose -f docker-compose.yml \
+  -f docker-compose.otel.yml \
+  -f docker-compose.localstack-auth.yml \
+  up -d koonj-server koonj-transfer-worker
+```
+
+Use the Compose overlays already enabled for your stack. You can omit the telemetry overlay if you run without OpenObserve. On Docker Desktop, both containers can reach a published host port through `host.docker.internal`. If LocalStack is on a shared Docker network with Koonj, use its service DNS name on that network. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/) · [Docker Compose networking](https://docs.docker.com/compose/how-tos/networking/)
+
+In **Storage**, add the connection with these settings.
+
+| Field | Example |
+|---|---|
+| Provider | **Custom S3** |
+| Endpoint URL | `http://host.docker.internal:4566` |
+| Bucket | `koonj-local-archive` |
+| Region | `eu-west-2` |
+| Path-style access | Enabled |
+| Authentication | **Encrypted access keys** |
+| Access key ID and secret access key | `test` and `test` for the standard LocalStack test setup |
+
+Choose **Test Connection**. A successful test enables **Save connection** for a new connection.
+
+### AWS workload identity and customer roles
+
+#### Test Amazon S3 from local Docker Compose
+
+Use temporary AWS CLI session credentials for local testing against real Amazon S3. Both the API and transfer worker need the session. If your organization uses IAM Identity Center, configure the host’s AWS CLI v2 profile once with `aws configure sso --profile koonj-dev`. The profile needs access to the bucket you want to test. [AWS CLI IAM Identity Center setup](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
+
+In the release bundle’s `docker/` directory, set `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` in `.env` and create `docker-compose.aws-dev.yml`.
+
+```yaml
+services:
+  koonj-server:
+    environment: &aws-session
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Export an AWS session first}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Export an AWS session first}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:?Export an AWS session first}
+  koonj-transfer-worker:
+    environment: *aws-session
+```
+
+Sign in to the profile and check which AWS identity it uses. The following example requires `jq`. The subshell passes the three credentials to Compose without writing them to a configuration file or leaving them exported in the parent shell. [AWS CLI credential export](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
+
+```sh
+(
+  set -eu
+  aws sso login --profile koonj-dev
+  aws sts get-caller-identity --profile koonj-dev
+
+  koonj_aws_session=$(aws configure export-credentials --profile koonj-dev --format process)
+  AWS_ACCESS_KEY_ID=$(printf '%s' "$koonj_aws_session" | jq -er '.AccessKeyId | strings | select(length > 0)')
+  AWS_SECRET_ACCESS_KEY=$(printf '%s' "$koonj_aws_session" | jq -er '.SecretAccessKey | strings | select(length > 0)')
+  AWS_SESSION_TOKEN=$(printf '%s' "$koonj_aws_session" | jq -er '.SessionToken | strings | select(length > 0)')
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  unset koonj_aws_session
+
+  docker compose -f docker-compose.yml \
+    -f docker-compose.otel.yml \
+    -f docker-compose.aws-dev.yml \
+    up -d koonj-server koonj-transfer-worker
+)
+```
+
+Keep any existing overlays in the Compose command, including the LocalStack override if you use both services. Avoid printing the resolved Compose configuration while the credentials are set. Repeat the session setup when the credentials expire so Compose recreates the affected containers with fresh credentials.
+
+In **Storage**, select **AWS S3 → AWS workload identity**. Enter the real bucket name and its AWS region, leave the endpoint override unset, and turn off **Path-style access** for a standard Amazon S3 bucket. Choose **Test Connection**, then **Save connection**. The bucket and prefix permissions below also apply to the local AWS CLI session.
+
+#### Attach a workload role in production
+
+On Amazon ECS, assign IAM **task roles** to the API and transfer worker tasks. On a dedicated EC2 deployment, attach an **instance profile** and ensure both containers can reach the EC2 Instance Metadata Service (IMDSv2). Keep `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` for a dedicated deployment using its own bucket. Start the production workloads without the local development credential overlay. The AWS SDK retrieves and refreshes the role’s temporary credentials. [ECS task IAM roles](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) · [EC2 role credentials for the AWS SDK for Java](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/ec2-iam-roles.html)
+
+#### Assume a role in a customer AWS account
+
+1. Configure the API and transfer workers with a temporary AWS workload identity. If the SDK chain selects a long-lived environment or profile key, remove that key so it reaches the workload's credential source. In shared SaaS deployments set `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=false` so customers cannot use the deployment's S3 permissions directly.
+2. Generate a UUID with `uuidgen` for `KOONJ_AWS_EXTERNAL_ID_NAMESPACE`. Keep it identical across API replicas and workers and include it in configuration backups. Give the deployment identity `sts:AssumeRole` access to the approved customer role ARNs.
+3. In Storage, select **AWS S3 → Assume AWS IAM role**, enter the ARN and choose **Get external ID**. Automation can use `GET /api/v1/connections/aws-external-id?roleArn=...` in the selected project. The external ID is stable for a project and AWS account within the deployment. Provide it to the customer administrator configuring the role.
+4. In the customer IAM role trust policy, allow `sts:AssumeRole` for the exact Koonj workload role and require a `StringEquals` condition on `sts:ExternalId` with that value. Scope the role policy to the configured bucket and optional object prefix. Koonj also applies a session policy limited to that storage location and its supported S3 operations.
+5. Grant `s3:ListBucket` on the bucket, with an `s3:prefix` condition matching `<prefix>/*` if configured. Grant `s3:GetObject` on the object path and add `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` where workflows require them. Grant `s3:RestoreObject` for cold recall and the needed KMS key permissions for SSE-KMS. Write probes create, read and delete a temporary object under `.koonj-transfer/` within the configured prefix. Recall with deletion needs `s3:DeleteObject` on the archive source.
+6. Enter the bucket's region and use the AWS endpoint. Test access. A configured prefix is the root of the connection. Existing catalog and transfer paths are relative to that root. Register a separate connection to change the root of an already cataloged location.
+
+For AWS Secrets Manager set `KOONJ_AWS_SECRETS_REGION`. Grant the AWS workload identity read access through `secretsmanager:GetSecretValue` to the allowed project secret names, plus `kms:Decrypt` on the applicable customer-managed key if used. Use the reference `aws-sm:archive-storage` for a secret named `koonj/<project-uuid>/archive-storage` in that region. Koonj reads the current version. Store a JSON object containing `accessKeyId`, `secretAccessKey` and `bucket`. Include the exact `endpointUrl` for a custom S3 target and the configured `objectPrefix` when applicable. For temporary sessions, also include `sessionToken` and an ISO-8601 `expiresAt`.
+
+### Encrypt credentials before storing them in PostgreSQL
+
+Enable a wrapping key provider on the API and every transfer worker. Start with a separate wrapping key or keyring for each deployment. All replicas that share a database need access to that database's active and retained keys.
+
+| Setting | Value |
+|---|---|
+| `KOONJ_STORAGE_KEY_PROVIDER` | `aws-kms` for AWS-backed or shared deployments, `local` for disconnected deployments, or `disabled` when only identity and AWS Secrets Manager are used. Defaults to `disabled`. |
+| `KOONJ_STORAGE_KMS_KEY_ARN` | Full ARN of a symmetric customer-managed KMS key. Use a key ARN to identify the key independently of alias changes. |
+| `KOONJ_STORAGE_KMS_PREVIOUS_KEY_ARNS` | Comma-separated full ARNs of previous KMS wrapping keys kept for decryption. |
+| `KOONJ_STORAGE_LOCAL_ACTIVE_KEY` | ID of the local wrapping key used for new writes, for example `v1`. |
+| `KOONJ_STORAGE_LOCAL_KEYS` | Comma-separated `key-id:base64-key` pairs. Each key is 32 securely generated bytes encoded as standard Base64. Include prior versions while their envelopes or backups are retained. |
+| `KOONJ_STORAGE_SECRET_CACHE_TTL` | Maximum reuse time for resolved credentials. Defaults to `PT30S`, with a supported range of 1–300 seconds. |
+
+**AWS KMS.** Grant the API workload `kms:GenerateDataKey` on the active key and grant the API and transfer workers `kms:Decrypt` on their approved keys. Use workload identity and restrict the key policy and IAM permissions to the deployment. The KMS encryption context includes `purpose=koonj-storage-credential-v1`, project, connection ID and revision. Those values are identifiers that can appear in CloudTrail. [AWS KMS data keys](https://docs.aws.amazon.com/kms/latest/developerguide/data-keys.html) · [AWS KMS encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html)
+
+**Local or air-gapped.** Generate each wrapping key once using a CSPRNG, for example `openssl rand -base64 32`, and save it in the deployment's protected key escrow. Inject the keyring through the restricted service environment on the API and workers. Keep it outside the database, database backups, source control and container images. Restrict access to Docker and process inspection to trusted operators. Avoid printing the resolved Compose configuration or service environment. Keep a separately protected recovery copy of the active and prior keys.
+
+**In Koonj.** Choose **Encrypted access keys** on an object storage connection and submit the access key ID and secret access key over HTTPS. Use dedicated credentials scoped to the target bucket and operations. Koonj saves an AES-256-GCM envelope containing a fresh per-write data key wrapped under KMS or a versioned local key. The payload is authenticated against the project, connection, provider and target settings. An administrator can replace credentials through Storage or use the write-only `PUT /api/v1/connections/{id}/credentials` endpoint. Project-scoped authorization applies to both operations. The endpoint probes the replacement before saving and can run while transfers are active because it only changes the credential. Connection responses show authentication metadata without returning keys.
+
+For SaaS, use TLS at the proxy and keep request bodies, signing headers and runtime key settings out of proxy logs, application diagnostics and telemetry. Keep worker egress scoped to the object storage destinations approved for your deployment.
+
+### Upgrade existing storage connections
+
+1. Inventory the connection IDs, projects and providers. Prepare replacement keys, AWS roles or AWS Secrets Manager references. For connections previously using OpenBao, provision new credentials or securely recover the current ones before retiring that service. Take a protected backup and drain in-flight jobs before stopping the API and transfer workers.
+2. Apply the [project workspace migration](../deploy/migrations/project-workspaces.sql) if required. For schemas predating explicit storage authentication, apply [Phase 1](../deploy/migrations/storage-auth-phase-1.sql). Then apply [the encryption migration](../deploy/migrations/storage-auth-encryption.sql) using `psql -X -v ON_ERROR_STOP=1 -f deploy/migrations/storage-auth-encryption.sql`. In the release bundle the scripts are under `deploy/migrations`. Fresh installations using schema creation skip these upgrade scripts.
+3. Configure the wrapping key provider on all replicas. Remove the retired OpenBao Compose overlay from the startup command and start the new release. The encryption migration retains AWS Secrets Manager references and existing connection IDs. Previous OpenBao references and quarantined plaintext connections show **Migration required**.
+4. Edit each original connection, test the new method and save. Legacy AWS S3 connections with an explicit custom endpoint can be reclassified as **Custom S3** while keeping the bucket, endpoint and region. A successful update clears quarantined legacy values through the database guard. Check worker access and run a representative job before resuming traffic.
+5. Rotate or revoke previously stored credentials at their storage provider. Database backups, snapshots and WAL can still hold historical plaintext. Retain and restrict those copies according to your retention policy. After every active connection has migrated and quarantined values are cleared, apply [Phase 3](../deploy/migrations/storage-auth-phase-3.sql) to drop the old plaintext columns. For a retired connection whose catalog history must be retained, clear both legacy columns and set `active=false` in a maintenance transaction before applying Phase 3.
+
+### Rotate and recover
+
+- **Access key rotation.** Issue a replacement with overlapping validity. Enter both new keys while keeping the connection settings as they are and save. Koonj verifies the new keys and atomically replaces the encrypted envelope. Workers reload it after their credential-cache deadline, including during multipart transfers. Wait for that deadline and confirm representative jobs on each worker pool before revoking the previous key. For AWS Secrets Manager, publish a new current version of the same reference.
+- **Wrapping key rotation.** Add the new key to every replica before switching the active writer. Keep the previous local key in the keyring or the previous KMS ARN in the decrypt allowlist. Re-enter or replace credentials on each connection to create envelopes under the new writer key. Keep old wrapping keys available for retained backups and validate a restore before retiring them.
+- **Recovery.** Restore PostgreSQL into an isolated deployment with the original retained wrapping keys and matching key IDs. Restore KMS permissions or the escrowed local keyring separately. Test encrypted connection access and restore representative data before resuming jobs. A missing key or KMS outage causes affected connections to fail once cached credentials expire. Restore key access or enter replacement credentials under a new key. Catalog browsing and independent authentication modes remain available.
+
 ## Configuration Reference
 
 ### Environment variables

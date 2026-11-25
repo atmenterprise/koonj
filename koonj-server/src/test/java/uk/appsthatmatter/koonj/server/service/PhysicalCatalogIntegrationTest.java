@@ -76,7 +76,9 @@ import static uk.appsthatmatter.koonj.server.entity.TransferJob.Status.*;
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:physical-catalog;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop",
-        "koonj.transfer.max-parallel-files=2"
+        "koonj.transfer.max-parallel-files=2",
+        "KOONJ_STORAGE_KEY_PROVIDER=local", "KOONJ_STORAGE_LOCAL_ACTIVE_KEY=integration",
+        "KOONJ_STORAGE_LOCAL_KEYS=integration:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
 })
 class PhysicalCatalogIntegrationTest {
     @TempDir Path root;
@@ -376,6 +378,87 @@ class PhysicalCatalogIntegrationTest {
 
         assertThat(connections.count()).isEqualTo(registered);
         assertThat(root).isEmptyDirectory();
+    }
+
+    @Test
+    void rejectsSubmittedCredentialsAndOmitsLegacyFieldsFromResponses() throws Exception {
+        String admin = token("storage-auth-admin", "KOONJ_ADMIN");
+        firstProject(admin);
+        String project = ProjectScope.LEGACY.toString();
+        var draft = new java.util.HashMap<String, String>(Map.of("name", "Host identity", "providerType", "SMB",
+                "role", "SOURCE", "basePathOrBucket", root.toString()));
+        long registered = connections.count();
+
+        draft.put("secretKeyOrPassword", "rejected-fixture");
+        request(post("/api/v1/connections").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(draft)), admin, project)
+                .andExpect(status().isBadRequest());
+        request(put("/api/v1/connections/" + source.getId()).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(draft)), admin, project)
+                .andExpect(status().isBadRequest());
+        assertThat(connections.count()).isEqualTo(registered);
+
+        draft.remove("secretKeyOrPassword");
+        request(post("/api/v1/connections").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(draft)), admin, project)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.authMode").value("HOST_IDENTITY"))
+                .andExpect(jsonPath("$.accessKeyOrUsername").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.secretKeyOrPassword").doesNotHaveJsonPath());
+
+        draft.put("providerType", "AWS_S3");
+        draft.put("basePathOrBucket", "aws-fixture-bucket");
+        draft.put("endpointUrl", "https://different.example");
+        request(post("/api/v1/connections").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(draft)), admin, project)
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void savesOnlyEncryptedCredentialsAndSerializesRotation() throws Exception {
+        String admin = token("storage-encryption-admin", "KOONJ_ADMIN");
+        firstProject(admin);
+        String project = ProjectScope.LEGACY.toString();
+        var input = new java.util.HashMap<String, Object>(Map.of("name", "Encrypted storage fixture",
+                "providerType", "MINIO", "role", "SOURCE", "basePathOrBucket", "archive",
+                "endpointUrl", "https://objects.example.test", "authMode", "ENCRYPTED_CREDENTIALS",
+                "credentials", Map.of("accessKeyId", "fixture-access", "secretAccessKey", "fixture-secret-not-returned")));
+        var creation = request(post("/api/v1/connections").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(input)), admin, project).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.credentials").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.credentialEnvelope").doesNotHaveJsonPath()).andReturn();
+        String response = creation.getResponse().getContentAsString();
+        assertThat(response).doesNotContain("fixture-access", "fixture-secret-not-returned");
+        UUID id = UUID.fromString(json.readTree(response).path("id").asText());
+        var projectCreation = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Encrypted storage isolation fixture\"}"), admin, project)
+                .andExpect(status().isCreated()).andReturn();
+        String otherProject = json.readTree(projectCreation.getResponse().getContentAsString()).path("id").asText();
+        request(put("/api/v1/connections/{id}/credentials", id).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("accessKeyId", "other-project", "secretAccessKey", "denied-fixture"))),
+                admin, otherProject).andExpect(status().isNotFound());
+
+        byte[] first = connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope();
+        assertThat(new String(first, java.nio.charset.StandardCharsets.UTF_8)).doesNotContain("fixture-access", "fixture-secret-not-returned");
+
+        request(put("/api/v1/connections/{id}/credentials", id).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("accessKeyId", "invalid-fixture", "secretAccessKey", "failed-fixture"))),
+                admin, project).andExpect(status().isBadGateway());
+        assertThat(connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope()).isEqualTo(first);
+
+        request(put("/api/v1/connections/{id}/credentials", id).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("accessKeyId", "replacement-fixture", "secretAccessKey", "replacement-secret"))),
+                admin, project).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id.toString()));
+        byte[] rotated = connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope();
+        assertThat(rotated).isNotEqualTo(first);
+        input.remove("credentials");
+        input.put("name", "Renamed encrypted fixture");
+        request(put("/api/v1/connections/{id}", id).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(input)), admin, project).andExpect(status().isOk());
+        assertThat(connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope()).isEqualTo(rotated);
+        input.put("endpointUrl", "https://different.example.test");
+        request(put("/api/v1/connections/{id}", id).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(input)), admin, project).andExpect(status().isBadRequest());
     }
 
     @Test
@@ -810,6 +893,7 @@ class PhysicalCatalogIntegrationTest {
 
     private StorageConnection connection(ProviderType provider, String location) {
         var connection = new StorageConnection();
+        connection.setAuthMode(provider == ProviderType.MINIO ? StorageAuthMode.SECRET_REF : StorageAuthMode.HOST_IDENTITY);
         connection.setName(UUID.randomUUID().toString());
         connection.setProviderType(provider);
         connection.setRole(StorageRole.BOTH);
@@ -979,6 +1063,11 @@ class PhysicalCatalogIntegrationTest {
         }
         @Override public void checkConnectivity(StorageConnection config) {}
         @Override public void testConnection(StorageConnection config) {}
+        @Override
+        public void testConnection(StorageConnection config, software.amazon.awssdk.auth.credentials.AwsCredentials credentials)
+                throws IOException {
+            if ("invalid-fixture".equals(credentials.accessKeyId())) throw new IOException("The storage probe rejected the credential");
+        }
 
         @Override
         public List<ScannedFileInfo> listFiles(StorageConnection config, String path) {

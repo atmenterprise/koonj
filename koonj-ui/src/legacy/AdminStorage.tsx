@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { Endpoint, Origin, S3Provider, StorageAuth } from './sampleData'
-import { sameConnection, testStorageConnection, type EndpointDraft, type StorageConfiguration, type StorageCredentials } from './storageConfiguration'
+import { testStorageConnection, type EndpointDraft, type StorageConfiguration } from './storageConfiguration'
 import { Badge, Button, Icon, date, time } from '../shared/ui/primitives'
 
 const protocols: { value: Origin | S3Provider; origin: Origin; label: string }[] = [
@@ -14,12 +14,11 @@ const protocols: { value: Origin | S3Provider; origin: Origin; label: string }[]
 ]
 
 const authLabels: Record<StorageAuth, string> = {
-  'host-mount': 'Use host mount', password: 'Username and password', 'aws-default': 'Use AWS default credentials',
-  'aws-keys': 'AWS access keys', reference: 'Credential reference',
+  'host-mount': 'Host filesystem identity', 'aws-default': 'AWS workload identity',
+  reference: 'External secret reference',
 }
-const defaultAuth = (origin: Origin) => origin === 'S3' ? 'aws-default' : 'host-mount'
-const authMethods = (origin: Origin): StorageAuth[] => origin === 'S3' ? ['aws-default', 'aws-keys', 'reference']
-  : origin === 'LOCAL' ? ['host-mount'] : ['host-mount', 'password', 'reference']
+const authMethods = (origin: Origin, provider: S3Provider): StorageAuth[] => origin !== 'S3' ? ['host-mount']
+  : provider === 'aws' ? ['aws-default', 'reference'] : ['reference']
 
 function EndpointForm({ editor, configuration, onClose }: {
   editor: { endpoint?: Endpoint }; configuration: StorageConfiguration; onClose: () => void
@@ -30,7 +29,9 @@ function EndpointForm({ editor, configuration, onClose }: {
   const [name, setName] = useState(endpoint?.name ?? '')
   const [location, setLocation] = useState(endpoint?.path.replace(/^s3:\/\//, '') ?? '')
   const [region, setRegion] = useState(endpoint?.region ?? '')
-  const [auth, setAuth] = useState<StorageAuth>(endpoint?.connection?.auth ?? defaultAuth(origin))
+  const modes = authMethods(origin, provider)
+  const [selectedAuth, setAuth] = useState(endpoint?.connection?.auth)
+  const auth = modes.find(mode => mode === selectedAuth) ?? modes[0]
   const [server, setServer] = useState(endpoint?.connection?.server ?? '')
   const [remotePath, setRemotePath] = useState(endpoint?.connection?.remotePath ?? '')
   const [endpointUrl, setEndpointUrl] = useState(endpoint?.connection?.endpointUrl ?? '')
@@ -40,7 +41,6 @@ function EndpointForm({ editor, configuration, onClose }: {
   const [testing, setTesting] = useState(false)
   const activeTest = useRef<AbortController>(null)
   const isRemoteSource = origin === 'NAS' || origin === 'SMB'
-  const hasCredentials = Boolean(endpoint && configuration.hasCredentials(endpoint.id, auth))
 
   useEffect(() => () => activeTest.current?.abort(), [])
 
@@ -64,7 +64,7 @@ function EndpointForm({ editor, configuration, onClose }: {
         provider: origin === 'S3' ? provider : undefined,
         server: isRemoteSource ? server.trim() || undefined : undefined,
         remotePath: isRemoteSource ? remotePath.trim() || undefined : undefined,
-        endpointUrl: origin === 'S3' ? endpointUrl.trim() || undefined : undefined,
+        endpointUrl: origin === 'S3' && provider !== 'aws' ? endpointUrl.trim() || undefined : undefined,
         credentialReference: auth === 'reference' ? reference.trim() : undefined,
       },
     }
@@ -103,27 +103,6 @@ function EndpointForm({ editor, configuration, onClose }: {
       setError('Enter a credential reference name.')
       return
     }
-    const fields = new FormData(event.currentTarget)
-    const value = (field: string) => String(fields.get(field) ?? '')
-    const newAuth = endpoint?.connection?.auth !== auth
-    let secrets: StorageCredentials | undefined
-    if (auth === 'password') {
-      const username = value('username').trim()
-      const password = value('password')
-      const domain = value('domain').trim()
-      if (newAuth || username || password || domain) {
-        if (!username || !password) { setError('Enter both the username and password.'); return }
-        secrets = { auth, username, password, domain: domain || undefined }
-      }
-    } else if (auth === 'aws-keys') {
-      const keyId = value('keyId').trim()
-      const secretKey = value('secretKey')
-      const sessionToken = value('sessionToken').trim()
-      if (newAuth || keyId || secretKey || sessionToken) {
-        if (!keyId || !secretKey) { setError('Enter both the access key ID and secret access key.'); return }
-        secrets = { auth, keyId, secretKey, sessionToken: sessionToken || undefined }
-      }
-    }
     if (testingConnection) {
       activeTest.current?.abort()
       const controller = new AbortController()
@@ -131,8 +110,7 @@ function EndpointForm({ editor, configuration, onClose }: {
       const timeout = window.setTimeout(() => controller.abort('timeout'), 10000)
       setTesting(true)
       try {
-        const cached = endpoint && sameConnection(endpoint, draft) ? configuration.credentialsFor(endpoint.id) : undefined
-        const result = await testStorageConnection(draft, secrets ?? cached, controller.signal)
+        const result = await testStorageConnection(draft, controller.signal)
         if (!controller.signal.aborted) setVerification(result)
       } catch {
         if (!controller.signal.aborted) setError('The connection checker could not be reached. Check that the Koonj server is running.')
@@ -146,7 +124,7 @@ function EndpointForm({ editor, configuration, onClose }: {
       }
       return
     }
-    configuration.save(draft, endpoint, secrets, verification?.verified)
+    configuration.save(draft, endpoint, verification?.verified)
     onClose()
   }
 
@@ -161,14 +139,14 @@ function EndpointForm({ editor, configuration, onClose }: {
         setOrigin(next.origin)
         if (next.origin === 'S3') {
           setProvider(next.value as S3Provider)
-          setAuth(next.value === 'aws' ? 'aws-default' : 'aws-keys')
-        } else setAuth(defaultAuth(next.origin))
+        }
+        setAuth(undefined)
       }} disabled={Boolean(endpoint && endpoint.origin !== 'S3')}>
         {protocols.filter(protocol => !endpoint || protocol.origin === endpoint.origin).map(protocol => <option value={protocol.value} key={protocol.value}>{protocol.label}</option>)}
       </select></label>
       <label>{origin === 'S3' ? 'Bucket name' : 'Mount path'}<input required value={location} onChange={event => setLocation(event.target.value)} placeholder={origin === 'S3' ? 'example-archive' : '/mnt/storage'} /></label>
       {origin === 'S3' && <label>Region<input required value={region} onChange={event => setRegion(event.target.value)} placeholder={provider === 'aws' ? 'eu-west-2' : 'us-east-1'} /></label>}
-      {origin === 'S3' && <label>{provider === 'aws' ? 'S3 endpoint URL (optional)' : 'S3 endpoint URL'}<input required={provider !== 'aws'} type="url" value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://s3.example.com" /></label>}
+      {origin === 'S3' && provider !== 'aws' && <label>S3 endpoint URL<input required type="url" value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://s3.example.com" /></label>}
       {isRemoteSource && <>
         <label>Server address (optional)<input value={server} onChange={event => setServer(event.target.value)} placeholder="nas-01.example.com" /></label>
         <label>{origin === 'SMB' ? 'Share (optional)' : 'Export path (optional)'}<input value={remotePath} onChange={event => setRemotePath(event.target.value)} placeholder={origin === 'SMB' ? 'media' : '/exports/media'} /></label>
@@ -178,25 +156,13 @@ function EndpointForm({ editor, configuration, onClose }: {
       <legend>Credentials</legend>
       <div className="admin-form-fields">
         <label>Authentication method<select value={auth} onChange={event => setAuth(event.target.value as StorageAuth)}>
-          {authMethods(origin).map(method => <option key={method} value={method}>{authLabels[method]}</option>)}
+          {modes.map(method => <option key={method} value={method}>{authLabels[method]}</option>)}
         </select></label>
-        <Fragment key={auth}>
-        {auth === 'reference' && <label>Credential reference name<input required value={reference} onChange={event => setReference(event.target.value)} placeholder="storage/archive" /></label>}
-        {auth === 'password' && <>
-          <label>Username<input name="username" autoComplete="off" placeholder={hasCredentials ? 'Enter to replace' : undefined} /></label>
-          <label>Password<input name="password" type="password" autoComplete="new-password" /></label>
-          <label>Domain (optional)<input name="domain" autoComplete="off" /></label>
-        </>}
-        {auth === 'aws-keys' && <>
-          <label>AWS access key ID<input name="keyId" autoComplete="off" placeholder={hasCredentials ? 'Enter to replace' : undefined} /></label>
-          <label>AWS secret access key<input name="secretKey" type="password" autoComplete="new-password" /></label>
-          <label>AWS session token (optional)<input name="sessionToken" type="password" autoComplete="new-password" /></label>
-        </>}
-        </Fragment>
+        {auth === 'reference' && <label>Secret reference<input required value={reference}
+          onChange={event => setReference(event.target.value)} placeholder="aws-sm:archive" /></label>}
       </div>
-      {(auth === 'password' || auth === 'aws-keys') && <p>{hasCredentials ? 'Leave these fields blank to keep the current session credentials.' : 'Entered credentials are kept in memory for this page session. Use a credential reference for settings that need to survive a reload.'}</p>}
       {auth === 'reference' && <p>Enter the name of the stored credential. The reference is saved with this endpoint.</p>}
-      {isRemoteSource && <p>To verify a NAS or SMB share, mount it on the Koonj server and use its mount path with Use host mount.</p>}
+      {isRemoteSource && <p>To verify a NAS or SMB share, mount it on the Koonj server and use its mount path with the host filesystem identity.</p>}
     </fieldset>
     {error && <p className="error-text" role="alert">{error}</p>}
     {verification && <p className={verification.verified ? 'admin-notice' : 'error-text'} role="status">{verification.message}</p>}
@@ -222,9 +188,7 @@ export default function AdminStorage({ configuration }: { configuration: Storage
         <span className="icon-tile neutral"><Icon name={target ? 'cloud' : 'server'} size={16} /></span>
         <div className="admin-endpoint-label"><strong>{endpoint.name}</strong><small>{endpoint.path}{endpoint.region && ' · ' + endpoint.region}</small>
           {endpoint.origin === 'S3' && <small>{protocols.find(item => item.value === (endpoint.connection?.provider ?? 'aws'))?.label}</small>}
-          {endpoint.connection && <small>{authLabels[endpoint.connection.auth]}
-            {(endpoint.connection.auth === 'password' || endpoint.connection.auth === 'aws-keys') &&
-              (configuration.hasCredentials(endpoint.id, endpoint.connection.auth) ? ' · Entered for this session' : ' · Credentials required')}</small>}
+          {endpoint.connection && <small>{authLabels[endpoint.connection.auth] ?? 'Update authentication settings'}</small>}
         </div>
         {endpoint.verifiedAt && <Badge tone="green" dot>Verified {date(endpoint.verifiedAt)} · {time(endpoint.verifiedAt)}</Badge>}
         <Badge tone={endpoint.enabled === false || endpoint.health === 'Not checked' ? 'neutral' : endpoint.health === 'Online' ? 'green' : 'blue'} dot>{endpoint.enabled === false ? 'Disabled' : endpoint.health}</Badge>

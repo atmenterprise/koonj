@@ -2,6 +2,12 @@ export const providerTypes = ['LOCAL', 'SMB', 'NAS', 'AWS_S3', 'MINIO', 'RUSTFS'
 export type ProviderType = typeof providerTypes[number]
 export const storageRoles = ['SOURCE', 'TARGET', 'BOTH'] as const
 export type StorageRole = typeof storageRoles[number]
+export type StorageAuthMode = 'HOST_IDENTITY' | 'AWS_DEFAULT_CHAIN' | 'AWS_ASSUME_ROLE' | 'SECRET_REF' | 'ENCRYPTED_CREDENTIALS' | 'MIGRATION_REQUIRED'
+
+export interface StorageCredentialInput {
+  accessKeyId: string
+  secretAccessKey: string
+}
 
 export interface CreateConnectionRequest {
   name: string
@@ -10,8 +16,11 @@ export interface CreateConnectionRequest {
   basePathOrBucket: string
   endpointUrl?: string | null
   region?: string | null
-  accessKeyOrUsername?: string | null
-  secretKeyOrPassword?: string | null
+  authMode?: Exclude<StorageAuthMode, 'MIGRATION_REQUIRED'>
+  secretRef?: string
+  credentials?: StorageCredentialInput
+  awsRoleArn?: string
+  objectPrefix?: string
   pathStyleAccessEnabled?: boolean
   active?: boolean
 }
@@ -35,8 +44,11 @@ export interface StorageConnectionDTO extends ConnectionIdentity {
   basePathOrBucket: string
   endpointUrl: string | null
   region: string | null
-  accessKeyOrUsername: string | null
-  secretKeyOrPassword: string | null
+  authMode: StorageAuthMode
+  secretRef: string | null
+  awsRoleArn: string | null
+  awsExternalId: string | null
+  objectPrefix: string | null
   pathStyleAccessEnabled: boolean
   createdAt: string
   updatedAt: string

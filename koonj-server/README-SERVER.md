@@ -32,6 +32,12 @@ export KOONJ_DB_USERNAME=koonj
 export KOONJ_DB_PASSWORD=password
 export KOONJ_DDL_AUTO=update
 
+# For a disposable LocalStack setup. Keep a stable escrowed key for a persistent database.
+export KOONJ_STORAGE_KEY_PROVIDER=local
+export KOONJ_STORAGE_LOCAL_ACTIVE_KEY=dev
+export KOONJ_STORAGE_LOCAL_KEYS="dev:$(openssl rand -base64 32)"
+export KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS=true
+
 cd koonj-server
 mvn spring-boot:run
 ```
@@ -89,7 +95,7 @@ curl -fsS http://localhost:8080/api/v1/connections \
   -d '{"name":"Primary Source","providerType":"LOCAL","role":"BOTH","basePathOrBucket":"/tmp/koonj-source"}'
 ```
 
-Register the bucket created by LocalStack. Run this in the shell where you set the Compose variables, or export the same values again.
+Register the bucket created by LocalStack using its dummy `test` keys. The server encrypts these credentials using the local wrapping key configured above. For a persistent installation, see [storage authentication setup](../docs/DEPLOYMENT-GUIDE.md#storage-authentication-and-secret-stores).
 
 ```sh
 curl -fsS http://localhost:8080/api/v1/connections \
@@ -97,11 +103,11 @@ curl -fsS http://localhost:8080/api/v1/connections \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"LocalStack Archive\",\"providerType\":\"CUSTOM_S3\",\"role\":\"BOTH\",
        \"basePathOrBucket\":\"${KOONJ_LOCAL_BUCKET}\",\"endpointUrl\":\"http://127.0.0.1:${KOONJ_S3_PORT}\",
-       \"region\":\"${KOONJ_LOCAL_REGION}\",\"accessKeyOrUsername\":\"test\",\"secretKeyOrPassword\":\"test\",
+       \"region\":\"${KOONJ_LOCAL_REGION}\",\"authMode\":\"ENCRYPTED_CREDENTIALS\",\"credentials\":{\"accessKeyId\":\"test\",\"secretAccessKey\":\"test\"},
        \"pathStyleAccessEnabled\":true}"
 ```
 
-For your own MinIO instance, use `MINIO` and supply its endpoint, bucket, region and credentials with path-style access enabled. For AWS use `AWS_S3`, the bucket's region, and `pathStyleAccessEnabled:false`. Omit `endpointUrl` for AWS. Omitting both AWS credential fields uses the SDK's default credentials chain.
+For MinIO use `MINIO`, its endpoint, bucket, region, and either encrypted access keys or a project-scoped AWS Secrets Manager reference. For AWS use `AWS_S3` with the bucket's region and `pathStyleAccessEnabled:false`. Use the AWS workload identity default or configure a customer IAM role.
 
 Copy the two IDs from the responses. The optional scan creates a catalog listing. Archive can also discover the selected files directly.
 

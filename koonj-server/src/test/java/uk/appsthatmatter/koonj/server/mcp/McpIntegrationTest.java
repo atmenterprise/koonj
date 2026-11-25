@@ -17,6 +17,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import uk.appsthatmatter.koonj.server.entity.FileMetadata;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
+import uk.appsthatmatter.koonj.server.entity.StorageAuthMode;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.StorageConnectionRepository;
@@ -131,6 +132,7 @@ class McpIntegrationTest {
         Path locationPath = Files.createDirectory(root.resolve(project.toString()));
         Files.writeString(locationPath.resolve("film.mov"), "test");
         var location = new StorageConnection();
+        location.setAuthMode(StorageAuthMode.HOST_IDENTITY);
         location.setName("Mount");
         location.setProjectId(project);
         location.setProviderType(ProviderType.LOCAL);

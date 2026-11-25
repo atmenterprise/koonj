@@ -4,7 +4,8 @@ import { monthlySavings, summarizeUsage } from './storageUsage'
 
 function connection(id: string, providerType: StorageConnectionDTO['providerType']): StorageConnectionDTO {
   return { id, name: id, providerType, role: 'BOTH', active: true, basePathOrBucket: id,
-    endpointUrl: null, region: null, accessKeyOrUsername: null, secretKeyOrPassword: null,
+    endpointUrl: null, region: null, authMode: 'HOST_IDENTITY', secretRef: null,
+    awsRoleArn: null, awsExternalId: null, objectPrefix: null,
     pathStyleAccessEnabled: false, createdAt: '', updatedAt: '' }
 }
 

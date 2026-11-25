@@ -20,6 +20,7 @@ import uk.appsthatmatter.koonj.server.entity.ArchiveMode;
 import uk.appsthatmatter.koonj.server.entity.Project;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
+import uk.appsthatmatter.koonj.server.entity.StorageAuthMode;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
 import uk.appsthatmatter.koonj.server.repository.FileMetadataRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectRepository;
@@ -149,6 +150,7 @@ class TransferRabbitIntegrationTest {
 
     private static StorageConnection connection(ConfigurableApplicationContext context, ProviderType provider, String path, UUID project) {
         var connection = new StorageConnection();
+        connection.setAuthMode(provider == ProviderType.MINIO ? StorageAuthMode.SECRET_REF : StorageAuthMode.HOST_IDENTITY);
         connection.setProjectId(project);
         connection.setName(UUID.randomUUID().toString());
         connection.setProviderType(provider);

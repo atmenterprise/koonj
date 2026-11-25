@@ -1,5 +1,6 @@
 package uk.appsthatmatter.koonj.server.connector;
 
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 
@@ -22,6 +23,9 @@ public interface StorageConnector {
         return Optional.empty();
     }
     void testConnection(StorageConnection config) throws IOException;
+    default void testConnection(StorageConnection config, AwsCredentials credentials) throws IOException {
+        throw new IOException("This storage connector does not support submitted credentials");
+    }
     List<ScannedFileInfo> listFiles(StorageConnection config, String subPath) throws IOException;
     default void visitFiles(StorageConnection config, String subPath, Consumer<ScannedFileInfo> visitor) throws IOException {
         listFiles(config, subPath).forEach(visitor);

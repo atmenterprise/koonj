@@ -1,7 +1,13 @@
 import { apiClient } from '../client'
-import type { ConnectionHealthDTO, CreateConnectionRequest, StorageConnectionDTO, StorageLocationStatusDTO, StorageUsageDTO } from '../types'
+import type { ConnectionHealthDTO, CreateConnectionRequest, StorageConnectionDTO, StorageCredentialInput, StorageLocationStatusDTO, StorageUsageDTO } from '../types'
 
 export const connectionService = {
+  async getAuthOptions(signal?: AbortSignal) {
+    return (await apiClient.get<{ awsDefaultChainAllowed: boolean; encryptedCredentialsAvailable: boolean }>('/connections/auth-options', { signal })).data
+  },
+  async getAwsExternalId(roleArn: string) {
+    return (await apiClient.get<{ externalId: string }>('/connections/aws-external-id', { params: { roleArn } })).data
+  },
   async getConnections(signal?: AbortSignal) {
     return (await apiClient.get<StorageConnectionDTO[]>('/connections', { signal })).data
   },
@@ -19,6 +25,9 @@ export const connectionService = {
   },
   async updateConnection(id: string, payload: CreateConnectionRequest, signal?: AbortSignal) {
     return (await apiClient.put<StorageConnectionDTO>(`/connections/${id}`, payload, { signal })).data
+  },
+  async rotateCredential(id: string, input: StorageCredentialInput) {
+    return (await apiClient.put<StorageConnectionDTO>(`/connections/${id}/credentials`, input)).data
   },
   async deleteConnection(id: string, signal?: AbortSignal) {
     await apiClient.delete(`/connections/${id}`, { signal })

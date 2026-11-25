@@ -43,6 +43,12 @@ spring:
 logging:
   level:
     uk.appsthatmatter.koonj: ${KOONJ_LOG_LEVEL:INFO}
+    software.amazon.awssdk.request: OFF
+    software.amazon.awssdk.auth: WARN
+    software.amazon.awssdk.http: WARN
+    org.apache.http.wire: OFF
+    org.apache.http.headers: OFF
+    io.netty.handler.logging: OFF
   pattern:
     level: "%6replace(%level){'^TRACE$','DETAIL'}"
   file:

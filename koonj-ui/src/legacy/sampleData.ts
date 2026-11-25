@@ -7,7 +7,7 @@ export type FileTransfer = {
   checksum: ChecksumResult; storageClass?: StorageClass; purged?: boolean
 }
 export type FileMovement = FileTransfer & { at: string; activityId?: string; outcome: 'Completed' | 'Failed' }
-export type StorageAuth = 'host-mount' | 'password' | 'aws-default' | 'aws-keys' | 'reference'
+export type StorageAuth = 'host-mount' | 'aws-default' | 'reference'
 export type S3Provider = 'aws' | 'minio' | 'scality' | 'compatible'
 export type StorageConnection = { auth: StorageAuth; provider?: S3Provider; server?: string; remotePath?: string; endpointUrl?: string; credentialReference?: string }
 export type Endpoint = { id: string; name: string; origin: Origin; path: string; items: number; health: 'Online' | 'Syncing' | 'Not checked'; detail: string; region?: string; enabled?: boolean; connection?: StorageConnection; verifiedAt?: number }

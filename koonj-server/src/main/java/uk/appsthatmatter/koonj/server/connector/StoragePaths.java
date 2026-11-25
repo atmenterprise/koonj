@@ -1,5 +1,7 @@
 package uk.appsthatmatter.koonj.server.connector;
 
+import uk.appsthatmatter.koonj.server.entity.StorageConnection;
+
 import java.util.Arrays;
 import java.util.regex.Pattern;
 
@@ -10,6 +12,11 @@ public final class StoragePaths {
             + "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:-previous)?");
 
     private StoragePaths() {}
+
+    public static String objectKey(StorageConnection connection, String relativeKey) {
+        String prefix = connection.getObjectPrefix();
+        return prefix == null ? relativeKey : prefix + "/" + relativeKey;
+    }
 
     public static boolean isArchiveStagingKey(String key) {
         return ARCHIVE_STAGING_KEY.matcher(key).matches();
