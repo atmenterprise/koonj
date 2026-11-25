@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
+import uk.appsthatmatter.koonj.server.entity.StorageAuthMode;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
 
 import java.io.*;
@@ -45,6 +46,9 @@ public class LocalStorageConnector implements StorageConnector {
     }
 
     public Path storageRoot(StorageConnection config) throws IOException {
+        if (config.getAuthMode() != StorageAuthMode.HOST_IDENTITY) {
+            throw new IOException("Mounted storage requires the host filesystem identity");
+        }
         Path root = configuredPath(config).toRealPath();
         if (!Files.isDirectory(root)) throw new IOException("Storage root must be a directory");
         return root;

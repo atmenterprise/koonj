@@ -715,7 +715,7 @@ public class FileTransferService {
     }
 
     private static String s3Uri(StorageConnection bucket, String key) {
-        return "s3://" + bucket.getBasePathOrBucket() + "/" + key;
+        return "s3://" + bucket.getBasePathOrBucket() + "/" + StoragePaths.objectKey(bucket, key);
     }
 
     private static String checksum(StorageConnector connector, StorageConnection connection, String path) throws IOException {

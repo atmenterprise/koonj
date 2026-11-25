@@ -12,6 +12,7 @@ import uk.appsthatmatter.koonj.server.dto.*;
 import uk.appsthatmatter.koonj.server.service.ConnectionService;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -37,9 +38,23 @@ public class ConnectionController {
     }
 
     @GetMapping({"", "/"})
-    @Operation(summary = "List storage connections", description = "Return configured connections in name order with credential values masked.")
+    @Operation(summary = "List storage connections", description = "Return configured connections and authentication metadata in name order.")
     @PreAuthorize(PermissionRules.STORAGE_MANAGE)
     public List<ConnectionResponse> list() { return connections.list(); }
+
+    @GetMapping("/auth-options")
+    @PreAuthorize(PermissionRules.STORAGE_MANAGE)
+    public Map<String, Boolean> authOptions() {
+        return Map.of("awsDefaultChainAllowed", connections.allowsAwsDefaultChain(),
+                "encryptedCredentialsAvailable", connections.encryptedCredentialsAvailable());
+    }
+
+    @GetMapping("/aws-external-id")
+    @Operation(summary = "Get the Koonj external ID for an AWS role in the selected project")
+    @PreAuthorize(PermissionRules.STORAGE_MANAGE)
+    public Map<String, String> awsExternalId(@RequestParam String roleArn) {
+        return Map.of("externalId", connections.awsExternalId(roleArn));
+    }
 
     @GetMapping("/locations")
     @PreAuthorize(PermissionRules.STORAGE_VIEW)
@@ -51,10 +66,17 @@ public class ConnectionController {
     public StorageUsage usage() { return connections.storageUsage(); }
 
     @PutMapping("/{id}")
-    @Operation(summary = "Update a storage connection", description = "Replace endpoint settings. Omitted or masked credentials retain their existing values.")
+    @Operation(summary = "Update a storage connection", description = "Replace endpoint and authentication settings.")
     @PreAuthorize(PermissionRules.STORAGE_MANAGE)
     public ConnectionResponse update(@PathVariable UUID id, @Valid @RequestBody ConnectionRequest request) {
         return connections.update(id, request);
+    }
+
+    @PutMapping("/{id}/credentials")
+    @Operation(summary = "Rotate an encrypted storage credential without changing the connection")
+    @PreAuthorize(PermissionRules.STORAGE_MANAGE)
+    public ConnectionResponse rotateCredential(@PathVariable UUID id, @Valid @RequestBody StorageCredentialInput input) {
+        return connections.rotateCredential(id, input);
     }
 
     @DeleteMapping("/{id}")

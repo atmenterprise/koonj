@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
+import uk.appsthatmatter.koonj.server.entity.StorageAuthMode;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -57,6 +58,7 @@ class LocalStorageConnectorTest {
 
     private StorageConnection connection() {
         var connection = new StorageConnection();
+        connection.setAuthMode(StorageAuthMode.HOST_IDENTITY);
         connection.setBasePathOrBucket(root.toString());
         return connection;
     }

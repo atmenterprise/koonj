@@ -1,9 +1,10 @@
 package uk.appsthatmatter.koonj.server.connector;
 
 import jakarta.annotation.PreDestroy;
-import org.springframework.stereotype.Component;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import uk.appsthatmatter.koonj.server.storageauth.CredentialTarget;
+import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
@@ -18,6 +19,10 @@ import uk.appsthatmatter.koonj.server.entity.EntryType;
 import uk.appsthatmatter.koonj.server.entity.ProviderType;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 import uk.appsthatmatter.koonj.server.entity.StorageRole;
+import uk.appsthatmatter.koonj.server.entity.StorageAuthMode;
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
+import uk.appsthatmatter.koonj.server.storageauth.S3CredentialFactory;
+import uk.appsthatmatter.koonj.server.storageauth.StorageSdkErrors;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -34,31 +39,91 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 @Component
-public class S3CompatibleStorageConnector implements StorageConnector {
+public class S3CompatibleStorageConnector implements StorageConnector, AutoCloseable {
     private static final Duration METADATA_REQUEST_TIMEOUT = Duration.ofSeconds(8);
     private static final int MEMORY_FILE_LIMIT = 8 * 1024 * 1024;
-    private final Map<ClientConfig, S3Client> clients = new ConcurrentHashMap<>();
-    private final Map<ClientConfig, AsyncTransfers> transfers = new ConcurrentHashMap<>();
+    private final S3CredentialFactory credentialFactory;
+    private final Map<ClientConfig, Clients> clients = new ConcurrentHashMap<>();
 
-    private record ClientConfig(String region, String endpoint, boolean pathStyle, String accessKey, String secretKey) {
+    public S3CompatibleStorageConnector(S3CredentialFactory credentialFactory) {
+        this.credentialFactory = credentialFactory;
+    }
+
+    private record ClientConfig(CredentialTarget target, StorageAuthMode authMode,
+                                String secretRef, String roleArn, String externalId) {
         static ClientConfig from(StorageConnection config) {
-            return new ClientConfig(Objects.requireNonNullElse(config.getRegion(), "us-east-1"), config.getEndpointUrl(),
-                    config.isPathStyleAccessEnabled(), config.getAccessKeyOrUsername(), config.getSecretKeyOrPassword());
-        }
-
-        StaticCredentialsProvider credentials() {
-            return StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey));
+            ProjectScope.require(config.getProjectId(), "Storage connection was not found");
+            return new ClientConfig(CredentialTarget.from(config), config.getAuthMode(),
+                    config.getSecretRef(), config.getAwsRoleArn(), config.getAwsExternalId());
         }
     }
 
-    private record AsyncTransfers(S3AsyncClient client, S3TransferManager manager) {}
+    private final class Clients implements AutoCloseable {
+        private final ClientConfig settings;
+        private final S3CredentialFactory.Credentials credentials;
+        private S3Client sync;
+        private S3AsyncClient async;
+        private S3TransferManager transfers;
 
+        private Clients(ClientConfig settings) {
+            this(settings, credentialFactory.create(settings.target(), settings.authMode(),
+                    settings.secretRef(), settings.roleArn(), settings.externalId()));
+        }
+
+        private Clients(ClientConfig settings, S3CredentialFactory.Credentials credentials) {
+            this.settings = settings;
+            this.credentials = credentials;
+        }
+
+        private synchronized S3Client sync() {
+            if (sync == null) {
+                var builder = S3Client.builder().region(Region.of(settings.target().region())).forcePathStyle(settings.target().pathStyle())
+                        .credentialsProvider(credentials.provider())
+                        .overrideConfiguration(options -> options.addExecutionInterceptor(StorageSdkErrors.S3))
+                        .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                        .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED);
+                if (settings.target().endpoint() != null) builder.endpointOverride(URI.create(settings.target().endpoint()));
+                sync = builder.build();
+            }
+            return sync;
+        }
+
+        private synchronized S3TransferManager transfers() {
+            if (transfers == null) {
+                var builder = S3AsyncClient.builder().region(Region.of(settings.target().region())).forcePathStyle(settings.target().pathStyle())
+                        .credentialsProvider(credentials.provider())
+                        .overrideConfiguration(options -> options.addExecutionInterceptor(StorageSdkErrors.S3))
+                        .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                        .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
+                        .httpClientBuilder(NettyNioAsyncHttpClient.builder().maxConcurrency(64).maxPendingConnectionAcquires(256))
+                        .multipartEnabled(true)
+                        .multipartConfiguration(multipart -> multipart.thresholdInBytes(16L * 1024 * 1024)
+                                .minimumPartSizeInBytes(8L * 1024 * 1024).apiCallBufferSizeInBytes(32L * 1024 * 1024));
+                if (settings.target().endpoint() != null) builder.endpointOverride(URI.create(settings.target().endpoint()));
+                async = builder.build();
+                try {
+                    transfers = S3TransferManager.builder().s3Client(async).build();
+                } catch (RuntimeException failure) {
+                    async.close();
+                    async = null;
+                    throw failure;
+                }
+            }
+            return transfers;
+        }
+
+        @Override
+        public void close() {
+            try (credentials; var syncToClose = sync; var asyncToClose = async; var transfersToClose = transfers) {
+                // Close the transfer manager before its client, and clients before their credential provider.
+            }
+        }
+    }
+
+    @Override
     @PreDestroy
-    void closeClients() {
-        transfers.values().forEach(bundle -> {
-            try { bundle.manager().close(); } finally { bundle.client().close(); }
-        });
-        clients.values().forEach(S3Client::close);
+    public void close() {
+        clients.values().forEach(Clients::close);
     }
 
     @Override
@@ -73,71 +138,59 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     public boolean objectStorage() { return true; }
 
     private S3Client client(StorageConnection config) {
-        return clients.computeIfAbsent(ClientConfig.from(config), S3CompatibleStorageConnector::buildClient);
-    }
-
-    private static S3Client buildClient(ClientConfig settings) {
-        var builder = S3Client.builder().region(Region.of(settings.region())).forcePathStyle(settings.pathStyle())
-                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED);
-        if (settings.endpoint() != null) builder.endpointOverride(URI.create(settings.endpoint()));
-        if (settings.accessKey() != null) builder.credentialsProvider(settings.credentials());
-        return builder.build();
+        return clients.computeIfAbsent(ClientConfig.from(config), Clients::new).sync();
     }
 
     private S3TransferManager transferManager(StorageConnection config) {
-        return transfers.computeIfAbsent(ClientConfig.from(config), settings -> {
-            var builder = S3AsyncClient.builder().region(Region.of(settings.region())).forcePathStyle(settings.pathStyle())
-                    .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-                    .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
-                    .httpClientBuilder(NettyNioAsyncHttpClient.builder().maxConcurrency(64).maxPendingConnectionAcquires(256))
-                    .multipartEnabled(true)
-                    .multipartConfiguration(multipart -> multipart.thresholdInBytes(16L * 1024 * 1024)
-                            .minimumPartSizeInBytes(8L * 1024 * 1024).apiCallBufferSizeInBytes(32L * 1024 * 1024));
-            if (settings.endpoint() != null) builder.endpointOverride(URI.create(settings.endpoint()));
-            if (settings.accessKey() != null) builder.credentialsProvider(settings.credentials());
-            var client = builder.build();
-            try {
-                return new AsyncTransfers(client, S3TransferManager.builder().s3Client(client).build());
-            } catch (RuntimeException failure) {
-                client.close();
-                throw failure;
-            }
-        }).manager();
+        return clients.computeIfAbsent(ClientConfig.from(config), Clients::new).transfers();
     }
 
     @Override
     public void checkConnectivity(StorageConnection config) {
-        client(config).listObjectsV2(request -> request.bucket(config.getBasePathOrBucket()).maxKeys(1)
+        client(config).listObjectsV2(request -> request.bucket(config.getBasePathOrBucket())
+                .prefix(StoragePaths.objectKey(config, "")).maxKeys(1)
                 .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
     }
 
     @Override
     public void testConnection(StorageConnection config) throws IOException {
-        try (var client = buildClient(ClientConfig.from(config))) {
-            testAccess(config, client);
+        try (var draft = new Clients(ClientConfig.from(config))) {
+            testAccess(config, draft.sync());
+        }
+    }
+
+    @Override
+    public void testConnection(StorageConnection config, AwsCredentials credentials) throws IOException {
+        var supplied = new S3CredentialFactory.Credentials(StaticCredentialsProvider.create(credentials), () -> {});
+        try (var draft = new Clients(ClientConfig.from(config), supplied)) {
+            testAccess(config, draft.sync());
         }
     }
 
     private static void testAccess(StorageConnection config, S3Client client) throws IOException {
         String bucket = config.getBasePathOrBucket();
-        client.headBucket(request -> request.bucket(bucket));
-        var sample = client.listObjectsV2(request -> request.bucket(bucket).maxKeys(1)).contents();
-        if (config.getRole() != StorageRole.TARGET && !sample.isEmpty()
+        String root = StoragePaths.objectKey(config, "");
+        var sample = client.listObjectsV2(request -> request.bucket(bucket).prefix(root).maxKeys(1)
+                .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT))).contents();
+        if (config.getRole() != StorageRole.TARGET && !sample.isEmpty() && sample.getFirst().key().startsWith(root)
                 && !Set.of("GLACIER", "DEEP_ARCHIVE").contains(sample.getFirst().storageClassAsString())) {
-            try (var response = client.getObject(request -> request.bucket(bucket).key(sample.getFirst().key()))) {
+            try (var response = client.getObject(request -> request.bucket(bucket).key(sample.getFirst().key())
+                    .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)))) {
                 response.read();
                 response.abort();
             }
         }
         if (config.getRole() != StorageRole.SOURCE) {
-            String key = StoragePaths.ARCHIVE_STAGING_PREFIX + UUID.randomUUID();
-            client.putObject(request -> request.bucket(bucket).key(key).storageClass(StorageClass.STANDARD),
+            String key = StoragePaths.objectKey(config, StoragePaths.ARCHIVE_STAGING_PREFIX + UUID.randomUUID());
+            client.putObject(request -> request.bucket(bucket).key(key).storageClass(StorageClass.STANDARD)
+                            .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)),
                     RequestBody.fromBytes(new byte[]{42}));
-            try (InputStream stream = client.getObject(request -> request.bucket(bucket).key(key))) {
+            try (InputStream stream = client.getObject(request -> request.bucket(bucket).key(key)
+                    .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)))) {
                 if (stream.read() != 42 || stream.read() != -1) throw new IOException("S3 probe readback failed");
             } finally {
-                client.deleteObject(request -> request.bucket(bucket).key(key));
+                client.deleteObject(request -> request.bucket(bucket).key(key)
+                        .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
             }
         }
     }
@@ -152,9 +205,12 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     @Override
     public void visitFiles(StorageConnection config, String subPath, Consumer<ScannedFileInfo> visitor) {
         String children = subPath.isEmpty() || subPath.endsWith("/") ? subPath : subPath + "/";
-        var request = ListObjectsV2Request.builder().bucket(config.getBasePathOrBucket()).prefix(subPath).build();
+        String root = StoragePaths.objectKey(config, "");
+        var request = ListObjectsV2Request.builder().bucket(config.getBasePathOrBucket())
+                .prefix(root + subPath).build();
         for (S3Object item : client(config).listObjectsV2Paginator(request).contents()) {
-            String key = item.key();
+            if (!item.key().startsWith(root) || item.key().length() == root.length()) continue;
+            String key = item.key().substring(root.length());
             if (StoragePaths.isArchiveStagingKey(key) || !(key.equals(subPath) || key.startsWith(children))) continue;
             EntryType type = key.endsWith("/") && item.size() == 0 ? EntryType.DIRECTORY : EntryType.FILE;
             visitor.accept(new ScannedFileInfo(key, item.size(), item.lastModified(), item.storageClassAsString(), type, null));
@@ -169,7 +225,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     @Override
     public Optional<ScannedFileInfo> statFile(StorageConnection config, String key) {
         try {
-            var head = client(config).headObject(request -> request.bucket(config.getBasePathOrBucket()).key(key)
+            var head = client(config).headObject(request -> request.bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, key))
                     .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
             EntryType type = key.endsWith("/") && head.contentLength() == 0 ? EntryType.DIRECTORY : EntryType.FILE;
             return Optional.of(new ScannedFileInfo(key, head.contentLength(), head.lastModified(),
@@ -182,7 +238,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
 
     @Override
     public FileAttributes fileAttributes(StorageConnection config, String key) {
-        var head = client(config).headObject(request -> request.bucket(config.getBasePathOrBucket()).key(key)
+        var head = client(config).headObject(request -> request.bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, key))
                 .overrideConfiguration(options -> options.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
         return FileAttributes.from(null, null, null, head.metadata());
     }
@@ -191,7 +247,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     public Optional<Instant> requestColdRestore(StorageConnection config, String key) {
         String bucket = config.getBasePathOrBucket();
         S3Client client = client(config);
-        var head = client.headObject(request -> request.bucket(bucket).key(key)
+        var head = client.headObject(request -> request.bucket(bucket).key(StoragePaths.objectKey(config, key))
                 .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(METADATA_REQUEST_TIMEOUT)));
         StorageClass storageClass = head.storageClass();
         if (storageClass != StorageClass.GLACIER && storageClass != StorageClass.DEEP_ARCHIVE) return Optional.empty();
@@ -199,7 +255,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
         if (restore != null && restore.contains("ongoing-request=\"false\"")) return Optional.empty();
         if (restore == null || !restore.contains("ongoing-request=\"true\"")) {
             try {
-                client.restoreObject(request -> request.bucket(bucket).key(key)
+                client.restoreObject(request -> request.bucket(bucket).key(StoragePaths.objectKey(config, key))
                         .overrideConfiguration(configOverride -> configOverride.apiCallTimeout(METADATA_REQUEST_TIMEOUT))
                         .restoreRequest(restoreRequest -> restoreRequest.days(2)
                                 .glacierJobParameters(parameters -> parameters.tier(Tier.STANDARD))));
@@ -214,13 +270,13 @@ public class S3CompatibleStorageConnector implements StorageConnector {
 
     @Override
     public InputStream openReadStream(StorageConnection config, String relativePath) {
-        return client(config).getObject(request -> request.bucket(config.getBasePathOrBucket()).key(relativePath));
+        return client(config).getObject(request -> request.bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, relativePath)));
     }
 
     @Override
     public InputStream openTransferStream(StorageConnection config, String key, long size) throws IOException {
         if (size <= MEMORY_FILE_LIMIT) return openReadStream(config, key);
-        var request = GetObjectRequest.builder().bucket(config.getBasePathOrBucket()).key(key).build();
+        var request = GetObjectRequest.builder().bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, key)).build();
         Path directory = Files.createTempDirectory("koonj-download-");
         Path staging = directory.resolve("object");
         try {
@@ -242,7 +298,7 @@ public class S3CompatibleStorageConnector implements StorageConnector {
     @Override
     public void writeStream(StorageConnection config, String key, InputStream stream,
                             long length, String storageClass) throws IOException {
-        var request = PutObjectRequest.builder().bucket(config.getBasePathOrBucket()).key(key).storageClass(storageClass).build();
+        var request = PutObjectRequest.builder().bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, key)).storageClass(storageClass).build();
         var manager = transferManager(config);
         if (length <= MEMORY_FILE_LIMIT) {
             byte[] bytes = stream.readNBytes((int) length);
@@ -297,6 +353,6 @@ public class S3CompatibleStorageConnector implements StorageConnector {
 
     @Override
     public void deleteFile(StorageConnection config, String relativePath) {
-        client(config).deleteObject(request -> request.bucket(config.getBasePathOrBucket()).key(relativePath));
+        client(config).deleteObject(request -> request.bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, relativePath)));
     }
 }

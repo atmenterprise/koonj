@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { endpoints, type Endpoint } from './sampleData'
+import { useEffect, useState } from 'react'
+import { connectionService } from '../api/services/connectionService'
+import type { ProviderType } from '../api/types'
+import { endpoints, type Endpoint, type S3Provider } from './sampleData'
 
 const key = 'koonj-storage-config-v1'
 export type EndpointDraft = Pick<Endpoint, 'name' | 'origin' | 'path' | 'region' | 'connection'>
-export type StorageCredentials =
-  | { auth: 'password'; username: string; password: string; domain?: string }
-  | { auth: 'aws-keys'; keyId: string; secretKey: string; sessionToken?: string }
 type AuditEvent = { time: number; message: string }
 type Configuration = { endpoints: Endpoint[]; audit: AuditEvent[] }
 type Verification = { verified: boolean; message: string }
@@ -16,17 +15,23 @@ export function sameConnection(existing: Endpoint | undefined, draft: EndpointDr
     && JSON.stringify(existing.connection) === JSON.stringify(connection))
 }
 
-export async function testStorageConnection(draft: EndpointDraft, secrets: StorageCredentials | undefined, signal: AbortSignal): Promise<Verification> {
-  const keys = secrets?.auth === 'aws-keys' ? { keyId: secrets.keyId, secretKey: secrets.secretKey, sessionToken: secrets.sessionToken } : {}
-  const response = await fetch('/api/v1/storage/connections/test', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-    body: JSON.stringify({ origin: draft.origin, path: draft.path, region: draft.region,
-      endpointUrl: draft.connection?.endpointUrl, auth: draft.connection?.auth, ...keys }),
-  })
-  if (!response.ok || !response.headers.get('Content-Type')?.includes('application/json')) throw new Error('Connection checker unavailable')
-  const result = await response.json()
-  if (typeof result.verified !== 'boolean' || typeof result.message !== 'string') throw new Error('Invalid connection check response')
-  return result
+const providers: Record<S3Provider, ProviderType> = {
+  aws: 'AWS_S3', minio: 'MINIO', scality: 'SCALITY', compatible: 'CUSTOM_S3',
+}
+
+export async function testStorageConnection(draft: EndpointDraft, signal: AbortSignal): Promise<Verification> {
+  const objectStorage = draft.origin === 'S3'
+  const settings = draft.connection
+  const authMode = settings?.auth === 'reference' ? 'SECRET_REF'
+    : objectStorage ? 'AWS_DEFAULT_CHAIN' : 'HOST_IDENTITY'
+  const result = await connectionService.testDraft({
+    name: draft.name, role: objectStorage ? 'BOTH' : 'SOURCE', authMode,
+    providerType: objectStorage ? providers[settings?.provider ?? 'aws'] : draft.origin as ProviderType,
+    basePathOrBucket: objectStorage ? draft.path.replace(/^s3:\/\//, '') : draft.path,
+    region: draft.region, endpointUrl: settings?.endpointUrl,
+    secretRef: settings?.credentialReference,
+  }, signal)
+  return { verified: result.healthy, message: result.message }
 }
 
 function load(): Configuration {
@@ -39,7 +44,6 @@ function load(): Configuration {
 
 export function useStorageConfiguration() {
   const [configuration, setConfiguration] = useState(load)
-  const credentials = useRef(new Map<string, StorageCredentials>())
 
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(configuration)) } catch { /* Storage is optional. */ }
@@ -55,16 +59,14 @@ export function useStorageConfiguration() {
     }))
   }
 
-  function save(draft: EndpointDraft, existing?: Endpoint, secrets?: StorageCredentials, verified?: boolean) {
+  function save(draft: EndpointDraft, existing?: Endpoint, verified?: boolean) {
     const id = existing?.id ?? 'endpoint-' + crypto.getRandomValues(new Uint32Array(2)).join('-')
     const connectionUnchanged = sameConnection(existing, draft)
-    if (secrets) credentials.current.set(id, secrets)
-    else if (!connectionUnchanged) credentials.current.delete(id)
     update({
       id,
       items: existing?.items ?? 0,
-      health: verified === true ? 'Online' : existing && connectionUnchanged && !secrets && verified === undefined ? existing.health : 'Not checked',
-      verifiedAt: verified === true ? Date.now() : connectionUnchanged && !secrets && verified === undefined ? existing?.verifiedAt : undefined,
+      health: verified === true ? 'Online' : existing && connectionUnchanged && verified === undefined ? existing.health : 'Not checked',
+      verifiedAt: verified === true ? Date.now() : connectionUnchanged && verified === undefined ? existing?.verifiedAt : undefined,
       enabled: existing?.enabled ?? true,
       detail: draft.region ?? existing?.detail ?? 'No scan history',
       ...draft,
@@ -76,12 +78,7 @@ export function useStorageConfiguration() {
     update({ ...endpoint, enabled }, (enabled ? 'Enabled ' : 'Disabled ') + endpoint.name)
   }
 
-  return {
-    ...configuration, save, toggle,
-    hasCredentials: (id: string, auth: string) => credentials.current.get(id)?.auth === auth,
-    credentialsFor: (id: string) => credentials.current.get(id),
-    clearCredentials: () => credentials.current.clear(),
-  }
+  return { ...configuration, save, toggle }
 }
 
 export type StorageConfiguration = ReturnType<typeof useStorageConfiguration>

@@ -181,7 +181,8 @@ final class TransferReservations {
         if (connector.objectStorage()) {
             String endpoint = endpoint(connection.getEndpointUrl(), connection.getRegion());
             String namespace = "s3:" + endpoint + "/" + connection.getBasePathOrBucket();
-            return new Location(digest(aliases.getOrDefault(namespace, namespace)), "", false, false);
+            return new Location(digest(aliases.getOrDefault(namespace, namespace)),
+                    java.util.Objects.requireNonNullElse(connection.getObjectPrefix(), ""), false, false);
         }
         try {
             String path = ((LocalStorageConnector) connector).storageRoot(connection).toString().replace('\\', '/');

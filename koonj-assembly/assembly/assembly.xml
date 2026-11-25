@@ -132,6 +132,21 @@
             <lineEnding>unix</lineEnding>
         </file>
         <file>
+            <source>../deploy/migrations/storage-auth-phase-1.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/migrations/storage-auth-encryption.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/migrations/storage-auth-phase-3.sql</source>
+            <outputDirectory>deploy/migrations</outputDirectory>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
             <source>../scripts/mcp-bridge.mjs</source>
             <outputDirectory>mcp</outputDirectory>
             <fileMode>0755</fileMode>

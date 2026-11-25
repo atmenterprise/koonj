@@ -6,6 +6,7 @@ import type { StorageConnectionDTO } from '../../api/types'
 import type { Navigate } from '../../shared/ui/feedback'
 import { Badge, Button, Icon } from '../../shared/ui/primitives'
 import { providers, roles } from './StorageConnectivity'
+import { authModes } from './storageAuthentication'
 
 export function ConnectionRow({ connection, navigate, expanded, onToggle, onEdit, onDelete }: {
   connection: StorageConnectionDTO; navigate: Navigate; expanded: boolean
@@ -37,12 +38,15 @@ export function ConnectionRow({ connection, navigate, expanded, onToggle, onEdit
     <tr id={detailsId} className="connection-row-details" role="row" hidden={!expanded}>
       <td colSpan={5}>
         {expanded && <div className="connection-details">
-          {cloud && <dl className="live-metadata">
-            <div><dt>Endpoint URL</dt><dd>{connection.endpointUrl ?? 'Provider default'}</dd></div>
-            <div><dt>Region</dt><dd>{connection.region ?? 'Provider default'}</dd></div>
-            <div><dt>Path-style access</dt><dd>{connection.pathStyleAccessEnabled ? 'Enabled' : 'Disabled'}</dd></div>
-            <div><dt>Credentials</dt><dd>{connection.accessKeyOrUsername || connection.secretKeyOrPassword ? 'Configured' : '—'}</dd></div>
-          </dl>}
+          <dl className="live-metadata">
+            <div><dt>Authentication</dt><dd>{authModes[connection.authMode]}</dd></div>
+            {cloud && <>
+              <div><dt>Endpoint URL</dt><dd>{connection.endpointUrl ?? 'Provider default'}</dd></div>
+              <div><dt>Region</dt><dd>{connection.region ?? 'Provider default'}</dd></div>
+              {connection.objectPrefix && <div><dt>Object prefix</dt><dd>{connection.objectPrefix}</dd></div>}
+              <div><dt>Path-style access</dt><dd>{connection.pathStyleAccessEnabled ? 'Enabled' : 'Disabled'}</dd></div>
+            </>}
+          </dl>
           <div className="row-actions">
             {can('CATALOG_VIEW') && <Button onClick={() => navigate('/explorer?' + new URLSearchParams({ endpoint: connection.id }))}>Browse Catalog</Button>}
             {onEdit && <>
