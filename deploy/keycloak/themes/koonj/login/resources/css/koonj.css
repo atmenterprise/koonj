@@ -103,6 +103,67 @@
   background: transparent;
 }
 
+#keycloak-bg[data-page-id='login-register'] .pf-v5-c-login {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#keycloak-bg[data-page-id='login-register'] .pf-v5-c-login__container {
+  width: min(100%, 620px);
+  padding: clamp(20px, 4vw, 32px);
+}
+
+#keycloak-bg[data-page-id='login-register'] #kc-header {
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+#keycloak-bg .pf-v5-c-login__main-body:has(#kc-register-form) {
+  padding-top: 12px;
+}
+
+#keycloak-bg #kc-register-form {
+  gap: 12px 16px;
+}
+
+#keycloak-bg #kc-register-form .pf-v5-c-login__main-footer-band {
+  padding-block: 0;
+}
+
+#keycloak-bg[data-page-id='login-register'] .kc-login-divider {
+  margin-block: 12px;
+}
+
+#keycloak-bg[data-page-id='login-register'] #kc-social-providers > ul {
+  padding-top: 0;
+}
+
+@media (min-width: 360px) {
+  #keycloak-bg #kc-register-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #keycloak-bg #kc-register-form > * {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  #keycloak-bg #kc-register-form:has(#firstName):has(#lastName) > :has(> :is(#input-error-container-firstName, #input-error-container-lastName)) {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 560px) {
+  #keycloak-bg #kc-register-form:has(#password):has(#password-confirm) > :has(> :is(#input-error-container-password, #input-error-container-password-confirm)) {
+    grid-column: auto;
+  }
+
+  #keycloak-bg[data-page-id='login-register'] #kc-social-providers > ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px;
+  }
+}
+
 #keycloak-bg a:not(.pf-v5-c-button) {
   color: var(--koonj-focus);
   text-underline-offset: 3px;

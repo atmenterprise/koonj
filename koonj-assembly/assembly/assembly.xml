@@ -185,6 +185,22 @@
             <source>../koonj-ui/public/img/atm-banner-16x9-clean.jpg</source>
             <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
         </file>
+        <file>
+            <source>../koonj-ui/public/img/koonj-mark.svg</source>
+            <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
+        </file>
+        <file>
+            <source>../koonj-ui/public/img/koonj-mark.svg</source>
+            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
+        </file>
+        <file>
+            <source>../koonj-ui/public/favicon.ico</source>
+            <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
+        </file>
+        <file>
+            <source>../koonj-ui/public/favicon.ico</source>
+            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
+        </file>
     </files>
 
     <dependencySets>

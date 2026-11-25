@@ -1149,11 +1149,24 @@ body:has(.explorer-fullscreen) .topbar { position: fixed; inset: 0 0 auto; z-ind
 }
 .auth-gate--landing .auth-card { grid-row: 2; }
 .auth-copyright { grid-row: 3; align-self: end; color: var(--muted); font-size: .875rem; text-align: center; }
-.auth-card { width: min(100%, 460px); padding: clamp(26px, 6vw, 48px); text-align: center; }
-.auth-card .brand-mark { display: inline-block; margin-bottom: 19px; }
+.auth-card {
+  width: min(100%, 460px);
+  padding: clamp(22px, 5vw, 40px);
+  border-radius: 20px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 12%);
+  text-align: center;
+}
+.auth-card .brand-mark { display: inline-block; width: 56px; height: 56px; margin-bottom: 14px; }
 .auth-card h1 { font-size: clamp(23px, 5vw, 31px); font-weight: 800; letter-spacing: -.04em; }
 .auth-card p { color: var(--muted); margin-top: 10px; }
 .auth-actions { margin-top: 24px; justify-content: center; flex-wrap: wrap; }
+.auth-actions .button { min-height: 44px; border-radius: 10px; }
+.auth-alternative { margin-block: 14px; color: var(--muted); font-size: .875rem; }
+.auth-actions--social {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  margin-top: 0;
+}
 .auth-account { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .auth-avatar { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px; font-weight: 800; }
 .auth-identity { min-width: 0; }
