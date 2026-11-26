@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
   # Backend Validation (koonj-server)
@@ -17,6 +20,7 @@ jobs:
   server-ci:
     name: Build & Test Server and Notification Worker
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       rabbitmq:
         image: rabbitmq:4.2-alpine
@@ -40,17 +44,13 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Verify & Compile Server
-        run: |
-          mvn -B -ntp clean test-compile -pl koonj-server,koonj-notification-worker -am
-
       - name: Run Backend Tests
         env:
           KOONJ_TEST_RABBITMQ: 'true'
           KOONJ_RABBITMQ_PORT: ${{ job.services.rabbitmq.ports[5672] }}
           KOONJ_RABBITMQ_PASSWORD: koonj_worker_test
         run: |
-          mvn -B -ntp test -pl koonj-server,koonj-notification-worker -am
+          mvn -B -ntp clean test -pl koonj-server,koonj-notification-worker -am
 
       - name: Package Server JAR
         run: |
@@ -69,6 +69,7 @@ jobs:
   ui-ci:
     name: Build & Test UI
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -106,6 +107,7 @@ jobs:
     name: Test Packaging & Docker Build
     needs: [server-ci, ui-ci]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -132,29 +134,42 @@ jobs:
 
       - name: Verify Deployment ZIP
         run: |
+          set -euo pipefail
           unzip -q koonj-assembly/target/koonj-*-deployment.zip -d dist
           cd dist/koonj-*/
-          cmp docker/server/koonj-server.jar on-premise/lib/koonj-server.jar
-          cmp docker/notification-worker/koonj-notification-worker.jar on-premise/lib/koonj-notification-worker.jar
-          cmp docker/fuse/koonj-fuse.jar on-premise/lib/koonj-fuse.jar
-          cmp docker/ui/index.html on-premise/web/index.html
+          test -s docker/server/koonj-server.jar
+          test -f docker/server/Dockerfile
+          test -s docker/notification-worker/koonj-notification-worker.jar
+          test -f docker/notification-worker/Dockerfile
+          test -s docker/fuse/koonj-fuse.jar
+          test -f docker/fuse/Dockerfile
+          test -s docker/ui/index.html
+          test -f docker/ui/Dockerfile
+          test -f docker/ui/default.conf.template
+          test -f docker/.env.example
+          test -f docker/docker-compose.yml
+          test -f docker/docker-compose.otel.yml
+          test -f docker/docker-compose.openobserve.yml
           test -x docker/setup-host-mount.sh
+          test -x docker/mcp/mcp-bridge.mjs
           test -f docker/samba/smb.conf
-          test -f docker/samba/start.sh
-          test -x on-premise/bin/run-koonj-fuse.sh
-          test -f on-premise/bin/run-koonj-fuse.ps1
-          test -x on-premise/install.sh
-          test -x on-premise/bin/koonj-server.sh
-          test -f on-premise/install.cmd
+          test -x docker/samba/start.sh
+          test -f docker/keycloak/init-db.sql
+          test -f docker/keycloak/koonj-realm.json
+          test -x scripts/fuse/run-koonj-fuse.sh
+          test -f scripts/fuse/run-koonj-fuse.ps1
+          test -f docs/guide/DEPLOYMENT-GUIDE.md
+          test -f docs/guide/FUSE-GUIDE.md
 
       - name: Test Building Production Docker Images
         run: |
+          set -euo pipefail
           cd dist/koonj-*/docker
           docker compose --env-file .env.example --profile smb -f docker-compose.yml config -q
           OPENOBSERVE_ROOT_EMAIL=ci@example.com OPENOBSERVE_ROOT_PASSWORD=ci-config-only \
             OPENOBSERVE_AUTHORIZATION='Basic Y2k=' \
             docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.otel.yml config -q
-          docker build -t koonj-server:test -f server/Dockerfile.server server/
-          docker build -t koonj-notification-worker:test -f notification-worker/Dockerfile.notification-worker notification-worker/
-          docker build -t koonj-ui:test -f ui/Dockerfile.ui ui/
-          docker build -t koonj-fuse:test -f fuse/Dockerfile.fuse fuse/
+          docker build -t koonj-server:test -f server/Dockerfile server/
+          docker build -t koonj-notification-worker:test -f notification-worker/Dockerfile notification-worker/
+          docker build -t koonj-ui:test -f ui/Dockerfile ui/
+          docker build -t koonj-fuse:test -f fuse/Dockerfile fuse/

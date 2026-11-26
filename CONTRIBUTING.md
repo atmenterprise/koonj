@@ -42,7 +42,57 @@ We are committed to fostering an open, welcoming, and respectful community. Plea
 3. **Follow existing conventions:**
    - **Backend (Java / Spring Boot):** Follow standard Java naming, keep methods concise, and preserve existing Javadocs and comments.
    - **Frontend (React / TypeScript):** Keep TypeScript types strict (`tsc --noEmit`) and follow the module layout in `koonj-ui/src/`.
-   - **Commit messages:** Use clear, imperative commit messages (e.g., `feat: add Glacier restore status polling`, `fix: handle empty prefix in S3 scan`).
+
+## Commit Message Convention
+
+Koonj uses the **[Conventional Commits](https://www.conventionalcommits.org/)** specification. This is enforced on every pull-request title (which becomes the merge commit message on squash-merge) and drives the automated release pipeline.
+
+### Format
+
+```
+<type>[optional scope]: <short description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Types
+
+| Type | When to use | Version bump |
+|---|---|---|
+| `feat` | A new feature | **minor** (`0.x.0`) |
+| `fix` | A bug fix | **patch** (`0.0.x`) |
+| `perf` | A performance improvement | **patch** |
+| `revert` | Reverts a previous commit | **patch** |
+| `docs` | Documentation only | none |
+| `style` | Formatting, whitespace | none |
+| `refactor` | Code change without behaviour change | none |
+| `test` | Adding or updating tests | none |
+| `build` | Build system or dependency changes | none |
+| `ci` | CI/CD configuration | none |
+| `chore` | Maintenance, tooling, etc. | none |
+
+Append `!` to the type **or** add a `BREAKING CHANGE:` footer to trigger a **major** (`x.0.0`) bump:
+
+```
+feat!: remove on-premise installer support
+
+BREAKING CHANGE: The on-premise/* layout has been removed from the
+deployment ZIP. Use the Docker Compose stack instead.
+```
+
+### Examples
+
+```
+feat(server): add retry policy for 5xx S3 responses
+fix(ui): correct pagination offset on empty transfer list
+docs: update FUSE guide with macOS Sequoia notes
+ci: add GHA layer cache to Docker builds
+chore(deps): bump spring-boot from 3.5.15 to 3.5.16
+```
+
+> **Tip:** Scopes (`server`, `ui`, `notification-worker`, `fuse`, `assembly`, `deps`) are optional but help readers navigate the CHANGELOG quickly.
 
 ## Testing & Verification
 
@@ -50,7 +100,7 @@ Before opening a pull request, verify that all relevant builds and tests pass:
 
 ```sh
 # Backend unit tests
-mvn -pl koonj-server -am test
+mvn -pl koonj-server,koonj-notification-worker -am test
 
 # Full Maven build (including assembly ZIP)
 mvn -pl koonj-assembly -am clean package
@@ -68,8 +118,35 @@ npm run build
 
 1. Ensure all tests and builds pass locally.
 2. Update documentation in `docs/guide/` if your change affects configuration, deployment, or user-facing behavior.
-3. Open a pull request against `main` with a clear summary of the changes, linked issues, and screenshots or logs where applicable.
-4. Address review feedback promptly.
+3. Open a pull request against `main`. The PR title **must** follow the Conventional Commits format above — the automated PR title check will fail otherwise.
+4. Fill in the pull request template, including linked issues and any relevant screenshots or logs.
+5. Address review feedback promptly.
+
+## Release Process
+
+Releases are **fully automated** — maintainers never tag manually.
+
+```
+feat/fix/… commits merged to main
+         │
+         ▼
+release-please opens (or updates) a "Release PR"
+  → bumps version in pom.xml files
+  → regenerates CHANGELOG.md
+         │
+         ▼  maintainer merges the Release PR
+         │
+         ▼
+release-please creates the git tag (e.g. v0.2.0)
+         │
+         ▼
+CD workflow (cd.yml) triggers automatically:
+  → builds the deployment ZIP
+  → pushes Docker images to GHCR & Docker Hub
+  → creates the GitHub Release with assets & checksums
+```
+
+If you are a maintainer and need to cut a release immediately (e.g. a critical security fix), use the **workflow_dispatch** trigger on the CD workflow directly — no manual tagging required.
 
 ## License
 

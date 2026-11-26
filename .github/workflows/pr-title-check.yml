@@ -1,0 +1,63 @@
+name: PR Title Check
+
+# Validates that every pull-request title conforms to the Conventional Commits
+# spec (https://www.conventionalcommits.org/).  release-please reads merged
+# commit messages (which default to the PR title on squash-merge) to decide
+# the next semver bump and to build the CHANGELOG, so a valid title is
+# required for the automated release pipeline to work correctly.
+#
+# Allowed types:
+#   feat     → triggers a MINOR version bump
+#   fix      → triggers a PATCH version bump
+#   perf     → triggers a PATCH version bump
+#   revert   → triggers a PATCH version bump
+#   docs, style, refactor, test, build, ci, chore → no version bump
+#
+# A BREAKING CHANGE footer or a '!' after the type (e.g. feat!: …) triggers a
+# MAJOR version bump regardless of type.
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  pull-requests: read
+
+jobs:
+  pr-title:
+    name: Validate PR Title (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR Title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Types that are allowed in PR titles
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          # Scopes are optional but encouraged, e.g. feat(server): …
+          requireScope: false
+          # Disallow commit bodies in the subject line
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: >
+            The subject "{subject}" must start with a lowercase letter.
+            Example: "feat(server): add retry on 5xx responses"
+          # Allow wip: titles on draft PRs only
+          wip: true
+          # Validate all commits in a single-commit PR as well
+          validateSingleCommit: false

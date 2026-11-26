@@ -18,11 +18,15 @@ concurrency:
 permissions:
   contents: write
   packages: write
+  # Required for OCI provenance attestations on GHCR
+  id-token: write
+  attestations: write
 
 jobs:
   build-and-release:
     name: Build Packages & Create Release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -43,6 +47,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: koonj-ui/package-lock.json
 
+      # Buildx enables multi-platform builds and GHA layer caching
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -53,60 +58,146 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine Version
+      # Credentials stored as:
+      #   vars.DOCKERHUB_USERNAME  — repository variable (not sensitive)
+      #   secrets.DOCKERHUB_TOKEN  — repository secret (Docker Hub access token)
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Resolve all version/namespace values once so every subsequent step is
+      # a simple substitution with no shell logic needed.
+      - name: Determine Version & Registry Namespace
         id: meta
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.version_tag }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          # Strip leading 'v' for internal artifact naming if present
           CLEAN_VER="${TAG#v}"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${CLEAN_VER}" >> $GITHUB_OUTPUT
+          # vars.DOCKERHUB_NAMESPACE takes priority; fall back to 'appsthatmatter'
+          DH_NS="${{ vars.DOCKERHUB_NAMESPACE }}"
+          echo "tag=${TAG}"                       >> "$GITHUB_OUTPUT"
+          echo "version=${CLEAN_VER}"             >> "$GITHUB_OUTPUT"
+          echo "dh_ns=${DH_NS:-appsthatmatter}"  >> "$GITHUB_OUTPUT"
 
       - name: Build and Extract Deployment ZIP
         env:
           RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          set -euo pipefail
           mvn -B -ntp -pl koonj-assembly -am clean package "-Ddeployment.version=$RELEASE_VERSION"
-          unzip -q "koonj-assembly/target/koonj-$RELEASE_VERSION-deployment.zip" -d dist
+          unzip -q "koonj-assembly/target/koonj-${RELEASE_VERSION}-koonj-deployment.zip" -d dist
+
+      # ── Docker image builds ─────────────────────────────────────────────────
+      # All four images are pushed to both GHCR and Docker Hub simultaneously.
+      # GHA layer cache (scope-per-service) avoids rebuilding unchanged layers.
+      # provenance + sbom produce verifiable supply-chain metadata on GHCR.
+      # ────────────────────────────────────────────────────────────────────────
 
       - name: Build & Push Server Docker Image
-        uses: docker/build-push-action@v5
+        id: build-server
+        uses: docker/build-push-action@v6
         with:
           context: dist/koonj-${{ steps.meta.outputs.version }}/docker/server
           file: dist/koonj-${{ steps.meta.outputs.version }}/docker/server/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
           tags: |
             ghcr.io/${{ github.repository }}/server:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository }}/server:latest
+            ${{ steps.meta.outputs.dh_ns }}/koonj-server:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.dh_ns }}/koonj-server:latest
+          labels: |
+            org.opencontainers.image.title=koonj-server
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
 
       - name: Build & Push Notification Worker Docker Image
-        uses: docker/build-push-action@v5
+        id: build-notification-worker
+        uses: docker/build-push-action@v6
         with:
           context: dist/koonj-${{ steps.meta.outputs.version }}/docker/notification-worker
           file: dist/koonj-${{ steps.meta.outputs.version }}/docker/notification-worker/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=notification-worker
+          cache-to: type=gha,scope=notification-worker,mode=max
           tags: |
             ghcr.io/${{ github.repository }}/notification-worker:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository }}/notification-worker:latest
+            ${{ steps.meta.outputs.dh_ns }}/koonj-notification-worker:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.dh_ns }}/koonj-notification-worker:latest
+          labels: |
+            org.opencontainers.image.title=koonj-notification-worker
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
 
       - name: Build & Push UI Docker Image
-        uses: docker/build-push-action@v5
+        id: build-ui
+        uses: docker/build-push-action@v6
         with:
           context: dist/koonj-${{ steps.meta.outputs.version }}/docker/ui
           file: dist/koonj-${{ steps.meta.outputs.version }}/docker/ui/Dockerfile
           push: true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,scope=ui,mode=max
           tags: |
             ghcr.io/${{ github.repository }}/ui:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository }}/ui:latest
+            ${{ steps.meta.outputs.dh_ns }}/koonj-ui:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.dh_ns }}/koonj-ui:latest
+          labels: |
+            org.opencontainers.image.title=koonj-ui
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build & Push FUSE Docker Image
+        id: build-fuse
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/koonj-${{ steps.meta.outputs.version }}/docker/fuse
+          file: dist/koonj-${{ steps.meta.outputs.version }}/docker/fuse/Dockerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=fuse
+          cache-to: type=gha,scope=fuse,mode=max
+          tags: |
+            ghcr.io/${{ github.repository }}/fuse:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}/fuse:latest
+            ${{ steps.meta.outputs.dh_ns }}/koonj-fuse:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.dh_ns }}/koonj-fuse:latest
+          labels: |
+            org.opencontainers.image.title=koonj-fuse
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+
+      # ── Release artifact ────────────────────────────────────────────────────
 
       - name: Generate Checksums
         working-directory: koonj-assembly/target
         run: |
-          sha256sum koonj-*-deployment.zip > SHA256SUMS.txt
+          set -euo pipefail
+          sha256sum koonj-*-koonj-deployment.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
@@ -118,5 +209,5 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            koonj-assembly/target/koonj-*-deployment.zip
+            koonj-assembly/target/koonj-*-koonj-deployment.zip
             koonj-assembly/target/SHA256SUMS.txt
