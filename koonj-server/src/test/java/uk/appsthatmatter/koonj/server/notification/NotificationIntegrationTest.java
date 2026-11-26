@@ -8,7 +8,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -35,7 +37,9 @@ import static uk.appsthatmatter.koonj.notification.NotificationEvent.Type.LARGE_
 @AutoConfigureMockMvc
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:notifications;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop",
+        "koonj.security.basic-auth.enabled=true", "koonj.security.basic-auth.username=legacy",
+        "koonj.security.basic-auth.password=test-password", "koonj.security.basic-auth.role=KOONJ_ADMIN"
 })
 class NotificationIntegrationTest {
     private static final String BASE = "/api/v1/notifications";
@@ -46,6 +50,25 @@ class NotificationIntegrationTest {
     @Autowired NotificationOutboxRepository outbox;
     @Autowired NotificationDeliveryRepository deliveries;
     @Autowired TransactionTemplate transactions;
+
+    @Test
+    void basicAuthWritesRequireCsrfToken() throws Exception {
+        String basic = "Basic " + HttpHeaders.encodeBasicAuth("legacy", "test-password", null);
+        var write = post(BASE + "/channels").header("Authorization", basic)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of(
+                        "name", "Legacy SMTP", "type", "EMAIL", "enabled", true, "smtpPassword", "write-only",
+                        "adminRecipients", List.of("admin@example.test"))));
+        mvc.perform(write).andExpect(status().isForbidden());
+
+        var result = mvc.perform(get("/api/v1/csrf").header("Authorization", basic))
+                .andExpect(status().isOk()).andReturn();
+        var session = (MockHttpSession) result.getRequest().getSession(false);
+        mvc.perform(get("/api/v1/csrf").session(session)).andExpect(status().isUnauthorized());
+        var csrf = json.readTree(result.getResponse().getContentAsString());
+        mvc.perform(write.session(session)
+                        .header(csrf.get("headerName").asText(), csrf.get("token").asText()))
+                .andExpect(status().isCreated());
+    }
 
     @Test
     void testChannelAndJobWriteToOutboxWhileOnlyTheWorkerCreatesDeliveries() throws Exception {

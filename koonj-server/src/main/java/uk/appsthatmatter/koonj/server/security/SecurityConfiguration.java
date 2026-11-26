@@ -19,6 +19,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
@@ -27,6 +28,7 @@ import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import uk.appsthatmatter.koonj.server.dto.ErrorResponse;
@@ -49,14 +51,18 @@ public class SecurityConfiguration {
             if (basic != null) response.addHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"Koonj\"");
             writeError(mapper, response, HttpStatus.UNAUTHORIZED, "Sign in with a valid access token.");
         };
-        AccessDeniedHandler forbidden = (request, response, failure) ->
-                writeError(mapper, response, HttpStatus.FORBIDDEN, "Insufficient permissions for this action");
+        AccessDeniedHandler forbidden = (request, response, failure) -> {
+            if (failure instanceof CsrfException && ApiKeyAuthenticationFilter.isMcp(request)) {
+                unauthorized.commence(request, response, new OAuth2AuthenticationException("invalid_token"));
+                return;
+            }
+            writeError(mapper, response, HttpStatus.FORBIDDEN, "Insufficient permissions for this action");
+        };
         var converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(new KeycloakAuthorities());
 
         var bearerTokens = new DefaultBearerTokenResolver();
         http.addFilterBefore(new ApiKeyAuthenticationFilter(keys, unauthorized), BearerTokenAuthenticationFilter.class)
-                .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsSource))
                 .requestCache(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -68,8 +74,12 @@ public class SecurityConfiguration {
                         .requestMatchers("/api/v1/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden))
-                .oauth2ResourceServer(oauth -> oauth.bearerTokenResolver(request -> ApiKeyAuthenticationFilter.isMcp(request)
-                                ? null : bearerTokens.resolve(request)).authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden)
+                // Spring uses this resolver for CSRF and JWT authentication. An MCP key is
+                // visible to the CSRF filter, then handled by the API key filter before JWT authentication.
+                .oauth2ResourceServer(oauth -> oauth.bearerTokenResolver(request ->
+                                ApiKeyAuthenticationFilter.isMcp(request) && request.getAttribute(ProjectScope.ATTRIBUTE) != null
+                                        ? null : bearerTokens.resolve(request))
+                        .authenticationEntryPoint(unauthorized).accessDeniedHandler(forbidden)
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(converter)));
         if (basic != null) {
             http.authenticationProvider(basic).httpBasic(config -> config.authenticationEntryPoint(unauthorized));
