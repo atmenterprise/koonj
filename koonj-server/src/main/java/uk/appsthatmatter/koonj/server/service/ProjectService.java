@@ -17,6 +17,7 @@ import uk.appsthatmatter.koonj.server.repository.ProjectMembershipRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectRepository;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import uk.appsthatmatter.koonj.notification.ProjectInvitationRepository;
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -24,6 +25,7 @@ import uk.appsthatmatter.koonj.server.entity.ProjectMembership.Role;
 
 @Service
 public class ProjectService implements ApplicationRunner {
+    private static final SecureRandom RANDOM = new SecureRandom();
     private final ProjectRepository projects;
     private final ProjectAccountRepository accounts;
     private final ProjectMembershipRepository memberships;
@@ -67,10 +69,9 @@ public class ProjectService implements ApplicationRunner {
         if (account.effectiveDefaultId() == null) {
             // Serialize generated-name selection across instances, including migrated accounts.
             projects.lock(ProjectScope.LEGACY).orElseThrow();
-            var random = java.util.concurrent.ThreadLocalRandom.current();
             String[] colors = {"Amber", "Copper", "Silver", "Golden", "Indigo", "Scarlet"};
             String[] birds = {"Heron", "Crane", "Falcon", "Sparrow", "Kingfisher", "Kestrel"};
-            String base = colors[random.nextInt(colors.length)] + " " + birds[random.nextInt(birds.length)] + " Workspace";
+            String base = colors[RANDOM.nextInt(colors.length)] + " " + birds[RANDOM.nextInt(birds.length)] + " Workspace";
             String name = base;
             while (projects.existsByGeneratedName(name)) name = base + " " + UUID.randomUUID().toString().substring(0, 8);
             var project = projects.save(Project.personal(name));

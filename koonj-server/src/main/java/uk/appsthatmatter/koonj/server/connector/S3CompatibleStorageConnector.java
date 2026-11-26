@@ -30,6 +30,8 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -277,7 +279,7 @@ public class S3CompatibleStorageConnector implements StorageConnector, AutoClose
     public InputStream openTransferStream(StorageConnection config, String key, long size) throws IOException {
         if (size <= MEMORY_FILE_LIMIT) return openReadStream(config, key);
         var request = GetObjectRequest.builder().bucket(config.getBasePathOrBucket()).key(StoragePaths.objectKey(config, key)).build();
-        Path directory = Files.createTempDirectory("koonj-download-");
+        Path directory = createStagingDirectory("koonj-download-");
         Path staging = directory.resolve("object");
         try {
             await(transferManager(config).downloadFile(download -> download.getObjectRequest(request)
@@ -309,9 +311,10 @@ public class S3CompatibleStorageConnector implements StorageConnector, AutoClose
             return;
         }
         // A file-backed request can replay parts on retries without rereading the original stream.
-        Path staging = Files.createTempFile("koonj-upload-", ".tmp");
+        Path directory = createStagingDirectory("koonj-upload-");
+        Path staging = directory.resolve("object");
         try {
-            try (var output = Files.newOutputStream(staging)) {
+            try (var output = Files.newOutputStream(staging, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
                 byte[] buffer = new byte[1024 * 1024];
                 for (long remaining = length; remaining > 0;) {
                     int count = stream.readNBytes(buffer, 0, (int) Math.min(remaining, buffer.length));
@@ -323,7 +326,16 @@ public class S3CompatibleStorageConnector implements StorageConnector, AutoClose
             }
             await(manager.uploadFile(call -> call.putObjectRequest(request).source(staging)).completionFuture());
         } finally {
-            removeStaging(staging);
+            removeStaging(staging, directory);
+        }
+    }
+
+    private static Path createStagingDirectory(String prefix) throws IOException {
+        try {
+            return Files.createTempDirectory(prefix,
+                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        } catch (UnsupportedOperationException failure) {
+            throw new IOException("Transfer staging requires a temporary filesystem with POSIX permissions", failure);
         }
     }
 

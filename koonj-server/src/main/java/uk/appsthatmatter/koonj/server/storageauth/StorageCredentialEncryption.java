@@ -141,7 +141,8 @@ public class StorageCredentialEncryption {
     private byte[] localWrap(int operation, String keyId, byte[] data) throws GeneralSecurityException {
         SecretKeySpec key = localKeys.get(keyId);
         if (key == null) throw new StorageCredentialException("The credential wrapping key is unavailable");
-        var cipher = Cipher.getInstance("AESWrap");
+        // This is the explicit RFC 3394 transformation for the AESWrap alias used by existing envelopes.
+        var cipher = Cipher.getInstance("AES/KW/NoPadding");
         cipher.init(operation, key);
         return cipher.doFinal(data);
     }

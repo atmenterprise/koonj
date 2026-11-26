@@ -27,6 +27,8 @@ import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.util.StringUtils;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import uk.appsthatmatter.koonj.server.dto.ErrorResponse;
@@ -56,7 +58,10 @@ public class SecurityConfiguration {
 
         var bearerTokens = new DefaultBearerTokenResolver();
         http.addFilterBefore(new ApiKeyAuthenticationFilter(keys, unauthorized), BearerTokenAuthenticationFilter.class)
-                .csrf(AbstractHttpConfigurer::disable)
+                // Browsers can attach cached Basic credentials to cross-site requests.
+                .csrf(csrf -> csrf.requireCsrfProtectionMatcher(request -> basic != null
+                        && CsrfFilter.DEFAULT_CSRF_MATCHER.matches(request)
+                        && isBasicAuthorization(request.getHeader(HttpHeaders.AUTHORIZATION))))
                 .cors(cors -> cors.configurationSource(corsSource))
                 .requestCache(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -75,6 +80,10 @@ public class SecurityConfiguration {
             http.authenticationProvider(basic).httpBasic(config -> config.authenticationEntryPoint(unauthorized));
         }
         return http.build();
+    }
+
+    private static boolean isBasicAuthorization(String authorization) {
+        return authorization != null && StringUtils.startsWithIgnoreCase(authorization.trim(), "Basic");
     }
 
     @Bean

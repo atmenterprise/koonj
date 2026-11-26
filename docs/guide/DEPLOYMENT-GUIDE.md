@@ -454,6 +454,8 @@ curl -i -X POST -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" \
 
 Legacy scripts can opt in to HTTP Basic with `KOONJ_BASIC_AUTH_ENABLED=true`, `KOONJ_BASIC_AUTH_USERNAME`, and `KOONJ_BASIC_AUTH_PASSWORD`. This account defaults to `KOONJ_VIEWER`. Set `KOONJ_BASIC_AUTH_ROLE` to the role the script needs. JWT Bearer is the default.
 
+Before a write request with HTTP Basic, call `GET /api/v1/csrf` with the Basic credentials. Keep the returned session cookie and send it with the write request, along with the Basic credentials and the returned `token` in the header named by `headerName`. Fetch a fresh token if the session expires.
+
 Compose uses Keycloak development mode and seeded credentials. Use a production Keycloak configuration and real secrets for deployed environments. The startup import skips an existing realm, so customize persisted realms in the admin console. PostgreSQL's initial credentials also apply only when initializing a new volume.
 
 ### Register storage and archive a file

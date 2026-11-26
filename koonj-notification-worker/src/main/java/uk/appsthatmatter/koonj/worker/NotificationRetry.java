@@ -5,15 +5,16 @@ import org.springframework.stereotype.Component;
 import uk.appsthatmatter.koonj.notification.NotificationChannel;
 import uk.appsthatmatter.koonj.notification.NotificationDelivery;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static uk.appsthatmatter.koonj.notification.NotificationDelivery.Status.FAILED;
 
 @Component
 class NotificationRetry {
+    private static final SecureRandom RANDOM = new SecureRandom();
     private final int mailAttempts;
     private final int webhookAttempts;
     private final Duration mailDelay;
@@ -41,7 +42,7 @@ class NotificationRetry {
         if (retryable && totalAttempts < (email ? mailAttempts : webhookAttempts)) {
             Duration base = email ? mailDelay : webhookDelay;
             long delay = Math.min(900_000, Math.min(base.toMillis(), 900_000) * (1L << Math.max(0, totalAttempts - 1)));
-            long jitter = ThreadLocalRandom.current().nextLong(delay / 4 + 1);
+            long jitter = RANDOM.nextLong(delay / 4 + 1);
             delivery.setDispatchToken(UUID.randomUUID());
             delivery.setPublishAfter(Instant.now().plusMillis(delay + jitter));
             return;
