@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 public class StorageAuthentication {
     private static final Pattern ROLE_ARN = Pattern.compile("arn:(aws(?:-[a-z0-9-]+)?):iam::([0-9]{12}):role/[A-Za-z0-9+=,.@_/!-]+");
     private static final Pattern AWS_BUCKET = Pattern.compile("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]");
-    private static final Pattern REGION = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
+    private static final Pattern REGION = Pattern.compile("[a-z0-9]++(?:-[a-z0-9]++)*+");
 
     private final String externalIdNamespace;
     private final boolean allowDefaultChain;

@@ -182,5 +182,24 @@ public class StorageCredentialEncryption {
         if (value != null) Arrays.fill(value, (byte) 0);
     }
 
-    private record Envelope(int version, UUID revision, String keyId, byte[] wrappedKey, byte[] nonce, byte[] ciphertext) {}
+    private record Envelope(int version, UUID revision, String keyId, byte[] wrappedKey, byte[] nonce, byte[] ciphertext) {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Envelope envelope
+                    && version == envelope.version
+                    && Objects.equals(revision, envelope.revision)
+                    && Objects.equals(keyId, envelope.keyId)
+                    && Arrays.equals(wrappedKey, envelope.wrappedKey)
+                    && Arrays.equals(nonce, envelope.nonce)
+                    && Arrays.equals(ciphertext, envelope.ciphertext);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(version, revision, keyId,
+                    Arrays.hashCode(wrappedKey), Arrays.hashCode(nonce), Arrays.hashCode(ciphertext));
+        }
+
+        @Override public String toString() { return "Storage credential envelope"; }
+    }
 }

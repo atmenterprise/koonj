@@ -2,8 +2,7 @@ package uk.appsthatmatter.koonj.server.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -26,9 +25,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 
+@Slf4j
 @Component
 final class McpSessions {
-    private static final Logger LOG = LoggerFactory.getLogger(McpSessions.class);
     private static final long SESSION_TIMEOUT = Duration.ofHours(24).toMillis();
     private static final int SESSIONS_PER_KEY = 16;
     private static final int CALLS_PER_SESSION = 8;
@@ -38,7 +37,7 @@ final class McpSessions {
     private final int maxSessions;
     private final Duration heartbeatInterval;
     private final Map<UUID, Session> sessions = new HashMap<>();
-    private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService workers;
     private final Semaphore calls;
 
     McpSessions(ApiKeyService keys, McpProtocol protocol,
@@ -53,6 +52,8 @@ final class McpSessions {
             throw new IllegalArgumentException("MCP heartbeat interval must be positive");
         }
         this.heartbeatInterval = heartbeatInterval;
+        this.workers = Executors.newFixedThreadPool(this.calls.availablePermits(),
+                Thread.ofPlatform().name("mcp-call-", 0).factory());
     }
 
     SseEmitter open(ApiKeyService.Principal owner, String messagePath) {
@@ -108,7 +109,7 @@ final class McpSessions {
                     ProjectScope.run(session.owner.projectId(), () ->
                             session.result(protocol.handle(request, session.state, authentication)));
                 } catch (RuntimeException failure) {
-                    LOG.warn("MCP session processing failed", failure);
+                    log.warn("MCP session processing failed", failure);
                     session.result(McpProtocol.error(request.get("id"), -32603, "Internal error."));
                 } finally {
                     SecurityContextHolder.clearContext();
@@ -161,7 +162,7 @@ final class McpSessions {
             } catch (InterruptedException failure) {
                 Thread.currentThread().interrupt();
             } catch (RuntimeException failure) {
-                LOG.warn("MCP heartbeat failed", failure);
+                log.warn("MCP heartbeat failed", failure);
             } finally {
                 close();
             }

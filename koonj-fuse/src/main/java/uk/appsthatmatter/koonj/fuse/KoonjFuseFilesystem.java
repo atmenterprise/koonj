@@ -42,6 +42,10 @@ final class KoonjFuseFilesystem extends FuseStubFS implements AutoCloseable {
     private static final Pattern REFERENCE = Pattern.compile(
             "(?:koonj-ref:/+|\\.koonj-ref-)([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})");
     private static final boolean WINDOWS = File.separatorChar == '\\';
+    private static final int FILE_PERMISSIONS = FileStat.S_IRUSR | FileStat.S_IWUSR
+            | FileStat.S_IRGRP | FileStat.S_IROTH;
+    private static final int DIRECTORY_PERMISSIONS = FILE_PERMISSIONS
+            | FileStat.S_IXUSR | FileStat.S_IXGRP | FileStat.S_IXOTH;
 
     private final Path backing;
     private final KoonjAgentClient agent;
@@ -79,7 +83,8 @@ final class KoonjFuseFilesystem extends FuseStubFS implements AutoCloseable {
 
             stat.st_uid.set(uid);
             stat.st_gid.set(gid);
-            stat.st_mode.set(actual.isDirectory() ? FileStat.S_IFDIR | 0755 : FileStat.S_IFREG | 0644);
+            stat.st_mode.set(actual.isDirectory() ? FileStat.S_IFDIR | DIRECTORY_PERMISSIONS
+                    : FileStat.S_IFREG | FILE_PERMISSIONS);
             stat.st_nlink.set(actual.isDirectory() ? 2 : 1);
             stat.st_size.set(size);
             stat.st_blocks.set(id == null ? Math.ceilDiv(size, 512) : 0);
@@ -137,12 +142,24 @@ final class KoonjFuseFilesystem extends FuseStubFS implements AutoCloseable {
             }
 
             var file = new OpenFile(entry, id, writable);
-            // Samba can open a handle for a metadata query without reading content.
-            if (id == null || !recallOnRead) file.channel();
-            long handle = nextHandle.incrementAndGet();
-            handles.put(handle, file);
-            info.fh.set(handle);
-            return 0;
+            boolean registered = false;
+            try {
+                // Samba can open a handle for a metadata query without reading content.
+                if (id == null || !recallOnRead) file.channel();
+                long handle = nextHandle.incrementAndGet();
+                info.fh.set(handle);
+                handles.put(handle, file);
+                registered = true;
+                return 0;
+            } finally {
+                if (!registered) {
+                    try {
+                        file.close();
+                    } catch (IOException failure) {
+                        log.warn("Could not close file handle after failed open", failure);
+                    }
+                }
+            }
         } catch (IOException | InterruptedException | ExecutionException | RuntimeException failure) {
             return errno(path, failure);
         }
