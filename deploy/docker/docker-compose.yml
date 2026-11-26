@@ -1,0 +1,372 @@
+# =============================================================================
+# Koonj — Production Docker Compose
+# =============================================================================
+# Deploys the full Koonj stack:
+#   - PostgreSQL   (database)
+#   - Keycloak     (identity & access management)
+#   - RabbitMQ     (shared task broker)
+#   - koonj-server (API)
+#   - koonj-notification-worker (delivery)
+#   - koonj-ui     (Nginx + React SPA)
+#
+# Usage:
+#   cp .env.example .env        # review and customise all values
+#   docker compose up -d --build --wait
+#
+# Scaling:
+#   docker compose up -d --scale koonj-server=3
+#   docker compose up -d --scale koonj-ui=2
+# =============================================================================
+name: koonj
+
+services:
+  # Repository
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KOONJ_DB_NAME:-koonj}
+      POSTGRES_USER: ${KOONJ_DB_USERNAME:-koonj}
+      POSTGRES_PASSWORD: ${KOONJ_DB_PASSWORD:?Set KOONJ_DB_PASSWORD in .env}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD in .env}
+    ports:
+      - "${KOONJ_PG_BIND:-127.0.0.1}:${KOONJ_PG_PORT:-5432}:5432"
+    volumes:
+      - koonj_pgdata:/var/lib/postgresql
+      - ./keycloak/init-db.sql:/docker-entrypoint-initdb.d/10-keycloak.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - koonj-internal
+
+  # IAM
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: ["start", "--import-realm"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: ${KOONJ_KEYCLOAK_EXTERNAL_URL:?Set KOONJ_KEYCLOAK_EXTERNAL_URL in .env}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "false"
+    ports:
+      - "${KOONJ_KEYCLOAK_BIND:-127.0.0.1}:${KOONJ_KEYCLOAK_PORT:-8180}:8080"
+    volumes:
+      - ./keycloak/koonj-realm.json:/opt/keycloak/data/import/koonj-realm.json:ro
+      - ./keycloak/themes/koonj:/opt/keycloak/themes/koonj:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3;
+          read -r version code rest <&3; test "$$code" = 200'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - koonj-internal
+
+  # Koonj Server + API
+  koonj-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: &koonj-server-image koonj-server:${KOONJ_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment: &koonj-server-env
+      SPRING_PROFILES_ACTIVE: production
+      KOONJ_LOG_LEVEL: ${KOONJ_LOG_LEVEL:-INFO}
+      KOONJ_LOG_FILE: ${KOONJ_LOG_FILE:-}
+      KOONJ_STORAGE_KEY_PROVIDER: "${KOONJ_STORAGE_KEY_PROVIDER:-disabled}"
+      KOONJ_STORAGE_KMS_KEY_ARN: "${KOONJ_STORAGE_KMS_KEY_ARN:-}"
+      KOONJ_STORAGE_KMS_PREVIOUS_KEY_ARNS: "${KOONJ_STORAGE_KMS_PREVIOUS_KEY_ARNS:-}"
+      KOONJ_STORAGE_LOCAL_ACTIVE_KEY: "${KOONJ_STORAGE_LOCAL_ACTIVE_KEY:-}"
+      KOONJ_STORAGE_LOCAL_KEYS: "${KOONJ_STORAGE_LOCAL_KEYS:-}"
+      KOONJ_STORAGE_SECRET_CACHE_TTL: "${KOONJ_STORAGE_SECRET_CACHE_TTL:-PT30S}"
+      KOONJ_AWS_EXTERNAL_ID_NAMESPACE: "${KOONJ_AWS_EXTERNAL_ID_NAMESPACE:-}"
+      KOONJ_AWS_ALLOW_DEFAULT_CHAIN: "${KOONJ_AWS_ALLOW_DEFAULT_CHAIN:-true}"
+      KOONJ_AWS_SECRETS_REGION: "${KOONJ_AWS_SECRETS_REGION:-}"
+      KOONJ_DB_URL: "jdbc:postgresql://postgres:5432/${KOONJ_DB_NAME:-koonj}?reWriteBatchedInserts=true"
+      KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
+      KOONJ_DB_PASSWORD: ${KOONJ_DB_PASSWORD}
+      KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
+      KOONJ_PROJECTS_AGENT_IDS: ${KOONJ_PROJECTS_AGENT_IDS:-00000000-0000-0000-0000-000000000001}
+      KOONJ_TRANSFER_RABBIT_ENABLED: "true"
+      KOONJ_TRANSFER_WORKER_ENABLED: "false"
+      KOONJ_TRANSFER_RABBIT_HOST: ${KOONJ_TRANSFER_RABBIT_HOST:-${KOONJ_RABBITMQ_HOST:-rabbitmq}}
+      KOONJ_TRANSFER_RABBIT_PORT: ${KOONJ_TRANSFER_RABBIT_PORT:-${KOONJ_RABBITMQ_PORT:-5672}}
+      KOONJ_TRANSFER_RABBIT_USERNAME: ${KOONJ_TRANSFER_RABBIT_USERNAME:-${KOONJ_RABBITMQ_USERNAME:-koonj}}
+      KOONJ_TRANSFER_RABBIT_PASSWORD: ${KOONJ_TRANSFER_RABBIT_PASSWORD:-${KOONJ_RABBITMQ_PASSWORD}}
+      KOONJ_TRANSFER_RABBIT_VHOST: ${KOONJ_TRANSFER_RABBIT_VHOST:-${KOONJ_RABBITMQ_VHOST:-koonj}}
+      KOONJ_TRANSFER_RABBIT_SSL: "${KOONJ_TRANSFER_RABBIT_SSL:-${KOONJ_RABBITMQ_SSL:-false}}"
+      KOONJ_TRANSFER_STORAGE_ALIASES: "${KOONJ_TRANSFER_STORAGE_ALIASES:-}"
+      KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS: "${KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS:-true}"
+      KOONJ_TRANSFER_MOUNTED_DOMAIN: "${KOONJ_TRANSFER_MOUNTED_DOMAIN:-default}"
+      KOONJ_TRANSFER_MOUNT_POOLS: "${KOONJ_TRANSFER_MOUNT_POOLS:-}"
+      KOONJ_DDL_AUTO: ${KOONJ_DDL_AUTO:-update}
+      KOONJ_QUOTA_CATALOGED_FILES: "${KOONJ_QUOTA_CATALOGED_FILES:-0}"
+      KOONJ_QUOTA_STORAGE_CONNECTIONS: "${KOONJ_QUOTA_STORAGE_CONNECTIONS:-0}"
+      KOONJ_QUOTA_TRANSFER_CONCURRENCY: "${KOONJ_QUOTA_TRANSFER_CONCURRENCY:-0}"
+      KOONJ_LICENSE_EXPIRES_AT: "${KOONJ_LICENSE_EXPIRES_AT:-}"
+      KOONJ_LICENSE_GRACE_ENDS_AT: "${KOONJ_LICENSE_GRACE_ENDS_AT:-}"
+      KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL: "${KOONJ_NOTIFICATION_LIMIT_CHECK_INTERVAL:-1m}"
+      KOONJ_AUTH_ISSUER_URI: "${KOONJ_KEYCLOAK_EXTERNAL_URL:?Set KOONJ_KEYCLOAK_EXTERNAL_URL in .env}/realms/koonj"
+      KOONJ_AUTH_JWK_SET_URI: "http://keycloak:8080/realms/koonj/protocol/openid-connect/certs"
+      KOONJ_CORS_ALLOWED_ORIGINS: ${KOONJ_CORS_ALLOWED_ORIGINS:-http://localhost}
+      KOONJ_BASIC_AUTH_ENABLED: ${KOONJ_BASIC_AUTH_ENABLED:-false}
+      KOONJ_BASIC_AUTH_USERNAME: ${KOONJ_BASIC_AUTH_USERNAME:-}
+      KOONJ_BASIC_AUTH_PASSWORD: ${KOONJ_BASIC_AUTH_PASSWORD:-}
+      KOONJ_BASIC_AUTH_ROLE: ${KOONJ_BASIC_AUTH_ROLE:-KOONJ_VIEWER}
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+      JAVA_OPTS: >-
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
+        -XX:InitialRAMPercentage=50.0
+        -Djava.security.egd=file:/dev/./urandom
+    volumes: &koonj-server-volumes
+      - ${KOONJ_DATA_MOUNT:-${KOONJ_FUSE_BACKING_DIR:-./data}}:/mnt/koonj:rw
+    healthcheck: &koonj-server-healthcheck
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8080/actuator/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    deploy: &koonj-server-deploy
+      resources:
+        limits:
+          memory: ${KOONJ_SERVER_MEMORY:-2G}
+    networks:
+      - koonj-internal
+
+  koonj-transfer-worker:
+    image: *koonj-server-image
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *koonj-server-env
+      KOONJ_LOG_FILE: ${KOONJ_TRANSFER_WORKER_LOG_FILE:-}
+      KOONJ_TRANSFER_RELAY_ENABLED: "false"
+      KOONJ_TRANSFER_WORKER_ENABLED: "true"
+      KOONJ_TRANSFER_WORKER_POOL: ${KOONJ_TRANSFER_WORKER_POOL:-default}
+      KOONJ_TRANSFER_BACKGROUND_WORKERS: "${KOONJ_TRANSFER_BACKGROUND_WORKERS:-2}"
+      KOONJ_TRANSFER_INTERACTIVE_WORKERS: "${KOONJ_TRANSFER_INTERACTIVE_WORKERS:-1}"
+      KOONJ_TRANSFER_TENANT_JOBS: "${KOONJ_TRANSFER_TENANT_JOBS:-2}"
+      KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS: "${KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS:-1}"
+      KOONJ_TRANSFER_BACKEND_JOBS: "${KOONJ_TRANSFER_BACKEND_JOBS:-8}"
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
+    volumes: *koonj-server-volumes
+    healthcheck: *koonj-server-healthcheck
+    deploy: *koonj-server-deploy
+    networks:
+      - koonj-internal
+    stop_grace_period: 90s
+
+  rabbitmq:
+    image: rabbitmq:4.2-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${KOONJ_RABBITMQ_USERNAME:-koonj}
+      RABBITMQ_DEFAULT_PASS: ${KOONJ_RABBITMQ_PASSWORD:?Set KOONJ_RABBITMQ_PASSWORD in .env}
+      RABBITMQ_DEFAULT_VHOST: ${KOONJ_RABBITMQ_VHOST:-koonj}
+    volumes:
+      - koonj_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+    networks:
+      - koonj-internal
+
+  koonj-notification-worker:
+    build:
+      context: ./notification-worker
+      dockerfile: Dockerfile
+    image: koonj-notification-worker:${KOONJ_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      KOONJ_DB_URL: "jdbc:postgresql://postgres:5432/${KOONJ_DB_NAME:-koonj}"
+      KOONJ_DB_USERNAME: ${KOONJ_DB_USERNAME:-koonj}
+      KOONJ_DB_PASSWORD: ${KOONJ_DB_PASSWORD}
+      KOONJ_RABBITMQ_HOST: ${KOONJ_RABBITMQ_HOST:-rabbitmq}
+      KOONJ_RABBITMQ_PORT: ${KOONJ_RABBITMQ_PORT:-5672}
+      KOONJ_RABBITMQ_USERNAME: ${KOONJ_RABBITMQ_USERNAME:-koonj}
+      KOONJ_RABBITMQ_PASSWORD: ${KOONJ_RABBITMQ_PASSWORD}
+      KOONJ_RABBITMQ_VHOST: ${KOONJ_RABBITMQ_VHOST:-koonj}
+      KOONJ_RABBITMQ_SSL: ${KOONJ_RABBITMQ_SSL:-false}
+      KOONJ_NOTIFICATION_DB_POOL_SIZE: ${KOONJ_NOTIFICATION_DB_POOL_SIZE:-4}
+      KOONJ_NOTIFICATION_EMAIL_CONCURRENCY: ${KOONJ_NOTIFICATION_EMAIL_CONCURRENCY:-2}
+      KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY: ${KOONJ_NOTIFICATION_WEBHOOK_CONCURRENCY:-2}
+      KOONJ_NOTIFICATION_POLL_INTERVAL: ${KOONJ_NOTIFICATION_POLL_INTERVAL:-1s}
+      KOONJ_MAIL_MAX_ATTEMPTS: ${KOONJ_MAIL_MAX_ATTEMPTS:-3}
+      KOONJ_MAIL_RETRY_DELAY: ${KOONJ_MAIL_RETRY_DELAY:-30s}
+      KOONJ_PUBLIC_UI_URL: "${KOONJ_PUBLIC_UI_URL:-}"
+      KOONJ_MAIL_HOST: "${KOONJ_MAIL_HOST:-}"
+      KOONJ_MAIL_PORT: "${KOONJ_MAIL_PORT:-587}"
+      KOONJ_MAIL_USERNAME: "${KOONJ_MAIL_USERNAME:-}"
+      KOONJ_MAIL_PASSWORD: "${KOONJ_MAIL_PASSWORD:-}"
+      KOONJ_MAIL_FROM: "${KOONJ_MAIL_FROM:-}"
+      KOONJ_MAIL_TLS: "${KOONJ_MAIL_TLS:-STARTTLS}"
+      KOONJ_MAIL_TIMEOUT: "${KOONJ_MAIL_TIMEOUT:-10s}"
+      KOONJ_WEBHOOK_CONNECT_TIMEOUT: "${KOONJ_WEBHOOK_CONNECT_TIMEOUT:-5s}"
+      KOONJ_WEBHOOK_REQUEST_TIMEOUT: "${KOONJ_WEBHOOK_REQUEST_TIMEOUT:-10s}"
+      KOONJ_WEBHOOK_MAX_ATTEMPTS: "${KOONJ_WEBHOOK_MAX_ATTEMPTS:-3}"
+      KOONJ_WEBHOOK_RETRY_DELAY: "${KOONJ_WEBHOOK_RETRY_DELAY:-1s}"
+    deploy:
+      resources:
+        limits:
+          memory: ${KOONJ_NOTIFICATION_WORKER_MEMORY:-512M}
+    networks:
+      - koonj-internal
+
+  # UI
+  koonj-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    image: koonj-ui:${KOONJ_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+    environment:
+      KOONJ_API_UPSTREAM: "koonj-server:8080"
+    ports:
+      - "${KOONJ_UI_BIND:-0.0.0.0}:${KOONJ_UI_PORT:-80}:80"
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost:80/']
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+      # Scale with: docker compose up -d --scale koonj-ui=N
+    networks:
+      - koonj-internal
+
+  # Optional FUSE gateway (Linux hosts)
+  koonj-fuse:
+    profiles: ["fuse", "smb"]
+    restart: unless-stopped
+    build:
+      context: ./fuse
+      dockerfile: Dockerfile
+    image: koonj-fuse:${KOONJ_VERSION:-latest}
+    depends_on:
+      koonj-server:
+        condition: service_healthy
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      KOONJ_FUSE_BACKING_DIR: /mnt/koonj-backing
+      KOONJ_FUSE_MOUNT_POINT: /mnt/koonj-share
+      KOONJ_FUSE_ALLOW_OTHER: ${KOONJ_FUSE_ALLOW_OTHER:-true}
+      KOONJ_FUSE_RECALL_ON_READ: "true"
+      KOONJ_SERVER_URL: http://koonj-server:8080
+      KOONJ_AGENT_TOKEN_URI: ${KOONJ_AGENT_TOKEN_URI:-http://keycloak:8080/realms/koonj/protocol/openid-connect/token}
+      KOONJ_AGENT_CLIENT_ID: ${KOONJ_AGENT_CLIENT_ID:-koonj-agent}
+      KOONJ_AGENT_PROJECT_ID: ${KOONJ_AGENT_PROJECT_ID:-}
+      KOONJ_AGENT_CLIENT_SECRET: ${KOONJ_AGENT_CLIENT_SECRET:-}
+    volumes:
+      - type: bind
+        source: ${KOONJ_DATA_MOUNT:-${KOONJ_FUSE_BACKING_DIR:-/srv/koonj/backing}}
+        target: /mnt/koonj-backing
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${KOONJ_FUSE_MOUNT_POINT:-/srv/koonj/share}
+        target: /mnt/koonj-share
+        bind:
+          create_host_path: false
+          propagation: rshared
+    healthcheck:
+      test: ["CMD-SHELL", 'test "$$(stat -f -c %t /mnt/koonj-share)" = 65735546']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - koonj-internal
+
+  koonj-smb:
+    profiles: ["smb"]
+    image: quay.io/samba.org/samba-server:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      koonj-fuse:
+        condition: service_healthy
+        restart: true
+    entrypoint: ["/bin/sh", "/etc/koonj-smb/start.sh"]
+    environment:
+      KOONJ_SMB_PASSWORD: ${KOONJ_SMB_PASSWORD:-}
+    ports:
+      - "${KOONJ_SMB_BIND:-127.0.0.1}:${KOONJ_SMB_PORT:-445}:445"
+    volumes:
+      - ./samba:/etc/koonj-smb:ro
+      - type: bind
+        source: ${KOONJ_FUSE_MOUNT_POINT:-/srv/koonj/share}
+        target: /mnt/koonj-share
+        read_only: true
+        bind:
+          create_host_path: false
+          propagation: rslave
+    networks:
+      - koonj-internal
+
+volumes:
+  koonj_rabbitmq_data:
+  koonj_pgdata:
+    driver: local
+
+networks:
+  koonj-internal:
+    driver: bridge

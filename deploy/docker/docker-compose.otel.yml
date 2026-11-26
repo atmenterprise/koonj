@@ -1,0 +1,33 @@
+# Use with docker-compose.yml from this directory.
+# docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build --wait
+services:
+  koonj-server:
+    environment:
+      <<: &openobserve-telemetry
+        KOONJ_OTLP_LOGS_ENDPOINT: http://openobserve:5080/api/${KOONJ_OPENOBSERVE_ORGANIZATION:-default}/v1/logs
+        OPENOBSERVE_AUTHORIZATION: ${OPENOBSERVE_AUTHORIZATION:?Set OPENOBSERVE_AUTHORIZATION in .env}
+        MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "true"
+        MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://openobserve:5080/api/${KOONJ_OPENOBSERVE_ORGANIZATION:-default}/v1/metrics
+        MANAGEMENT_OTLP_TRACING_EXPORT_ENABLED: "true"
+        MANAGEMENT_OTLP_TRACING_ENDPOINT: http://openobserve:5080/api/${KOONJ_OPENOBSERVE_ORGANIZATION:-default}/v1/traces
+        MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${MANAGEMENT_TRACING_SAMPLING_PROBABILITY:-1.0}
+      KOONJ_OPENOBSERVE_URL: ${KOONJ_OPENOBSERVE_URL:-http://localhost:${OPENOBSERVE_PORT:-5080}/web}
+      KOONJ_OPENOBSERVE_ORGANIZATION: ${KOONJ_OPENOBSERVE_ORGANIZATION:-default}
+      KOONJ_OPENOBSERVE_DASHBOARDS_ENDPOINT: http://openobserve:5080/api/${KOONJ_OPENOBSERVE_ORGANIZATION:-default}/dashboards
+      KOONJ_OPENOBSERVE_DASHBOARDS_AUTHORIZATION: ${KOONJ_OPENOBSERVE_DASHBOARDS_AUTHORIZATION:-${OPENOBSERVE_AUTHORIZATION}}
+    depends_on:
+      openobserve:
+        condition: service_started
+
+  koonj-transfer-worker:
+    environment: *openobserve-telemetry
+
+  openobserve:
+    extends:
+      file: docker-compose.openobserve.yml
+      service: openobserve
+    networks:
+      - koonj-internal
+
+volumes:
+  openobserve_data:

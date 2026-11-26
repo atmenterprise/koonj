@@ -1,40 +1,94 @@
-# koonj
-Faithful messenger carrying things across vast distances and reliably returning home
+<p align="center">
+  <img src="docs/logo/koonj-mark-192.png" alt="Koonj Logo" width="120" />
+</p>
 
-## Foundation metadata API
+<h1 align="center">Koonj</h1>
 
-Submit a scan with `POST /api/scans` and a JSON body such as `{"rootId":1}`. The API queues work for a registered root and returns a scan ID with HTTP 202. Read progress at `GET /api/scans/{id}`. A second active scan for the same root returns HTTP 409.
+<p align="center">
+  <strong>Faithful messenger carrying things across vast distances and reliably returning home</strong>
+</p>
 
-Browse files with `GET /api/inventory?rootId=1&limit=100`. The page size ranges from 1 to 200. Follow the opaque `nextCursor` in the next request's `cursor` parameter with the same root. A null cursor marks the end. Inventory uses ascending file IDs and reflects committed changes between requests.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" /></a>
+  <img src="https://img.shields.io/badge/Java-21-orange.svg" alt="Java 21" />
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg" alt="Spring Boot 3.5" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB.svg" alt="React 19" />
+  <a href="https://sonarcloud.io/project/overview?id=atmenterprise_koonj"><img src="https://img.shields.io/badge/SonarCloud-Quality%20Gate-4E9BCD.svg" alt="SonarCloud" /></a>
+</p>
 
-Queue a generation-specific operation with `POST /api/operations` and a JSON body such as `{"generationId":1,"operation":"RECALL"}`. Supported operations are `ARCHIVE`, `TIER`, and `RECALL`. Read the returned operation ID at `GET /api/operations/{id}`. Both command endpoints accept JSON metadata and reject unknown fields.
+<p align="center">
+  Developed and maintained by <a href="https://www.appsthatmatter.uk"><strong>Apps That Matter</strong></a>
+</p>
 
-The API and console are accessible without signing in. Use `GET /api/roots` to list registered storage roots.
+---
 
-Subscribe to `GET /api/events/scans/{id}` or `GET /api/events/operations/{id}`. Each stream sends the current persisted status as a `progress` event and heartbeats between changes. On reconnect, refresh the corresponding REST status and resubscribe. The API returns HTTP 429 at the subscriber cap.
+## Overview
 
-Register existing S3 buckets and their AWS regions in the console. Registration returns a location UUID. Archive commands require `targetLocationId` with the registered bucket UUID.
+**Koonj** is an open-source, project-scoped data catalog, explorer, and tiered storage archival platform. It enables organizations to scan, catalog, archive, and transparently recall files across local/NAS mounts and S3-compatible object storage (Amazon S3, MinIO, Scality, RustFS, and LocalStack) with full lineage, checksum verification, and role-based access control.
 
-During an upgrade, stop old workers before applying the migrations. Use **Confirm legacy archive location** to bind key-only archive records and previously queued archives to one registered bucket and region for the database. Confirm the original bucket explicitly. The API records the confirmation time and rejects attempts to change the mapping.
+## Key Features
 
-Start the five local services with `docker compose -f deploy/docker-compose.yml up --build -d --wait`. The console listens on `http://localhost:8080`. Set `KOONJ_ROOT_PATH` to the source directory and register its container path under `/mnt/koonj`. The worker image includes OpenSSL for native file digests. LocalStack provisions the bucket specified by `KOONJ_LOCAL_BUCKET` in `KOONJ_LOCAL_REGION`. Register that bucket from the console to use it.
+- **Unified Storage Catalog & Explorer:** Scan mounted directories and object storage buckets, browse hierarchical inventories, inspect file lineage and checksums, and classify data by configurable `HOT`, `WARM`, and `COLD` temperature thresholds.
+- **Distributed Archive & Recall Workers:** PostgreSQL-backed path reservations and RabbitMQ-dispatched transfer workers with pause, stop, resume, retry, and cold-storage (Glacier) restore handling.
+- **Transparent FUSE & Samba Recall:** Linux FUSE gateway with an optional Samba sidecar (`vfs_offline`) allowing Windows File Explorer, macOS Finder, and Linux file managers to open archived files on demand without interactive re-authentication.
+- **Project Workspaces & Security:** Multi-project isolation, email invitations, Keycloak OIDC/SAML/social authentication (`KOONJ_ADMIN`, `KOONJ_OPERATOR`, `KOONJ_VIEWER`), and encrypted credential storage via AWS KMS, local wrapping keys, AWS Secrets Manager, or customer IAM role assumption.
+- **Notifications, Alerts & Observability:** Durable outbox + RabbitMQ notification worker supporting SMTP, Slack, Microsoft Teams, and HMAC-signed webhooks, alongside quota/license monitoring and OpenObserve OTLP logs, metrics, and traces.
+- **MCP Server Integration:** Project-scoped Model Context Protocol (MCP) SSE server with Personal Access Tokens for Claude Desktop, Cursor, Windsurf, and custom Python/LangChain agents.
 
-Enable tiering only for dedicated roots whose writers are Koonj workers. Before marking a shared mount managed, run the worker JAR with `--hold-lock <probe-path>` on one worker host. While it holds the lock, run the same JAR with `--probe-lock <probe-path>` on every other worker host using the same shared file. Require exit code zero from each probe. During managed operations the worker also checks lock exclusion with a second process on its own host. The mount must support atomic same-filesystem rename for quarantine and hard-link creation for no-clobber recall. Reserve the root's `.koonj` directory for worker coordination.
+## Architecture & Modules
 
-## Verify storage connections
+| Module / Directory | Technology | Purpose |
+| --- | --- | --- |
+| `koonj-server` | Spring Boot 3.5 / Java 21 | REST API, catalog management, transfer admission, and distributed transfer worker |
+| `koonj-ui` | React 19 / TypeScript / Vite | Web console served via Nginx in production |
+| `koonj-fuse` | Java 21 / FUSE | Linux FUSE gateway for transparent on-demand recall |
+| `koonj-notification-worker` | Spring Boot 3.5 / Java 21 | RabbitMQ-backed SMTP and webhook notification delivery |
+| `koonj-notification-model` | Java 21 | Shared notification domain models |
+| `koonj-assembly` | Maven Assembly | Packages the `docker/` and `on-premise/` deployment ZIP |
+| `deploy` | Docker Compose / SQL / Nginx | Compose stacks, PostgreSQL migrations, Keycloak realm templates, and proxy configs |
 
-In **Administration → Storage configuration**, select **Add connection**, fill in the storage details, and select **Test connection**. The test runs from the Koonj API. It checks read access to a local directory or a host-mounted NAS/SMB share under the server's `koonj.mount` directory. Mount network shares on the server before testing them.
+**External Dependencies:** PostgreSQL 15+, Keycloak 24+, and RabbitMQ 4.2.
 
-Amazon S3 is checked with a read-only `HeadBucket` request. For MinIO, Scality, and other S3-compatible services, supply access keys and add the endpoint URL to the server's comma-separated `KOONJ_CONNECTION_ALLOWED_S3_ENDPOINTS` setting. Docker Compose includes the local LocalStack endpoint by default. Custom endpoint checks use path-style addressing.
+## Quick Start
 
-The console saves connection settings and the last successful verification in the browser. Entered credentials stay in memory and are sent to the API for a test. A credential reference is saved as a name and requires a backend secret resolver before it can be used for verification.
+### Build the Deployment Bundle
 
-## Open archived files from a native file manager
+Requires JDK 21+, Maven 3.9+, and Node.js 22.12+ with npm:
 
-See the [Linux gateway and SMB setup](docs/FUSE-RECALL.md) for transparent recall from Windows Explorer, macOS Finder, and Linux file managers.
+```sh
+mvn -pl koonj-assembly -am clean package
+```
 
+This produces `koonj-assembly/target/koonj-<version>-deployment.zip` containing both `docker/` and `on-premise/` distributions.
+
+### Run with Docker
+
+1. Extract the deployment ZIP and enter `docker/`.
+2. Copy `.env.example` to `.env` and configure your database, RabbitMQ, Keycloak, and storage mount settings.
+3. Start the stack:
+
+   ```sh
+   docker compose up -d --build --wait
+   ```
+
+For full configuration, on-premise installation, scaling, and local development instructions, see the [Deployment Guide](docs/guide/DEPLOYMENT-GUIDE.md).
+
+## Documentation
+
+- **[Deployment Guide](docs/guide/DEPLOYMENT-GUIDE.md)** — Complete architecture, Docker & on-premise deployment, local development stack, distributed transfer workers, storage authentication, Keycloak, notifications, observability, and MCP integration.
+- **[FUSE & Samba Integration Guide](docs/guide/FUSE-GUIDE.md)** — Transparent recall gateway setup on Linux with optional SMB export for Windows, macOS, and Linux clients.
+- **[Koonj UI Guide](koonj-ui/README.md)** — Frontend development setup, tests, and source layout.
 
 ## Code Quality
 
-https://sonarcloud.io/project/overview?id=atmenterprise_koonj
+- [SonarCloud Project Overview](https://sonarcloud.io/project/overview?id=atmenterprise_koonj)
 
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on local setup, coding conventions, testing, and submitting pull requests.
+
+## License
+
+Copyright © 2026 [Apps That Matter](https://www.appsthatmatter.uk).
+
+Licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for the full license text.

@@ -1,0 +1,39 @@
+name: Release Please
+
+# release-please watches commits to `main` that follow the Conventional Commits
+# spec and maintains an open "Release PR" that:
+#   - bumps the project version in pom.xml files (semver: major/minor/patch)
+#   - generates / updates CHANGELOG.md
+#
+# When a maintainer merges the Release PR, release-please creates the git tag
+# (e.g. v0.2.0), which then triggers the existing CD workflow (cd.yml) to
+# build the deployment ZIP, push Docker images, and create the GitHub Release.
+#
+# No manual `git tag` is ever needed.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name:        ${{ steps.release.outputs.tag_name }}
+      version:         ${{ steps.release.outputs.version }}
+    steps:
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # Uses release-please-config.json + .release-please-manifest.json
+          # at the root of the repository.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

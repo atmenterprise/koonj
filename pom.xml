@@ -12,6 +12,7 @@
     <name>Koonj</name>
     <description>Faithful messenger carrying things across vast distances and reliably returning home</description>
     <url>https://github.com/atmenterprise/koonj</url>
+
     <modules>
         <module>koonj-ui</module>
         <module>koonj-notification-model</module>
@@ -23,7 +24,7 @@
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
-        <spring-boot.version>3.5.5</spring-boot.version>
+        <spring-boot.version>3.5.16</spring-boot.version>
         <lombok.version>1.18.40</lombok.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>

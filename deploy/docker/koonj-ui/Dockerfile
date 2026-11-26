@@ -1,0 +1,36 @@
+# =============================================================================
+# Koonj UI — Dockerfile
+# =============================================================================
+# Serves the pre-built static UI assets through Nginx with reverse proxy
+# to the API server.  The Nginx config template is rendered at startup
+# with envsubst so the API upstream is configurable per deployment.
+# =============================================================================
+FROM nginx:stable-alpine
+
+LABEL maintainer="Koonj <atmenterprise23@gmail.com>"
+LABEL org.opencontainers.image.title="koonj-ui"
+LABEL org.opencontainers.image.description="Koonj Catalog UI"
+
+# ── Runtime dependencies ────────────────────────────────────────────────────
+RUN apk add --no-cache curl
+
+# ── Remove default site ─────────────────────────────────────────────────────
+RUN rm -f /etc/nginx/conf.d/default.conf
+
+# ── Nginx configuration template ────────────────────────────────────────────
+COPY default.conf.template /etc/nginx/templates/default.conf.template
+
+# ── Static assets ───────────────────────────────────────────────────────────
+COPY --chown=nginx:nginx . /usr/share/nginx/html/
+# Remove non-web files that were copied alongside assets
+RUN rm -f /usr/share/nginx/html/Dockerfile.ui \
+          /usr/share/nginx/html/default.conf.template 2>/dev/null || true
+
+# ── Environment defaults (overridable at runtime) ───────────────────────────
+# KOONJ_API_UPSTREAM: the Docker Compose service name or external host
+ENV KOONJ_API_UPSTREAM="koonj-server:8080"
+
+EXPOSE 80
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -sf http://localhost:80/ || exit 1
