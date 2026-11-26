@@ -5,6 +5,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public final class ProjectScope {
     public static final String HEADER = "X-Koonj-Project";
@@ -32,10 +33,17 @@ public final class ProjectScope {
     }
 
     public static void run(UUID projectId, Runnable work) {
+        call(projectId, () -> {
+            work.run();
+            return null;
+        });
+    }
+
+    public static <T> T call(UUID projectId, Supplier<T> work) {
         UUID previous = WORKER.get();
         WORKER.set(projectId);
         try {
-            work.run();
+            return work.get();
         } finally {
             if (previous == null) WORKER.remove();
             else WORKER.set(previous);

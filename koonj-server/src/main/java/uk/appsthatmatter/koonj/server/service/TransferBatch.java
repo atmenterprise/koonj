@@ -1,10 +1,12 @@
 package uk.appsthatmatter.koonj.server.service;
 
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
@@ -71,13 +73,14 @@ final class TransferBatch implements AutoCloseable {
                 jobs.checkpoint(job);
             }
             jobs.beginFile(job, file.path());
-            completed.submit(() -> {
+            UUID projectId = job.getProjectId();
+            completed.submit(() -> ProjectScope.call(projectId, () -> {
                 try {
                     return new Result(file.path(), weight, file.transfer().run(), file.size(), null);
                 } catch (IOException | RuntimeException failure) {
                     return new Result(file.path(), weight, 0, file.size(), StorageErrors.describe(failure));
                 }
-            });
+            }));
             active++;
             activeBytes += weight;
         }
