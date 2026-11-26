@@ -23,12 +23,14 @@ name: PR Title Check
 #   on repos/organisations that restrict elevated token access for that event.
 
 on:
-  pull_request:
-    types:
-      - opened
-      - edited
-      - synchronize
-      - reopened
+  # Disabled — uncomment the block below and remove workflow_dispatch to re-enable.
+  # pull_request:
+  #   types:
+  #     - opened
+  #     - edited
+  #     - synchronize
+  #     - reopened
+  workflow_dispatch: {}
 
 # Minimal permissions: only read PR metadata to validate the title.
 permissions:
