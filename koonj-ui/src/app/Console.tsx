@@ -16,21 +16,26 @@ const AdminPage = lazy(() => import('../modules/admin/AdminPage'))
 const IntegrationPage = lazy(() => import('../modules/integration/IntegrationPage'))
 const ManagementPage = lazy(() => import('../modules/management/ManagementPage'))
 
+import { ProjectSettings } from '../modules/admin/ProjectSettings'
+
 const pages = [
   { path: '/Home', title: 'Home', icon: 'home', access: [] },
   { path: '/explorer', title: 'Catalog', icon: 'folder', access: ['CATALOG_VIEW'] },
   { path: '/activities', title: 'Activity log', shortTitle: 'Activity', icon: 'activity', access: ['ACTIVITY_VIEW'] },
   { path: '/storage', title: 'Storage Status', shortTitle: 'Storage', icon: 'drive', access: ['STORAGE_VIEW'] },
   { path: '/management', title: 'Management', icon: 'server', access: ['STORAGE_MANAGE', 'POLICY_MANAGE'] },
+  { path: '/projects', title: 'Projects', icon: 'projects', access: [] },
   { path: '/integration', title: 'Integration', icon: 'link', access: [] },
-  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'PROJECTS_MANAGE', 'PERMISSIONS_MANAGE'] },
+  { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'PERMISSIONS_MANAGE'] },
 ] as const
 const browserLocation = () => window.location.pathname + window.location.search
 function currentLocation() {
   const location = browserLocation()
   if (window.location.pathname.toLowerCase().replace(/\/+$/, '') !== '/admin') return location
   const params = new URLSearchParams(window.location.search)
-  if (params.get('section') === 'mcp') return '/integration'
+  if (params.get('section') === 'projects') return '/projects'
+  if (params.get('section') === 'notifications') return '/integration?section=notifications'
+  if (params.get('section') === 'mcp') return '/integration?section=mcp'
   if (params.get('section') === 'api') return '/integration?section=api'
   if (params.get('section') === 'storage') return '/management'
   if (params.get('section') !== 'activity') return location
@@ -48,7 +53,7 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
     return themes.find(option => option.id === preference)?.id ?? 'classic'
   })
   const { can } = usePermissions()
-  const { hasRole } = useAuth()
+  const { hasRole, user } = useAuth()
   const { notify } = useActivityNotifications()
   const deniedLocation = useRef<string | undefined>(undefined)
   const canViewActivity = can('ACTIVITY_VIEW')
@@ -135,8 +140,9 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
           : page.path === '/integration' ? <Suspense fallback={<LoadingRows label="Loading integrations" />}>
             <IntegrationPage section={params.get('section')} navigate={navigate} projectId={project.id} />
           </Suspense>
+          : page.path === '/projects' ? <ProjectSettings canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />
           : page.path === '/admin' ? <Suspense fallback={<LoadingRows label="Loading administration" />}>
-            <AdminPage section={params.get('section')} navigate={navigate} projectId={project.id} refreshMemberships={refreshMemberships} />
+            <AdminPage section={params.get('section')} navigate={navigate} />
           </Suspense>
           : page.path === '/management' ? <Suspense fallback={<LoadingRows label="Loading management" />}>
             <ManagementPage section={params.get('section')} navigate={navigate} />
@@ -144,7 +150,8 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
           : page.path === '/storage' ? <Suspense fallback={<LoadingRows label="Loading storage status" />}>
             <StorageStatusPage />
           </Suspense>
-          : <DashboardPage navigate={navigate} />}
+          : user?.roles.length ? <DashboardPage navigate={navigate} />
+          : <ProjectSettings canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />}
       </main>
       <footer className="app-footer"><span>© 2026 Apps that Matter</span><span>Version 1.0</span></footer>
     </div>

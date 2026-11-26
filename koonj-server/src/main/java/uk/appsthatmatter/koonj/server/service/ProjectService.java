@@ -1,6 +1,5 @@
 package uk.appsthatmatter.koonj.server.service;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -16,29 +15,21 @@ import uk.appsthatmatter.koonj.server.entity.ProjectMembership;
 import uk.appsthatmatter.koonj.server.repository.ProjectAccountRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectMembershipRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectRepository;
-import uk.appsthatmatter.koonj.server.security.KoonjRoles;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
+import uk.appsthatmatter.koonj.server.entity.ProjectMembership.Role;
 
 @Service
 public class ProjectService implements ApplicationRunner {
     private final ProjectRepository projects;
     private final ProjectAccountRepository accounts;
     private final ProjectMembershipRepository memberships;
-    private final Set<String> legacySubjects;
-
-    public ProjectService(ProjectRepository projects, ProjectAccountRepository accounts, ProjectMembershipRepository memberships,
-                          @Value("${koonj.projects.legacy-subjects:}") String legacySubjects) {
+    public ProjectService(ProjectRepository projects, ProjectAccountRepository accounts, ProjectMembershipRepository memberships) {
         this.projects = projects;
         this.accounts = accounts;
         this.memberships = memberships;
-        this.legacySubjects = Arrays.stream(legacySubjects.split(",")).map(String::strip)
-                .filter(subject -> !subject.isEmpty()).collect(Collectors.toUnmodifiableSet());
     }
 
     @Override
@@ -51,83 +42,88 @@ public class ProjectService implements ApplicationRunner {
         }
     }
 
-    public record ProjectView(UUID id, String name) {
-        static ProjectView from(Project project) { return new ProjectView(project.getId(), project.getName()); }
-    }
-    public record AccountView(String subject, String displayName, String email) {
-        static AccountView from(ProjectAccount account) {
-            return new AccountView(account.getSubject(), account.getDisplayName(), account.getEmail());
+    public record ProjectView(UUID id, String name, Role role, UUID defaultProjectId) {
+        static ProjectView from(ProjectMembership member) {
+            var project = member.getProject();
+            return new ProjectView(project.getId(), project.getName(), member.getRole(), member.getAccount().getDefaultProject().getId());
         }
     }
+    public record AccountView(String subject, String displayName, String email, Role role, boolean personalOwner) {}
 
     @Transactional
     public List<ProjectView> onboard(Authentication auth) {
-        ProjectAccount account = register(auth);
-        var existing = memberships.findByAccountSubjectOrderByProjectNameAscProjectIdAsc(account.getSubject());
-        if (!existing.isEmpty()) return existing.stream().map(member -> ProjectView.from(member.getProject())).toList();
-        boolean legacy = isAdministrator(auth) || !(auth instanceof JwtAuthenticationToken) || legacySubjects.contains(auth.getName());
-        Project project = legacy ? project(ProjectScope.LEGACY) : projects.save(
-                new Project(UUID.randomUUID(), limit("Personal project · " + account.getDisplayName(), 100)));
-        memberships.save(new ProjectMembership(project, account));
-        return List.of(ProjectView.from(project));
+        var account = provision(auth);
+        return memberships.findByAccountSubjectOrderByProjectNameAscProjectIdAsc(account.getSubject())
+                .stream().map(ProjectView::from).toList();
+    }
+
+    ProjectAccount provision(Authentication auth) {
+        var account = register(auth);
+        if (account.getDefaultProject() == null) {
+            // Serialize generated-name selection across instances, including migrated accounts.
+            projects.lock(ProjectScope.LEGACY).orElseThrow();
+            var random = java.util.concurrent.ThreadLocalRandom.current();
+            String[] colors = {"Amber", "Copper", "Silver", "Golden", "Indigo", "Scarlet"};
+            String[] birds = {"Heron", "Crane", "Falcon", "Sparrow", "Kingfisher", "Kestrel"};
+            String base = colors[random.nextInt(colors.length)] + " " + birds[random.nextInt(birds.length)] + " Workspace";
+            String name = base;
+            while (projects.existsByGeneratedName(name)) name = base + " " + UUID.randomUUID().toString().substring(0, 8);
+            var project = projects.save(Project.personal(name));
+            account.setDefaultProject(project);
+            memberships.save(new ProjectMembership(project, account, Role.ADMIN));
+        }
+        return account;
     }
 
     @Transactional
     public UUID authorize(Authentication auth, UUID requested) {
-        if (!hasWorkspaceRole(auth)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Workspace access is pending");
-        String subject = identity(auth);
-        if (requested != null && memberships.existsByProjectIdAndAccountSubject(requested, subject)) return requested;
-        if (requested == null) {
-            var choices = memberships.findByAccountSubjectOrderByProjectNameAscProjectIdAsc(subject);
-            if (!choices.isEmpty()) return choices.stream().map(member -> member.getProject().getId())
-                    .filter(ProjectScope.LEGACY::equals).findFirst().orElseGet(() -> choices.getFirst().getProject().getId());
-            return onboard(auth).getFirst().id();
-        }
-        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Choose a project you belong to");
+        if (requested == null) return provision(auth).getDefaultProject().getId();
+        member(auth, requested);
+        return requested;
     }
 
-    public List<ProjectView> all() { return projects.findAllByOrderByNameAscIdAsc().stream().map(ProjectView::from).toList(); }
-    public List<AccountView> accounts() { return accounts.findAllByOrderByDisplayNameAscSubjectAsc().stream().map(AccountView::from).toList(); }
+    ProjectMembership member(Authentication auth, UUID id) {
+        return memberships.findByProjectIdAndAccountSubject(id, identity(auth)).orElseThrow(ProjectService::denied);
+    }
+
+    ProjectMembership admin(Authentication auth, UUID id) {
+        projects.lock(id).orElseThrow(ProjectService::denied);
+        var membership = member(auth, id);
+        if (membership.getRole() != Role.ADMIN) throw denied();
+        return membership;
+    }
+
+    private static ResponseStatusException denied() {
+        return new ResponseStatusException(HttpStatus.FORBIDDEN, "Project access denied");
+    }
 
     @Transactional
     public ProjectView create(Authentication auth, String name) {
-        var account = register(auth);
+        var account = provision(auth);
         var project = projects.save(new Project(UUID.randomUUID(), name.strip()));
-        memberships.save(new ProjectMembership(project, account));
-        return ProjectView.from(project);
+        return ProjectView.from(memberships.save(new ProjectMembership(project, account, Role.ADMIN)));
     }
 
     @Transactional(readOnly = true)
-    public List<AccountView> members(UUID id) {
-        project(id);
-        return memberships.findByProjectIdOrderByAccountDisplayNameAscAccountSubjectAsc(id).stream()
-                .map(member -> AccountView.from(member.getAccount())).toList();
+    public List<AccountView> members(Authentication auth, UUID id) {
+        member(auth, id);
+        return memberships.findByProjectIdOrderByAccountDisplayNameAscAccountSubjectAsc(id).stream().map(m -> {
+            var account = m.getAccount();
+            return new AccountView(account.getSubject(), account.getDisplayName(), account.getEmail(), m.getRole(),
+                    account.getDefaultProject() != null && account.getDefaultProject().getId().equals(id));
+        }).toList();
     }
 
     @Transactional
-    public void assign(UUID id, String subject) {
-        var account = account(subject);
-        var project = project(id);
-        if (!memberships.existsByProjectIdAndAccountSubject(id, subject)) memberships.save(new ProjectMembership(project, account));
-    }
-
-    @Transactional
-    public void remove(UUID id, String subject) {
-        account(subject);
-        project(id);
-        if (!memberships.existsByProjectIdAndAccountSubject(id, subject)) return;
-        if (memberships.countByAccountSubject(subject) <= 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Assign another project before removing this membership");
-        }
-        memberships.deleteByProjectIdAndAccountSubject(id, subject);
-    }
-
-    private Project project(UUID id) {
-        return projects.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Project was not found"));
-    }
-
-    private ProjectAccount account(String subject) {
-        return accounts.lock(subject).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User was not found"));
+    public void remove(Authentication auth, UUID id, String subject) {
+        admin(auth, id);
+        memberships.findByProjectIdAndAccountSubject(id, subject).ifPresent(m -> {
+            var personal = m.getAccount().getDefaultProject();
+            if ((personal != null && personal.getId().equals(id)) ||
+                    (m.getRole() == Role.ADMIN && memberships.countByProjectIdAndRole(id, Role.ADMIN) == 1))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "This project requires its administrator");
+            memberships.delete(m);
+        });
     }
 
     private ProjectAccount register(Authentication auth) {
@@ -151,11 +147,4 @@ public class ProjectService implements ApplicationRunner {
         return value.substring(0, Character.isHighSurrogate(value.charAt(max - 1)) ? max - 1 : max);
     }
     private static String identity(Authentication auth) { return (auth instanceof JwtAuthenticationToken ? "oidc:" : "basic:") + auth.getName(); }
-    private static boolean hasWorkspaceRole(Authentication auth) {
-        return auth.getAuthorities().stream().anyMatch(role -> KoonjRoles.ALL.stream()
-                .anyMatch(allowed -> ("ROLE_" + allowed).equals(role.getAuthority())));
-    }
-    private static boolean isAdministrator(Authentication auth) {
-        return auth.getAuthorities().stream().anyMatch(role -> ("ROLE_" + KoonjRoles.ADMIN).equals(role.getAuthority()));
-    }
 }

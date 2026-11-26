@@ -514,20 +514,13 @@ lineage where applicable. Resubmit any older paused jobs after upgrading.
 Reapply the migration on installations that already have projects to add the
 activity ownership column and index.
 
-Existing administrators and the configured HTTP Basic account are assigned to
-Default project on first sign-in. To preserve access for existing Keycloak
-operators or viewers, set `KOONJ_PROJECTS_LEGACY_SUBJECTS` to a comma-separated
-list of their Keycloak subject identifiers before rollout, or assign them to
-Default project from **Administration → Projects** after their first sign-in.
-Other new users receive a personal project and retain their Keycloak role
-requirements. Administrators can create shared projects and manage memberships.
-Use dedicated mount roots, shares, and buckets to keep the underlying storage
-separate between projects.
+For existing project installations, complete the [private-project migration](PRIVATE-PROJECTS.md)
+before restarting the API and worker. Human accounts receive private personal projects.
+Use **Projects** to create additional projects or invite a member by email.
 
-API clients can call `POST /api/v1/projects/session` to obtain their memberships
-and then pass the selected project UUID in `X-Koonj-Project`. Requests without
-the header use Default project when the account belongs to it, or the account’s
-first available project. FUSE uses Default project unless
+API clients can call `POST /api/v1/projects/session` to obtain their memberships,
+roles and personal default ID. Pass the selected project UUID in `X-Koonj-Project`.
+Requests without the header use the account's personal default. FUSE uses Default project unless
 `KOONJ_AGENT_PROJECT_ID` is set. For a project-specific FUSE mount, include that
 UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
 `KOONJ_AGENT_PROJECT_ID` on the mount.
@@ -778,7 +771,7 @@ from the limits and dates configured for the deployment. Rules default to an
 80% quota warning, a separate limit alert at 100%, and a 30-day license warning.
 Grace and expired states have separate cooldowns.
 
-In **Administration → Notifications & alerts**, a `KOONJ_ADMIN` can add and
+In **Integration → Notifications & Alerts**, a `KOONJ_ADMIN` can add and
 test channels, assign them to enabled rules, and inspect delivery history.
 A batch rule defaults to 1,000 files or 10 GB (10,000,000,000 bytes). Enter one
 threshold to use it on its own. Transfer failure rules match failed transfer
@@ -901,18 +894,9 @@ accounts.
 
 ### Default role for new accounts
 
-New realm imports assign the **Koonj Administrators** default group to new
-accounts. The group grants `KOONJ_ADMIN` on the first sign-in after registration
-by email, Google, or GitHub. The default group applies realm-wide to newly
-created accounts. Existing accounts keep their current role assignments,
-including when linking a social provider.
+New registrations inherit the `KOONJ_ADMIN` realm role through the **Koonj Administrators** default group. Project membership still controls which projects the account can open.
 
-For an existing realm, open **Groups** in the Keycloak Admin Console. Create
-**Koonj Administrators** and assign the `KOONJ_ADMIN` realm role under the group's
-**Role mapping** tab. Then open **Realm settings → User registration → Default
-Groups** and add **Koonj Administrators**. This gives anyone who can complete
-registration full access to Koonj, including access to the Default project and
-administrative operations.
+For an existing realm, add **Koonj Administrators** under **Realm settings → User registration → Default Groups** and confirm its role mapping includes `KOONJ_ADMIN`. Remove the viewer group from registration defaults if it was used for new accounts. Changing default groups affects subsequent registrations.
 
 ## Security Checklist
 

@@ -2,6 +2,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 const paths = {
   home: 'm3 10 9-7 9 7v10H3z M9 20v-7h6v7',
+  projects: 'M3 7h18v13H3z M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M3 11q9 5 18 0 M10 12v3h4v-3',
   folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
   activity: 'M3 12h4l3-8 4 16 3-8h4',
   server: 'M4 4h16v7H4z M4 13h16v7H4z M7 7.5h.01 M7 16.5h.01 M11 7.5h5 M11 16.5h5',
