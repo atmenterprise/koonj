@@ -2,6 +2,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 const paths = {
   home: 'm3 10 9-7 9 7v10H3z M9 20v-7h6v7',
+  projects: 'M3 7h18v13H3z M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M3 11q9 5 18 0 M10 12v3h4v-3',
   folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
   activity: 'M3 12h4l3-8 4 16 3-8h4',
   server: 'M4 4h16v7H4z M4 13h16v7H4z M7 7.5h.01 M7 16.5h.01 M11 7.5h5 M11 16.5h5',
@@ -38,6 +39,8 @@ const paths = {
   sidebar: 'M3 4h18v16H3z M9 4v16',
   maximize: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
   minimize: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',
+  billing: 'M3 5h18v14H3z M3 10h18 M7 15h4',
+  support: 'M3 12a9 9 0 1 1 18 0v5h-4v-6h4 M3 11h4v6H3z M17 17v2a2 2 0 0 1-2 2h-3',
   layers: 'm12 3 9 5-9 5-9-5z M3 12l9 5 9-5M3 16l9 5 9-5',
 } as const
 export type IconName = keyof typeof paths

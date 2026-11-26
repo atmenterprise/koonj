@@ -118,7 +118,15 @@ class NotificationTransport {
 
     Result mail(NotificationChannel channel, NotificationEvent event, String recipient) {
         var config = channel.getConfig();
-        Smtp smtp = smtp(config);
+        return mail(smtp(config), recipient, render(config.subjectTemplate(), "{title}", event),
+                render(config.bodyTemplate(), "{summary}", event));
+    }
+
+    Result invitation(NotificationChannel channel, String recipient, String body) {
+        return mail(smtp(channel.getConfig()), recipient, "Invitation to join a Koonj project", body);
+    }
+
+    private Result mail(Smtp smtp, String recipient, String subject, String body) {
         if (smtp.host().isBlank() || !EmailAddress.valid(smtp.from())) return new Result(0, "SMTP host and sender are required", false);
         if (!List.of("NONE", "STARTTLS", "SSL").contains(smtp.tls())) return new Result(0, "Invalid SMTP TLS mode", false);
         var sender = new JavaMailSenderImpl();
@@ -144,8 +152,8 @@ class NotificationTransport {
         var message = new SimpleMailMessage();
         message.setFrom(smtp.from());
         message.setTo(recipient);
-        message.setSubject(render(config.subjectTemplate(), "{title}", event).replaceAll("[\\r\\n]", " "));
-        message.setText(render(config.bodyTemplate(), "{summary}", event));
+        message.setSubject(subject.replaceAll("[\\r\\n]", " "));
+        message.setText(body);
         try {
             sender.send(message);
             return new Result(1, null, false);

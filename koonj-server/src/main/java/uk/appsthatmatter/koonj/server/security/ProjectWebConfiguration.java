@@ -44,6 +44,10 @@ public class ProjectWebConfiguration implements WebMvcConfigurer {
             public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
                 if (!(request.getUserPrincipal() instanceof Authentication auth) || "OPTIONS".equals(request.getMethod())) return true;
                 String path = request.getRequestURI().substring(request.getContextPath().length());
+                if (path.equals("/api/v1/projects") || path.startsWith("/api/v1/projects/")) {
+                    if (isAgent(auth)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Human sign-in required");
+                    return true;
+                }
                 if (path.startsWith("/api/v1/notifications/") && !isAgent(auth)) return true;
                 UUID requested = parse(request.getHeader(ProjectScope.HEADER));
                 UUID project;
@@ -52,14 +56,17 @@ public class ProjectWebConfiguration implements WebMvcConfigurer {
                     if (!agentRoute(request)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent access is limited to file recall");
                     project = requested == null ? ProjectScope.LEGACY : requested;
                     if (!agentProjects.contains(project)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent has no access to this project");
-                    if (!repository.existsById(project)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project was not found");
+                    if (!repository.existsByIdAndDeletedAtIsNull(project)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project was not found");
                 } else {
+                    if (!path.equals("/api/v1/permissions/me") && auth.getAuthorities().stream().noneMatch(
+                            authority -> KoonjRoles.ALL.stream().anyMatch(role -> ("ROLE_" + role).equals(authority.getAuthority()))))
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Workspace role required");
                     project = projects.authorize(auth, requested);
                 }
                 request.setAttribute(ProjectScope.ATTRIBUTE, project);
                 return true;
             }
-        }).addPathPatterns("/api/v1/**").excludePathPatterns("/api/v1/projects", "/api/v1/projects/**");
+        }).addPathPatterns("/api/v1/**");
     }
 
     private boolean isAgent(Authentication auth) {

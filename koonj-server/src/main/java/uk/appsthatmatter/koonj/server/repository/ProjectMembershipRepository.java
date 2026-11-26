@@ -9,6 +9,7 @@ public interface ProjectMembershipRepository extends JpaRepository<ProjectMember
     List<ProjectMembership> findByAccountSubjectOrderByProjectNameAscProjectIdAsc(String subject);
     List<ProjectMembership> findByProjectIdOrderByAccountDisplayNameAscAccountSubjectAsc(UUID projectId);
     boolean existsByProjectIdAndAccountSubject(UUID projectId, String subject);
-    long countByAccountSubject(String subject);
+    java.util.Optional<ProjectMembership> findByProjectIdAndAccountSubject(UUID id, String subject);
+    long countByProjectIdAndRole(UUID id, ProjectMembership.Role role);
     void deleteByProjectIdAndAccountSubject(UUID projectId, String subject);
 }

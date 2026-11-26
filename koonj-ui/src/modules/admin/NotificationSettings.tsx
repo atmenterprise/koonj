@@ -32,13 +32,15 @@ function readHeaders(value: string | undefined): Record<string, string> | undefi
   return headers as Record<string, string>
 }
 
-function ChannelEditor({ channel, close }: { channel?: NotificationChannel; close: () => void }) {
-  const [type, setType] = useState<ChannelType>(channel?.type ?? 'WEBHOOK')
+export function ChannelEditor({ channel, emailOnly, onSaved, close }: {
+  channel?: NotificationChannel; emailOnly?: boolean; onSaved?: (channel: NotificationChannel) => void; close: () => void
+}) {
+  const [type, setType] = useState<ChannelType>(channel?.type ?? (emailOnly ? 'EMAIL' : 'WEBHOOK'))
   const [error, setError] = useState('')
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: (settings: ChannelSettings) => notificationService.saveChannel(settings, channel?.id),
-    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: keys }); close() },
+    onSuccess: response => { void queryClient.invalidateQueries({ queryKey: keys }); onSaved?.(response.data); close() },
     meta: { inlineError: true },
   })
 
@@ -46,7 +48,7 @@ function ChannelEditor({ channel, close }: { channel?: NotificationChannel; clos
     event.preventDefault()
     setError('')
     const form = new FormData(event.currentTarget)
-    const settings: ChannelSettings = { type, name: String(form.get('name')).trim(), enabled: form.has('enabled') }
+    const settings: ChannelSettings = { type, name: String(form.get('name')).trim(), enabled: emailOnly || form.has('enabled') }
     if (type === 'EMAIL') {
       settings.adminRecipients = (formText(form, 'adminRecipients') ?? '').split(/[\n,]/).map(value => value.trim()).filter(Boolean)
       settings.smtpHost = formText(form, 'smtpHost')
@@ -70,10 +72,10 @@ function ChannelEditor({ channel, close }: { channel?: NotificationChannel; clos
     <h3>{channel ? 'Edit channel' : 'New channel'}</h3>
     <fieldset className="admin-form-fields" disabled={mutation.isPending}>
       <label>Channel name<input name="name" required maxLength={120} defaultValue={channel?.name} /></label>
-      <label>Channel type<select value={type} disabled={!!channel} onChange={event => setType(event.target.value as ChannelType)}>
+      {!emailOnly && <><label>Channel type<select value={type} disabled={!!channel} onChange={event => setType(event.target.value as ChannelType)}>
         {types.map(value => <option key={value} value={value}>{channelTypes[value]}</option>)}
       </select></label>
-      <label className="notification-check"><input name="enabled" type="checkbox" defaultChecked={channel?.enabled ?? true} /> Enabled</label>
+      <label className="notification-check"><input name="enabled" type="checkbox" defaultChecked={channel?.enabled ?? true} /> Enabled</label></>}
     </fieldset>
     {type === 'EMAIL' ? <fieldset className="admin-form-fields" disabled={mutation.isPending}>
       <legend>SMTP and message settings</legend>
@@ -89,7 +91,7 @@ function ChannelEditor({ channel, close }: { channel?: NotificationChannel; clos
         placeholder={channel?.hasSmtpPassword ? 'Leave blank to keep current password' : undefined} /></label>
       {channel?.hasSmtpPassword && <label className="notification-check"><input name="clearSmtpPassword" type="checkbox" /> Clear saved password</label>}
       <label>Sender address<input name="from" type="email" defaultValue={channel?.from ?? ''} /></label>
-      <label className="notification-wide">Admin recipients
+      {!emailOnly && <><label className="notification-wide">Admin recipients
         <textarea name="adminRecipients" rows={2} defaultValue={channel?.adminRecipients?.join('\n')}
           placeholder="One email address per line" />
         <small>Used for quota and license alerts. Job emails go to the job owner.</small>
@@ -99,7 +101,7 @@ function ChannelEditor({ channel, close }: { channel?: NotificationChannel; clos
       <label className="notification-wide">Body template<textarea name="bodyTemplate" rows={3} maxLength={10000}
         defaultValue={channel?.bodyTemplate ?? ''} placeholder="{summary}" />
         <small>Template fields are {'{title}'}, {'{eventType}'}, and {'{summary}'}.</small>
-      </label>
+      </label></>}
     </fieldset> : <fieldset key={type} className="admin-form-fields" disabled={mutation.isPending}>
       <legend>Webhook settings</legend>
       <label className="notification-wide">Endpoint URL<input name="endpoint" type="password" autoComplete="new-password"

@@ -14,7 +14,11 @@ public class ProjectMembership {
     @ManyToOne(optional = false) private Project project;
     @ManyToOne(optional = false) private ProjectAccount account;
 
-    public ProjectMembership(Project project, ProjectAccount account) {
+    public enum Role { ADMIN, MEMBER }
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) private Role role;
+
+    public ProjectMembership(Project project, ProjectAccount account, Role role) {
+        this.role = role;
         this.project = project;
         this.account = account;
     }

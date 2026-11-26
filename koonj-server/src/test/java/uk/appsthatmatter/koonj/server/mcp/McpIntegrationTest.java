@@ -58,6 +58,7 @@ class McpIntegrationTest {
 
     @LocalServerPort int port;
     @TempDir Path root;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired ObjectMapper json;
     @Autowired UserApiKeyRepository keys;
     @Autowired StorageConnectionRepository connections;
@@ -75,8 +76,8 @@ class McpIntegrationTest {
             String project = json.readTree(send(client, "POST", BASE + "/projects", ADMIN, null,
                     "{\"name\":\"MCP workspace\"}").body()).path("id").asText();
             assertThat(project).isNotBlank();
-            assertThat(send(client, "PUT", BASE + "/projects/" + project + "/members", ADMIN, null,
-                    "{\"subject\":\"oidc:" + VIEWER + "\"}").statusCode()).isEqualTo(204);
+            jdbc.update("insert into project_membership(id,project_id,account_subject,role) values(?,?,?,?)",
+                    UUID.randomUUID(), UUID.fromString(project), "oidc:" + VIEWER, "MEMBER");
 
             var location = fixture(UUID.fromString(project));
             fixture(ProjectScope.LEGACY);

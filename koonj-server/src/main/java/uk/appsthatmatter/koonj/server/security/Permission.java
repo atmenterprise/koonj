@@ -12,7 +12,7 @@ public enum Permission {
     POLICY_MANAGE("Manage policies", "Configure file temperature thresholds."),
     OBSERVABILITY_VIEW("View observability", "See server health, metrics, logs and trace links."),
     INTEGRATIONS_MANAGE("Manage integrations", "Configure APIs and MCP servers."),
-    PROJECTS_MANAGE("Manage projects and members", "Create projects and change access to any project."),
+    PROJECTS_MANAGE("Legacy project permission", "Retained for compatibility. Project membership controls access."),
     PERMISSIONS_MANAGE("Manage role permissions", "Configure application-wide permissions for each role.");
 
     private final String label;

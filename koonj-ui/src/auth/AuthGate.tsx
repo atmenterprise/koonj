@@ -4,26 +4,22 @@ import { NotificationPopup } from '../shared/notifications/NotificationPopup'
 import { ApiPageState } from '../shared/ui/ApiPageState'
 import { Button } from '../shared/ui/primitives'
 import { useAuth } from './AuthProvider'
-import { EmailNotificationPreferencesDisclosure } from './EmailNotificationPreferences'
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const auth = useAuth()
   const { notify } = useActivityNotifications()
   const [redirecting, setRedirecting] = useState(false)
   const unavailable = auth.status === 'error'
-  const awaitingRole = auth.status === 'authenticated' && auth.user.roles.length === 0
-  const issue = unavailable ? 'Sign-in service unavailable' : awaitingRole ? 'Workspace access pending' : null
+  const issue = unavailable ? 'Sign-in service unavailable' : null
   const lastIssue = useRef<string | null>(null)
   useEffect(() => {
     if (issue && issue !== lastIssue.current) notify({
-      tone: 'error', title: issue, detail: awaitingRole
-        ? 'Ask your Koonj administrator to assign a workspace role, then sign in again.'
-        : 'Koonj could not connect to the sign-in service.',
+      tone: 'error', title: issue, detail: 'Koonj could not connect to the sign-in service.',
     })
     lastIssue.current = issue
-  }, [awaitingRole, issue, notify])
+  }, [issue, notify])
 
-  if (auth.status === 'authenticated' && !awaitingRole) return children
+  if (auth.status === 'authenticated') return children
 
   if (auth.status === 'loading') {
     return <main className="auth-gate"><ApiPageState loadingLabel="Checking your session" /></main>
@@ -44,17 +40,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <span className="brand-mark" aria-hidden="true" />
       <h1 id="auth-title">Welcome to Koonj</h1>
       {!issue && <p>Sign in to browse storage, archive files, and track transfers.</p>}
-      {awaitingRole && <EmailNotificationPreferencesDisclosure subject={auth.user.id} />}
       <div className="row-actions auth-actions">
         {unavailable ? <Button variant="primary" icon="retry" onClick={() => window.location.reload()}>Try again</Button>
-          : awaitingRole ? <Button icon="logout" disabled={redirecting} onClick={() => void redirect(auth.logout)}>Logout</Button>
             : <>
               <Button variant="primary" icon="user" disabled={redirecting} onClick={() => void redirect(auth.login)}>Sign In</Button>
               <Button disabled={redirecting} onClick={() => void redirect(auth.register)}>Create Account</Button>
             </>}
       </div>
       {auth.status === 'anonymous' && <>
-        <div className="auth-alternative">-or-</div>
+        <hr className="auth-alternative" />
         <div className="row-actions auth-actions auth-actions--social">
           <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('google'))}>Continue with Google</Button>
           <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('github'))}>Continue with GitHub</Button>

@@ -93,6 +93,7 @@ class PhysicalCatalogIntegrationTest {
     @Autowired JobService jobs;
     @Autowired TransferJobRepository jobRepository;
     @Autowired RolePermissionSettingsRepository roleSettings;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired ProjectTestTokens serverTokens;
@@ -119,12 +120,10 @@ class PhysicalCatalogIntegrationTest {
         String viewer = token("permission-viewer", "KOONJ_VIEWER");
         String combined = token("permission-combined", "KOONJ_OPERATOR", "KOONJ_VIEWER");
         String project = ProjectScope.LEGACY.toString();
-        firstProject(admin);
-        for (String account : List.of(operator, viewer, combined)) {
+        for (String account : List.of(admin, operator, viewer, combined)) {
             firstProject(account);
-            request(put("/api/v1/projects/{id}/members", project).contentType(MediaType.APPLICATION_JSON)
-                    .content(json.writeValueAsBytes(Map.of("subject", "oidc:" + account))), admin, null)
-                    .andExpect(status().isNoContent());
+            jdbc.update("insert into project_membership(id, project_id, account_subject, role) values(?,?,?,?)",
+                    UUID.randomUUID(), ProjectScope.LEGACY, "oidc:" + account, "MEMBER");
         }
 
         request(get("/api/v1/connections/locations"), operator, project).andExpect(status().isOk())
@@ -172,12 +171,12 @@ class PhysicalCatalogIntegrationTest {
         String admin = token("project-admin", "KOONJ_ADMIN");
         String operator = token("project-operator", "KOONJ_OPERATOR");
         String pending = token("project-pending");
-        assertThat(firstProject(admin)).isEqualTo(ProjectScope.LEGACY.toString());
+        assertThat(firstProject(admin)).isNotEqualTo(ProjectScope.LEGACY.toString());
         String personal = firstProject(operator);
         assertThat(personal).isNotEqualTo(ProjectScope.LEGACY.toString());
         firstProject(pending);
         request(get("/api/v1/catalog/locations"), pending, null).andExpect(status().isForbidden());
-        request(get("/api/v1/projects/users"), operator, null).andExpect(status().isForbidden());
+        request(get("/api/v1/projects/users"), operator, null).andExpect(status().isMethodNotAllowed());
 
         var created = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"Research\"}"), admin, null).andExpect(status().isCreated()).andReturn();
@@ -185,8 +184,19 @@ class PhysicalCatalogIntegrationTest {
 
         request(get("/api/v1/catalog/locations"), operator, shared).andExpect(status().isForbidden());
         request(get("/api/v1/catalog/locations"), admin, personal).andExpect(status().isForbidden());
-        request(put("/api/v1/projects/{id}/members", shared).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"subject\":\"oidc:project-operator\"}"), admin, null).andExpect(status().isNoContent());
+        request(get("/api/v1/projects/{id}/members", shared), operator, shared).andExpect(status().isForbidden());
+        selectEmailChannel(admin, shared);
+        request(post("/api/v1/projects/{id}/invitations", shared).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"project-operator@example.test\"}"), admin, null).andExpect(status().isAccepted());
+        var invite = jdbc.queryForObject("select id from project_invitation where project_id=?", UUID.class, UUID.fromString(shared));
+        String accept = "/api/v1/projects/invitations/accept";
+        String secret = UUID.randomUUID().toString();
+        String body = json.writeValueAsString(Map.of("token", secret));
+        jdbc.update("update project_invitation set delivery='SENT', token_digest=? where id=?",
+                uk.appsthatmatter.koonj.notification.ProjectInvitation.digest(secret), invite);
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), pending, null).andExpect(status().isForbidden());
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), operator, null).andExpect(status().isOk());
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), operator, null).andExpect(status().isForbidden());
         request(post("/api/v1/projects/session"), operator, null).andExpect(jsonPath("$[*].id").value(
                 org.hamcrest.Matchers.containsInAnyOrder(personal, shared)));
         request(delete("/api/v1/projects/{id}/members", shared).param("subject", "oidc:project-admin"), operator, null)
@@ -263,12 +273,104 @@ class PhysicalCatalogIntegrationTest {
         request(delete("/api/v1/projects/{id}/members", shared).param("subject", "oidc:project-operator"), admin, null)
                 .andExpect(status().isNoContent());
         request(get("/api/v1/catalog/locations"), operator, shared).andExpect(status().isForbidden());
-        request(delete("/api/v1/projects/{id}/members", personal).param("subject", "oidc:project-operator"), admin, null)
+        request(delete("/api/v1/projects/{id}/members", personal).param("subject", "oidc:project-operator"), operator, null)
                 .andExpect(status().isConflict());
     }
 
+    @Test
+    void deleteAndRenamePreserveMembershipIsolationAndSwitchTheDefault() throws Exception {
+        String owner = token("lifecycle-owner", "KOONJ_ADMIN");
+        String outsider = token("lifecycle-outsider", "KOONJ_ADMIN");
+        String personal = firstProject(owner);
+        String other = firstProject(outsider);
+        String route = "/api/v1/projects/" + personal;
+        request(delete(route), owner, null).andExpect(status().isConflict());
+        request(put(route).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Archive\"}"), outsider, null)
+                .andExpect(status().isForbidden());
+        request(delete(route), outsider, null).andExpect(status().isForbidden());
+        request(put(route).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Archive\"}"), owner, null)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Archive"))
+                .andExpect(jsonPath("$.id").value(personal));
+        jdbc.update("insert into project_membership(id,project_id,account_subject,role) values(?,?,?,?)",
+                UUID.randomUUID(), UUID.fromString(other), "oidc:" + owner, "MEMBER");
+        request(delete(route), owner, null).andExpect(status().isNoContent());
+        request(get("/api/v1/projects"), owner, null).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].defaultProjectId").value(other)).andExpect(jsonPath("$[0].role").value("MEMBER"));
+        request(get(route + "/members"), owner, null).andExpect(status().isForbidden());
+        request(delete("/api/v1/projects/" + other), outsider, null).andExpect(status().isConflict());
+    }
+
+    @Test
+    void competingDeletesLeaveOneProject() throws Exception {
+        String owner = token("concurrent-delete-owner", "KOONJ_ADMIN");
+        String personal = firstProject(owner);
+        var created = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Other\"}"), owner, null).andExpect(status().isCreated()).andReturn();
+        String other = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var requests = List.of(personal, other).stream().<java.util.concurrent.Callable<Integer>>map(id ->
+                    () -> request(delete("/api/v1/projects/" + id), owner, null).andReturn().getResponse().getStatus()).toList();
+            var responses = pool.invokeAll(requests);
+            assertThat(List.of(responses.get(0).get(), responses.get(1).get())).containsExactlyInAnyOrder(204, 409);
+        }
+        firstProject(owner);
+    }
+
+    @Test
+    void concurrentFirstLoginAndInvitationLifecycle() throws Exception {
+        String alice = token("lifecycle-alice");
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(4)) {
+            var results = pool.invokeAll(java.util.Collections.<java.util.concurrent.Callable<String>>nCopies(4, () -> firstProject(alice)));
+            for (var result : results) assertThat(result.get()).isEqualTo(results.getFirst().get());
+        }
+        String project = firstProject(alice);
+        String bob = token("lifecycle-bob");
+        String path = "/api/v1/projects/" + project + "/invitations";
+        String email = "{\"email\":\"lifecycle-bob@example.test\"}";
+        request(post(path).contentType(MediaType.APPLICATION_JSON).content(email), alice, null).andExpect(status().isConflict());
+        selectEmailChannel(alice, project);
+        for (int i = 0; i < 2; i++) request(post(path).contentType(MediaType.APPLICATION_JSON).content(email), alice, null)
+                .andExpect(status().isAccepted());
+        var listing = request(get(path), alice, null).andExpect(jsonPath("$.length()").value(1)).andReturn();
+        String id = json.readTree(listing.getResponse().getContentAsString()).get(0).get("id").asText();
+        String secret = UUID.randomUUID().toString();
+        var digest = uk.appsthatmatter.koonj.notification.ProjectInvitation.digest(secret);
+        jdbc.update("update project_invitation set token_digest=?, expires_at=? where id=?", digest,
+                java.sql.Timestamp.from(Instant.now().minusSeconds(10)), UUID.fromString(id));
+        String accept = "/api/v1/projects/invitations/accept";
+        String body = json.writeValueAsString(Map.of("token", secret));
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), bob, null).andExpect(status().isForbidden());
+        request(post(path + "/" + id + "/resend"), alice, null).andExpect(status().isAccepted());
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), bob, null).andExpect(status().isForbidden());
+        jdbc.update("update project_invitation set token_digest=? where id=?", digest, UUID.fromString(id));
+        String unverified = "lifecycle-unverified";
+        serverTokens.tokens.put(unverified, Jwt.withTokenValue(unverified).header("alg", "RS256").subject(unverified)
+                .claim("email", bob + "@example.test").claim("email_verified", false).build());
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), unverified, null).andExpect(status().isForbidden());
+        request(delete(path + "/" + id), alice, null).andExpect(status().isNoContent());
+        request(post(accept).contentType(MediaType.APPLICATION_JSON).content(body), bob, null).andExpect(status().isForbidden());
+        request(get(path), bob, project).andExpect(status().isForbidden());
+        request(get("/api/v1/projects"), bob, null).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].role").value("ADMIN"))
+                .andExpect(jsonPath("$[0].id").value(org.hamcrest.Matchers.not(project)));
+    }
+
+    @Autowired uk.appsthatmatter.koonj.notification.NotificationChannelRepository notificationChannels;
+
+    private void selectEmailChannel(String admin, String project) throws Exception {
+        var channel = new uk.appsthatmatter.koonj.notification.NotificationChannel();
+        channel.setName("Project mail");
+        channel.setType(uk.appsthatmatter.koonj.notification.NotificationChannel.Type.EMAIL);
+        channel.setEnabled(true);
+        channel.setConfig(new uk.appsthatmatter.koonj.notification.NotificationChannel.Config(null, null, null, null,
+                "mail.example.test", 587, "STARTTLS", null, null, "sender@example.test", null, null));
+        var saved = notificationChannels.saveAndFlush(channel);
+        request(put("/api/v1/projects/{id}/invitation-channel", project).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("channelId", saved.getId()))), admin, null).andExpect(status().isNoContent());
+    }
+
     private String token(String subject, String... roles) {
-        var token = Jwt.withTokenValue(subject).header("alg", "RS256").subject(subject)
+        var token = Jwt.withTokenValue(subject).header("alg", "RS256").subject(subject).claim("name", "Alex").claim("email_verified", true).claim("email", subject + "@example.test")
                 .claim("realm_access", Map.of("roles", List.of(roles))).build();
         serverTokens.tokens.put(subject, token);
         return subject;
@@ -363,8 +465,7 @@ class PhysicalCatalogIntegrationTest {
     @Test
     void testsSubmittedConnectionSettingsWithoutRegisteringAConnection() throws Exception {
         String admin = token("draft-connection-admin", "KOONJ_ADMIN");
-        firstProject(admin);
-        String project = ProjectScope.LEGACY.toString();
+        String project = firstProject(admin);
         long registered = connections.count();
 
         request(post("/api/v1/connections/test").contentType(MediaType.APPLICATION_JSON)
@@ -383,8 +484,7 @@ class PhysicalCatalogIntegrationTest {
     @Test
     void rejectsSubmittedCredentialsAndOmitsLegacyFieldsFromResponses() throws Exception {
         String admin = token("storage-auth-admin", "KOONJ_ADMIN");
-        firstProject(admin);
-        String project = ProjectScope.LEGACY.toString();
+        String project = firstProject(admin);
         var draft = new java.util.HashMap<String, String>(Map.of("name", "Host identity", "providerType", "SMB",
                 "role", "SOURCE", "basePathOrBucket", root.toString()));
         long registered = connections.count();
@@ -417,8 +517,7 @@ class PhysicalCatalogIntegrationTest {
     @Test
     void savesOnlyEncryptedCredentialsAndSerializesRotation() throws Exception {
         String admin = token("storage-encryption-admin", "KOONJ_ADMIN");
-        firstProject(admin);
-        String project = ProjectScope.LEGACY.toString();
+        String project = firstProject(admin);
         var input = new java.util.HashMap<String, Object>(Map.of("name", "Encrypted storage fixture",
                 "providerType", "MINIO", "role", "SOURCE", "basePathOrBucket", "archive",
                 "endpointUrl", "https://objects.example.test", "authMode", "ENCRYPTED_CREDENTIALS",
@@ -438,24 +537,24 @@ class PhysicalCatalogIntegrationTest {
                 .content(json.writeValueAsBytes(Map.of("accessKeyId", "other-project", "secretAccessKey", "denied-fixture"))),
                 admin, otherProject).andExpect(status().isNotFound());
 
-        byte[] first = connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope();
+        byte[] first = connections.findByIdAndProjectId(id, UUID.fromString(project)).orElseThrow().getCredentialEnvelope();
         assertThat(new String(first, java.nio.charset.StandardCharsets.UTF_8)).doesNotContain("fixture-access", "fixture-secret-not-returned");
 
         request(put("/api/v1/connections/{id}/credentials", id).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(Map.of("accessKeyId", "invalid-fixture", "secretAccessKey", "failed-fixture"))),
                 admin, project).andExpect(status().isBadGateway());
-        assertThat(connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope()).isEqualTo(first);
+        assertThat(connections.findByIdAndProjectId(id, UUID.fromString(project)).orElseThrow().getCredentialEnvelope()).isEqualTo(first);
 
         request(put("/api/v1/connections/{id}/credentials", id).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(Map.of("accessKeyId", "replacement-fixture", "secretAccessKey", "replacement-secret"))),
                 admin, project).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id.toString()));
-        byte[] rotated = connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope();
+        byte[] rotated = connections.findByIdAndProjectId(id, UUID.fromString(project)).orElseThrow().getCredentialEnvelope();
         assertThat(rotated).isNotEqualTo(first);
         input.remove("credentials");
         input.put("name", "Renamed encrypted fixture");
         request(put("/api/v1/connections/{id}", id).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(input)), admin, project).andExpect(status().isOk());
-        assertThat(connections.findByIdAndProjectId(id, ProjectScope.LEGACY).orElseThrow().getCredentialEnvelope()).isEqualTo(rotated);
+        assertThat(connections.findByIdAndProjectId(id, UUID.fromString(project)).orElseThrow().getCredentialEnvelope()).isEqualTo(rotated);
         input.put("endpointUrl", "https://different.example.test");
         request(put("/api/v1/connections/{id}", id).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(input)), admin, project).andExpect(status().isBadRequest());

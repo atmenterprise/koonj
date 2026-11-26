@@ -58,6 +58,10 @@
     {
       "name": "Koonj Administrators",
       "realmRoles": ["KOONJ_ADMIN"]
+    },
+    {
+      "name": "Koonj Viewers",
+      "realmRoles": ["KOONJ_VIEWER"]
     }
   ],
   "defaultGroups": ["/Koonj Administrators"],

@@ -123,7 +123,7 @@ class NotificationWorkerIntegrationTest {
         }
     }
 
-    private static void acceptMail(ServerSocket server, CompletableFuture<String> received) {
+    static void acceptMail(ServerSocket server, CompletableFuture<String> received) {
         try (var socket = server.accept();
              var input = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
              var output = new PrintWriter(socket.getOutputStream())) {
