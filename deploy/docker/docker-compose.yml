@@ -17,9 +17,10 @@
 #   docker compose up -d --scale koonj-server=3
 #   docker compose up -d --scale koonj-ui=2
 # =============================================================================
+name: koonj
 
 services:
-  # ── Database ───────────────────────────────────────────────────────────────
+  # Repository
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -46,7 +47,7 @@ services:
     networks:
       - koonj-internal
 
-  # ── Identity & Access Management ───────────────────────────────────────────
+  # IAM
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.2
     command: ["start", "--import-realm"]
@@ -89,11 +90,11 @@ services:
     networks:
       - koonj-internal
 
-  # ── API Server ─────────────────────────────────────────────────────────────
+  # Koonj Server + API
   koonj-server:
     build:
       context: ./server
-      dockerfile: Dockerfile.server
+      dockerfile: koonj-server/Dockerfile
     image: &koonj-server-image koonj-server:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -145,6 +146,7 @@ services:
       KOONJ_BASIC_AUTH_USERNAME: ${KOONJ_BASIC_AUTH_USERNAME:-}
       KOONJ_BASIC_AUTH_PASSWORD: ${KOONJ_BASIC_AUTH_PASSWORD:-}
       KOONJ_BASIC_AUTH_ROLE: ${KOONJ_BASIC_AUTH_ROLE:-KOONJ_VIEWER}
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
       JAVA_OPTS: >-
         -XX:+UseContainerSupport
         -XX:MaxRAMPercentage=75.0
@@ -185,6 +187,7 @@ services:
       KOONJ_TRANSFER_TENANT_JOBS: "${KOONJ_TRANSFER_TENANT_JOBS:-2}"
       KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS: "${KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS:-1}"
       KOONJ_TRANSFER_BACKEND_JOBS: "${KOONJ_TRANSFER_BACKEND_JOBS:-8}"
+      KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS: "true"
     volumes: *koonj-server-volumes
     healthcheck: *koonj-server-healthcheck
     deploy: *koonj-server-deploy
@@ -214,7 +217,7 @@ services:
   koonj-notification-worker:
     build:
       context: ./notification-worker
-      dockerfile: Dockerfile.notification-worker
+      dockerfile: koonj-notification-worker/Dockerfile
     image: koonj-notification-worker:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -257,11 +260,11 @@ services:
     networks:
       - koonj-internal
 
-  # ── UI (Nginx + React SPA) ────────────────────────────────────────────────
+  # UI
   koonj-ui:
     build:
       context: ./ui
-      dockerfile: Dockerfile.ui
+      dockerfile: koonj-ui/Dockerfile
     image: koonj-ui:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -291,7 +294,7 @@ services:
     restart: unless-stopped
     build:
       context: ./fuse
-      dockerfile: Dockerfile.fuse
+      dockerfile: koonj-fuse/Dockerfile
     image: koonj-fuse:${KOONJ_VERSION:-latest}
     depends_on:
       koonj-server:

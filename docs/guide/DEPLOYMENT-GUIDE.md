@@ -7,12 +7,17 @@
 - [Build the Deployment ZIP](#build-the-deployment-zip)
 - [Prerequisites](#prerequisites)
 - [Option A: Docker Deployment](#option-a-docker-deployment)
-- [Server logging](#server-logging)
-- [Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve)
 - [Option B: On-Premise Deployment](#option-b-on-premise-deployment)
+- [Option C: Local Development Stack](#option-c-local-development-stack)
+- [Server Logging](#server-logging)
+- [Optional Docker Observability with OpenObserve](#optional-docker-observability-with-openobserve)
 - [Scaling](#scaling)
+- [Archive and Recall Workers](#archive-and-recall-workers)
+- [Project Workspaces & Private Projects](#project-workspaces--private-projects)
+- [Storage Authentication and Secret Stores](#storage-authentication-and-secret-stores)
 - [Configuration Reference](#configuration-reference)
 - [Keycloak Setup](#keycloak-setup)
+- [MCP Server & Integration](#mcp-server--integration)
 - [Security Checklist](#security-checklist)
 - [Troubleshooting](#troubleshooting)
 
@@ -29,7 +34,7 @@ Koonj is a data catalog and explorer application with independently deployable c
 | **koonj-notification-worker** | Spring Boot 3.5 / JDK 21 | Notification routing, RabbitMQ publishing, and delivery |
 | **koonj-ui**     | React SPA / Nginx      | Web console served as static files   |
 
-Scale API replicas, transfer workers, notification workers, and Nginx independently. See [transfer workers](TRANSFER-WORKERS.md) for reservation rules and upgrade steps. The deployment ZIP includes the guide at `docs/TRANSFER-WORKERS.md`.
+Scale API replicas, transfer workers, notification workers, and Nginx independently. See [Archive and Recall Workers](#archive-and-recall-workers) for reservation rules and upgrade steps.
 
 ### External dependencies
 
@@ -95,8 +100,8 @@ top-level directory. The ZIP contains `docker/` and `on-premise/`, each
 with the executable server, notification worker, and FUSE JARs and the compiled UI. The Docker
 package includes the Linux host setup script, the FUSE gateway, and the
 optional Samba sidecar configuration. Follow the
-[transparent recall gateway guide](FUSE-RECALL.md) to provide SMB access to
-[Windows](FUSE-RECALL-WINDOWS.md), [macOS](FUSE-RECALL-MACOS.md), and Linux clients.
+[FUSE & Samba Integration Guide](FUSE-GUIDE.md) to provide SMB access to
+[Windows](FUSE-GUIDE.md#windows-file-explorer), [macOS](FUSE-GUIDE.md#macos-finder), and [Linux](FUSE-GUIDE.md#linux) clients.
 
 ## Prerequisites
 
@@ -173,7 +178,7 @@ initial startup. To use an external cluster, set the worker's broker host,
 port, username, password, virtual host and TLS mode in `.env`.
 
 To enable transparent recall from a shared drive, follow the
-[Linux gateway setup](FUSE-RECALL.md). Use the `fuse` profile for a local
+[FUSE & Samba Integration Guide](FUSE-GUIDE.md). Use the `fuse` profile for a local
 mount on the gateway or the `smb` profile to also export it over the network.
 
 ### 4. Verify
@@ -211,89 +216,6 @@ docker compose up -d --wait  # restart
 ```
 
 ---
-
-## Server logging
-
-The API and transfer worker write to the console at INFO by default. Request
-logs use HTTP route templates and status codes, and scan and transfer logs use
-job IDs. Set `KOONJ_LOG_LEVEL=DEBUG` for diagnostics or `KOONJ_LOG_LEVEL=TRACE`
-for DETAIL events such as batch progress. DETAIL uses Logback's TRACE level.
-WARN and ERROR are visible at the default setting.
-
-Set `KOONJ_LOG_FILE` to a file on a writable shared mount to also write rolling
-logs. With Docker, set `KOONJ_LOG_FILE` for the API and
-`KOONJ_TRANSFER_WORKER_LOG_FILE` for the worker in `docker/.env`. Use container
-paths on a mounted directory. Each replica needs its own file for safe rotation.
-With systemd, console output is available through `journalctl -u koonj-server`.
-For file output outside `/opt/koonj/logs` or `/mnt/koonj`, add the writable
-mount directory to the unit's `ReadWritePaths`.
-
-## Optional Docker Observability with OpenObserve
-
-The standard Docker command leaves telemetry export disabled. To enable it, set
-these values in the extracted `docker/.env` file:
-
-```dotenv
-OPENOBSERVE_ROOT_EMAIL=monitoring@example.com
-OPENOBSERVE_ROOT_PASSWORD='your_openobserve_password'
-OPENOBSERVE_AUTHORIZATION='Basic <base64(email:password)>'
-KOONJ_OPENOBSERVE_URL=http://localhost:5080/web
-```
-
-Replace the placeholder after `Basic ` with the Base64-encoded ingestion
-credentials. For example, encode the email and password you configured above:
-
-```bash
-printf '%s' 'monitoring@example.com:your_openobserve_password' | base64 | tr -d '\r\n'
-```
-
-From the extracted `docker/` directory, start Compose with both files. The
-base file defines the Koonj services and the second file adds OpenObserve and
-enables log, metric, and trace export. Use the same file pair for subsequent Compose
-commands.
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build --wait
-docker compose -f docker-compose.yml -f docker-compose.otel.yml ps
-curl -fsS http://127.0.0.1:5080/healthz
-```
-
-Open **Administration → Observability → Open dashboards** in Koonj. On startup,
-Koonj imports these dashboards into the default folder of the configured OpenObserve
-organization:
-
-- **Koonj | API and JVM** shows request rate, 5xx percentage, p95 latency, JVM heap
-  and CPU usage, and database connection waiters.
-- **Koonj | Transfer Jobs and Traces** shows execution outcomes, p95 job duration,
-  queue pressure, and trace IDs for recent failed jobs. Queue metrics require
-  RabbitMQ transfer dispatch.
-- **Koonj | Server Logs** shows volume by severity, errors grouped by logger, and
-  recent warnings and errors. Search for a job ID in Logs to follow its activity.
-
-Startup imports missing dashboard titles and preserves dashboards you have edited.
-The importer retries temporary OpenObserve outages in the background. If the OTLP
-credentials can only ingest telemetry, set `KOONJ_OPENOBSERVE_DASHBOARDS_AUTHORIZATION`
-to a credential with dashboard list and create permissions. Use the same
-authorization header format as for OTLP.
-
-For remote browsers, set `KOONJ_OPENOBSERVE_URL` to
-the reachable browser URL. Set `KOONJ_OPENOBSERVE_ORGANIZATION` if the ingestion
-organization is different from `default`. Sign in to OpenObserve and open
-**Traces** in the `default` organization after running a scan or transfer.
-Look for the `koonj.job.execution` span and its `operation` and `outcome`
-attributes. **Metrics** shows aggregates such as job execution count and
-duration. Allow a minute for the first metrics export. **Logs** shows events from
-the API and transfer worker in the `koonj_server` stream. Search for ERROR
-records and use the job ID to correlate related events. Framework errors emitted
-while the exporter is running also appear in this stream. Koonj sends telemetry
-directly over OTLP/HTTP.
-For a host installation, set `KOONJ_OTLP_LOGS_ENDPOINT` to the complete OTLP/HTTP
-logs endpoint, such as `http://127.0.0.1:5080/api/default/v1/logs`. The OpenObserve data volume persists
-across container restarts.
-
-When upgrading the same Compose project from the old Grafana setup, add
-`--remove-orphans` to the startup command to remove the old telemetry
-containers while preserving their named volumes.
 
 ## Option B: On-Premise Deployment
 
@@ -453,11 +375,240 @@ installation, or `C:\koonj\bin\koonj-server.cmd restart` on Windows.
 
 ---
 
+## Option C: Local Development Stack
+
+### Start the development stack
+
+Docker Compose runs PostgreSQL 18, LocalStack 3.8, and Keycloak. Run the Spring Boot server on the host with Java 21 and Maven.
+
+From the repository root:
+
+```sh
+export KOONJ_PG_PORT=5432
+export KOONJ_S3_PORT=4566
+export KOONJ_LOCAL_REGION=eu-west-2
+export KOONJ_LOCAL_BUCKET=koonj-local-archive
+
+docker compose -f deploy/docker-compose.yml up -d --wait
+```
+
+The LocalStack readiness script creates the configured S3 bucket. One PostgreSQL container hosts both the `koonj` and `keycloak` databases. PostgreSQL creates the Keycloak database and login role when it initializes a new volume. Keycloak stores its imported realm in that database.
+
+If your PostgreSQL volume predates Keycloak and lacks the `keycloak` database, run the bootstrap SQL once inside the existing PostgreSQL service. The script preserves existing roles, databases, and credentials.
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d --wait postgres
+docker compose -f deploy/docker-compose.yml exec -T postgres \
+  sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -f /docker-entrypoint-initdb.d/10-keycloak.sql'
+docker compose -f deploy/docker-compose.yml up -d --wait
+```
+
+```sh
+export KOONJ_DB_URL="jdbc:postgresql://localhost:${KOONJ_PG_PORT}/koonj?reWriteBatchedInserts=true"
+export KOONJ_DB_USERNAME=koonj
+export KOONJ_DB_PASSWORD=password
+export KOONJ_DDL_AUTO=update
+
+# For a disposable LocalStack setup. Keep a stable escrowed key for a persistent database.
+export KOONJ_STORAGE_KEY_PROVIDER=local
+export KOONJ_STORAGE_LOCAL_ACTIVE_KEY=dev
+export KOONJ_STORAGE_LOCAL_KEYS="dev:$(openssl rand -base64 32)"
+export KOONJ_STORAGE_ALLOW_INSECURE_ENDPOINTS=true
+
+cd koonj-server
+mvn spring-boot:run
+```
+
+Hibernate creates and updates the PostgreSQL tables on startup. Set the same `KOONJ_DB_*` variables in the run configuration when launching `KoonjServerApplication` from IntelliJ. Open [Swagger UI](http://localhost:8080/swagger-ui/start) or [OpenAPI JSON](http://localhost:8080/v3/api-docs).
+
+The current `deploy/Dockerfile.server` expects a nested Maven module selected by `MODULE`. The standalone `koonj-server` is launched with Maven in this setup.
+
+### Keycloak and role verification
+
+1. Open the [Keycloak Admin Console](http://localhost:8180/admin) and sign in to the **master** realm with the bootstrap credentials. The development defaults are `admin` / `admin`. Set `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, and `KEYCLOAK_DB_PASSWORD` before the first Compose startup to customize them.
+2. Select the **koonj** realm. Under **Clients**, confirm `koonj-ui` is public, uses Standard Flow and S256 PKCE, and sends the `koonj-server` audience. Under **Identity providers**, choose **OpenID Connect v1.0** or **SAML v2.0** to add an external broker. Configure the callback URL shown by Keycloak with the external provider. Configure LDAP or AD under **User federation**, and configure SMTP under **Realm settings → Email** to deliver password reset links.
+3. Start the [Koonj UI](../../koonj-ui/README.md) and visit [http://localhost:5173](http://localhost:5173). Use **Sign In** with one of the development accounts below, or use **Create Account** and assign the new user a Koonj realm role in **Users → Role mapping**. A self-registered account can sign in and sees **Workspace access pending** until an administrator assigns a role. Sign out and back in to get a token with the new role.
+4. In the UI's browser Network tab, inspect `GET /api/v1/catalog/locations`. The request includes `Authorization: Bearer …`. Use the access token locally in Swagger **Authorize** or in the shell below. Sign out and back in to switch users. The master realm account manages Keycloak and the seeded realm admin manages Koonj.
+
+| Development sign-in | Password | Expected access |
+| --- | --- | --- |
+| `admin@appsthatmatter.uk` | `KoonjDev-Admin-26!` | Home, Explorer, Activity, Administration telemetry, and Storage. Manage and test connections, scan, archive, recall, and purge |
+| `operator@appsthatmatter.uk` | `KoonjDev-Operator-26!` | Home, Explorer, and Activity. Scan, archive, and recall. Administration, Storage, and purge require Admin |
+| `viewer@appsthatmatter.uk` | `KoonjDev-Viewer-26!` | Read-only Home and Explorer. Job history, connection management, telemetry, and write requests return 403 |
+
+The server validates the token's signature, issuer, expiry, and `koonj-server` audience. `KOONJ_AUTH_ISSUER_URI` and `KOONJ_AUTH_JWK_SET_URI` select the realm and its signing keys. `KOONJ_CORS_ALLOWED_ORIGINS` accepts a comma-separated list of explicit origins and defaults to `http://localhost:5173`. When using a different browser origin, update the Keycloak client's allowed redirects and origins as well.
+
+```sh
+curl -i http://localhost:8080/api/v1/connections
+# Expected without a token: 401
+
+printf 'Paste a short-lived viewer token: '
+read -rs KOONJ_ACCESS_TOKEN
+printf '\n'
+curl -i -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" http://localhost:8080/api/v1/catalog/locations
+# Expected: 200
+curl -i -X POST -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" \
+  http://localhost:8080/api/v1/catalog/scan/00000000-0000-0000-0000-000000000000
+# Expected: 403
+```
+
+Legacy scripts can opt in to HTTP Basic with `KOONJ_BASIC_AUTH_ENABLED=true`, `KOONJ_BASIC_AUTH_USERNAME`, and `KOONJ_BASIC_AUTH_PASSWORD`. This account defaults to `KOONJ_VIEWER`. Set `KOONJ_BASIC_AUTH_ROLE` to the role the script needs. JWT Bearer is the default.
+
+Compose uses Keycloak development mode and seeded credentials. Use a production Keycloak configuration and real secrets for deployed environments. The startup import skips an existing realm, so customize persisted realms in the admin console. PostgreSQL's initial credentials also apply only when initializing a new volume.
+
+### Register storage and archive a file
+
+Read an **admin** access token into `KOONJ_ACCESS_TOKEN` using the command above before running these examples.
+
+Create a sample file on the host where the server runs. For NAS, use the absolute path of the mounted share.
+
+```sh
+mkdir -p /tmp/koonj-source/docs
+printf 'Koonj archive example\n' > /tmp/koonj-source/docs/report.txt
+
+curl -fsS http://localhost:8080/api/v1/connections \
+  -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Primary Source","providerType":"LOCAL","role":"BOTH","basePathOrBucket":"/tmp/koonj-source"}'
+```
+
+Register the bucket created by LocalStack using its dummy `test` keys. The server encrypts these credentials using the local wrapping key configured above. For a persistent installation, see [Storage Authentication and Secret Stores](#storage-authentication-and-secret-stores).
+
+```sh
+curl -fsS http://localhost:8080/api/v1/connections \
+  -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"LocalStack Archive\",\"providerType\":\"CUSTOM_S3\",\"role\":\"BOTH\",
+       \"basePathOrBucket\":\"${KOONJ_LOCAL_BUCKET}\",\"endpointUrl\":\"http://127.0.0.1:${KOONJ_S3_PORT}\",
+       \"region\":\"${KOONJ_LOCAL_REGION}\",\"authMode\":\"ENCRYPTED_CREDENTIALS\",\"credentials\":{\"accessKeyId\":\"test\",\"secretAccessKey\":\"test\"},
+       \"pathStyleAccessEnabled\":true}"
+```
+
+For MinIO use `MINIO`, its endpoint, bucket, region, and either encrypted access keys or a project-scoped AWS Secrets Manager reference. For AWS use `AWS_S3` with the bucket's region and `pathStyleAccessEnabled:false`. Use the AWS workload identity default or configure a customer IAM role.
+
+Copy the two IDs from the responses. The optional scan creates a catalog listing. Archive can also discover the selected files directly.
+
+```sh
+LOCAL_ID='<local connection UUID>'
+S3_ID='<LocalStack connection UUID>'
+curl -fsS -X POST -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" "http://localhost:8080/api/v1/connections/$S3_ID/test"
+curl -fsS -X POST -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" "http://localhost:8080/api/v1/catalog/scan/$LOCAL_ID"
+
+curl -fsS http://localhost:8080/api/v1/transfers/archive \
+  -H "Authorization: Bearer $KOONJ_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"sourceConnectionId\":\"$LOCAL_ID\",\"targetConnectionId\":\"$S3_ID\",
+       \"paths\":[\"/docs/report.txt\"],\"storageClass\":\"STANDARD\",\"purgeSource\":false}"
+```
+
+Use `GET /api/v1/transfers/jobs/{jobId}` with the returned ID. Use `GET /api/v1/catalog/files?connectionId=...` to inspect the catalog. To recall, swap the two connection IDs and submit the same path to `POST /api/v1/transfers/recall`.
+
+Archive writes to the corresponding object key. Recall replaces the corresponding destination file after staging the received bytes. Keep writers quiescent during purge and dedicate the archive prefix or bucket to Koonj. Recall requires an object that is immediately readable, including any cold object restored separately by the provider.
+
+Phase 1 runs jobs on one server instance. Interrupted jobs require resubmission. Multipart uploads support objects up to 625 GiB, subject to provider limits. Scans and folder selections keep discovered metadata in memory. SMB registration validates the share syntax and reports that the driver is scheduled for Phase 2. PostgreSQL stores configured storage credentials, so restrict access to the metadata database.
+
+### Stop the development stack
+
+From the repository root:
+
+```sh
+docker compose -f deploy/docker-compose.yml down
+```
+
+---
+
+## Server Logging
+
+The API and transfer worker write to the console at INFO by default. Request
+logs use HTTP route templates and status codes, and scan and transfer logs use
+job IDs. Set `KOONJ_LOG_LEVEL=DEBUG` for diagnostics or `KOONJ_LOG_LEVEL=TRACE`
+for DETAIL events such as batch progress. DETAIL uses Logback's TRACE level.
+WARN and ERROR are visible at the default setting.
+
+Set `KOONJ_LOG_FILE` to a file on a writable shared mount to also write rolling
+logs. With Docker, set `KOONJ_LOG_FILE` for the API and
+`KOONJ_TRANSFER_WORKER_LOG_FILE` for the worker in `docker/.env`. Use container
+paths on a mounted directory. Each replica needs its own file for safe rotation.
+With systemd, console output is available through `journalctl -u koonj-server`.
+For file output outside `/opt/koonj/logs` or `/mnt/koonj`, add the writable
+mount directory to the unit's `ReadWritePaths`.
+
+---
+
+## Optional Docker Observability with OpenObserve
+
+The standard Docker command leaves telemetry export disabled. To enable it, set
+these values in the extracted `docker/.env` file:
+
+```dotenv
+OPENOBSERVE_ROOT_EMAIL=monitoring@example.com
+OPENOBSERVE_ROOT_PASSWORD='your_openobserve_password'
+OPENOBSERVE_AUTHORIZATION='Basic <base64(email:password)>'
+KOONJ_OPENOBSERVE_URL=http://localhost:5080/web
+```
+
+Replace the placeholder after `Basic ` with the Base64-encoded ingestion
+credentials. For example, encode the email and password you configured above:
+
+```bash
+printf '%s' 'monitoring@example.com:your_openobserve_password' | base64 | tr -d '\r\n'
+```
+
+From the extracted `docker/` directory, start Compose with both files. The
+base file defines the Koonj services and the second file adds OpenObserve and
+enables log, metric, and trace export. Use the same file pair for subsequent Compose
+commands.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d --build --wait
+docker compose -f docker-compose.yml -f docker-compose.otel.yml ps
+curl -fsS http://127.0.0.1:5080/healthz
+```
+
+Open **Administration → Observability → Open dashboards** in Koonj. On startup,
+Koonj imports these dashboards into the default folder of the configured OpenObserve
+organization:
+
+- **Koonj | API and JVM** shows request rate, 5xx percentage, p95 latency, JVM heap
+  and CPU usage, and database connection waiters.
+- **Koonj | Transfer Jobs and Traces** shows execution outcomes, p95 job duration,
+  queue pressure, and trace IDs for recent failed jobs. Queue metrics require
+  RabbitMQ transfer dispatch.
+- **Koonj | Server Logs** shows volume by severity, errors grouped by logger, and
+  recent warnings and errors. Search for a job ID in Logs to follow its activity.
+
+Startup imports missing dashboard titles and preserves dashboards you have edited.
+The importer retries temporary OpenObserve outages in the background. If the OTLP
+credentials can only ingest telemetry, set `KOONJ_OPENOBSERVE_DASHBOARDS_AUTHORIZATION`
+to a credential with dashboard list and create permissions. Use the same
+authorization header format as for OTLP.
+
+For remote browsers, set `KOONJ_OPENOBSERVE_URL` to
+the reachable browser URL. Set `KOONJ_OPENOBSERVE_ORGANIZATION` if the ingestion
+organization is different from `default`. Sign in to OpenObserve and open
+**Traces** in the `default` organization after running a scan or transfer.
+Look for the `koonj.job.execution` span and its `operation` and `outcome`
+attributes. **Metrics** shows aggregates such as job execution count and
+duration. Allow a minute for the first metrics export. **Logs** shows events from
+the API and transfer worker in the `koonj_server` stream. Search for ERROR
+records and use the job ID to correlate related events. Framework errors emitted
+while the exporter is running also appear in this stream. Koonj sends telemetry
+directly over OTLP/HTTP.
+For a host installation, set `KOONJ_OTLP_LOGS_ENDPOINT` to the complete OTLP/HTTP
+logs endpoint, such as `http://127.0.0.1:5080/api/default/v1/logs`. The OpenObserve data volume persists
+across container restarts.
+
+When upgrading the same Compose project from the old Grafana setup, add
+`--remove-orphans` to the startup command to remove the old telemetry
+containers while preserving their named volumes.
+
+---
+
 ## Scaling
 
 ### Horizontal scaling — API Server
 
-Enable [RabbitMQ transfer dispatch](TRANSFER-WORKERS.md) and run the API replicas on different ports or hosts. Run separate transfer workers for storage access and job execution.
+Enable [Archive and Recall Workers](#archive-and-recall-workers) and run the API replicas on different ports or hosts. Run separate transfer workers for storage access and job execution.
 
 **On-premise multi-instance**
 
@@ -498,11 +649,96 @@ JAVA_OPTS=-Xms1g -Xmx4g -XX:+UseG1GC
 
 ---
 
-## Project workspaces
+## Archive and Recall Workers
+
+Koonj uses PostgreSQL for job status, file and folder reservations, and pending dispatch. RabbitMQ carries job IDs and dispatch generations to independently scalable transfer workers. Workers load the saved job plan and use the existing transfer, checksum, catalog, and audit logic.
+
+### What users see
+
+- Archive and recall can run at the same time on disjoint storage paths, including within one project or registered connection. The job must fit the worker and storage capacity limits.
+- Once accepted, a queued or running job reserves the selected paths on both storage endpoints. A folder reserves its descendants. An overlapping submission returns HTTP 409 without exposing the other job. A project-authorized FUSE caller can wait on an existing interactive recall for the same catalog file.
+- Mounted folder recall resolves catalog aliases during admission and verifies each source and destination against the reservation before transferring it. A root selection can reserve an entire storage location. Catalog scans reserve their scanned tree against transfers while different connections can be scanned independently.
+- Pause and stop allow active files to finish. Paused and stopped jobs release their reservations after writes finish. Resume and retry reacquire paths and can return 409 if another job reserved them in the meantime.
+- Distributed interactive recall returns the provider's estimate when S3 is restoring a cold object. The same job retains its paths and polls again through RabbitMQ without occupying a worker slot while waiting. Bulk recall retains its existing per-file result for a cold object and can be retried later.
+
+### Enable distributed transfers
+
+1. For an upgrade, stop accepting work on the old release, let pending and running work finish, and stop all old instances. Keep paused jobs for users to resume through the new version. If a prior instance was interrupted, reconcile storage and those jobs before switching modes. For an existing database using `KOONJ_DDL_AUTO=validate`, apply `../../deploy/migrations/transfer-dispatch.sql` before starting the new release. With `update`, start one server to update the schema before adding replicas.
+2. Enable `KOONJ_TRANSFER_RABBIT_ENABLED=true` in every API and worker process sharing the database. Production Docker Compose starts a separate `koonj-transfer-worker` by default. A standalone installation runs the same server JAR with `KOONJ_TRANSFER_WORKER_ENABLED=false` on API replicas and `KOONJ_TRANSFER_RELAY_ENABLED=false` on worker instances. Leave a relay enabled on at least one API. Keep worker HTTP ports on a private network.
+3. Give transfers and notifications separate RabbitMQ credentials and virtual hosts in a SaaS deployment. Set `KOONJ_TRANSFER_RABBIT_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`, `_VHOST`, and `_SSL` as needed. The transfer settings fall back to the shared broker settings. On deployment, the worker declares the queues for its pool. Use a replicated RabbitMQ cluster for quorum queue failover and a highly available PostgreSQL instance.
+4. Give API admission processes and eligible workers access to configured mounts at the registered paths. Use identical namespace, alias, case, and routing configuration across replicas. Scale one service at a time and inspect queue age, worker throughput, and S3 and filesystem utilization.
+
+Embedded execution is available for single-process deployments with `KOONJ_TRANSFER_RABBIT_ENABLED=false`. Its job concurrency defaults to one and can be raised with `KOONJ_TRANSFER_EMBEDDED_JOBS`. Drain the transfer workers and resolve stalled attempts before changing modes. Run all processes connected to a given database in the same mode.
+
+### Storage identity and routing
+
+The reservation namespace is scoped to the physical storage. Koonj identifies S3 storage by endpoint and bucket, and mounted paths by their resolved root and relative path inside the configured mounted domain. Nested roots under the same domain can therefore overlap. Case-insensitive mounted-path comparisons default to enabled. Set `KOONJ_TRANSFER_CASE_INSENSITIVE_MOUNTS=false` only if every mount in the domain is case-sensitive.
+
+Use `KOONJ_TRANSFER_STORAGE_ALIASES` to register alternate access paths that resolve to the same underlying data, such as bind mounts or a second hostname for an S3 gateway. Specify semicolon-separated pairs and use one canonical identity per physical location.
+
+```properties
+KOONJ_TRANSFER_STORAGE_ALIASES="mount:/srv/media-alias=mount:/mnt/media;s3:s3-alias.internal:443/archive=s3:s3.internal:443/archive"
+KOONJ_TRANSFER_MOUNT_POOLS="/mnt/media=media;/mnt/projects=projects"
+```
+
+Mounted routes match the longest canonical mount prefix. Run a worker with `KOONJ_TRANSFER_WORKER_POOL=media` for the first route and with `KOONJ_TRANSFER_WORKER_POOL=projects` for the second. Unmatched routes and S3-only scans use the `default` pool. For each pool, register only paths its workers can access. Physical changes to mounts or endpoint alias configuration should be made after affected jobs drain.
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `KOONJ_TRANSFER_BACKGROUND_WORKERS` | 2 | Concurrent bulk jobs per worker instance |
+| `KOONJ_TRANSFER_INTERACTIVE_WORKERS` | 1 | Concurrent FUSE recalls per worker instance |
+| `KOONJ_TRANSFER_TENANT_JOBS` | 2 | Active bulk jobs per project across workers |
+| `KOONJ_TRANSFER_TENANT_INTERACTIVE_JOBS` | 1 | Active FUSE recalls per project across workers |
+| `KOONJ_TRANSFER_BACKEND_JOBS` | 8 | Active jobs per bucket or mounted domain across workers. One slot is reserved for interactive work. |
+| `KOONJ_TRANSFER_MAX_PARALLEL_FILES` | 24 | Concurrent files per transfer job |
+| `KOONJ_TRANSFER_IN_FLIGHT_MIB` | 512 | In-flight file size budget per transfer job |
+
+The backend job cap bounds aggregate file concurrency and byte exposure through the per-job limits. Configure identical cluster-wide limits on workers. The relay batches dispatch across projects. A job that cannot obtain capacity is rescheduled briefly so other projects can proceed.
+
+### Failure and recovery
+
+A queued job is stored with its reservation before the API returns. The relay resumes publication after an unconfirmed publish. Each worker consumer keeps its delivery unacknowledged while it executes the claimed job. With prefetch set to one, RabbitMQ can deliver other jobs to free consumers. Deferred and stale deliveries are acknowledged after their database decisions. Repeated deliveries with the same generation cannot start another attempt. Set the broker's delivery acknowledgement timeout above your expected longest job to avoid unnecessary channel closure and redelivery. A confirmed dispatch is backed by RabbitMQ persistence. After a full broker data loss, rearm only unclaimed pending jobs by setting their `dispatch_after` to the current timestamp in PostgreSQL once replacement queues exist.
+
+Watch `koonj.transfer.jobs.pending`, `koonj.transfer.jobs.oldest.pending.seconds`, `koonj.transfer.attempts.stalled`, and the pool's two RabbitMQ queues and invalid queue. Oldest pending age excludes interactive recall jobs that are already waiting on cold storage. If job age rises while worker slots remain free, check queue routing and endpoint limits.
+
+A stale heartbeat keeps the reservation because a disconnected worker may still be writing. Distributed startup leaves other workers' attempts alone. To release a stalled job:
+
+1. Identify its `worker_instance`, `worker_attempt`, and `worker_heartbeat` in `transfer_jobs`. Confirm that the identified process has exited or that its storage access has been revoked. Check the job events, file movement records, staged S3 objects, destination content, and mounted links. Reconcile storage and the catalog before releasing the reservation if a copy, link replacement, or deletion was interrupted.
+2. With the job and attempt IDs copied from that review, run the following in `psql` as a database operator. The attempt and heartbeat conditions prevent this action from reclaiming a different or recently live attempt.
+
+```sql
+-- psql variables job_id and attempt_id are the UUIDs reviewed above.
+WITH stopped AS (
+    UPDATE transfer_jobs
+    SET status = 'FAILED', completed_at = current_timestamp,
+        details = 'Stalled worker stopped and storage reviewed by an operator.',
+        worker_attempt = NULL, worker_instance = NULL, worker_heartbeat = NULL,
+        dispatch_after = NULL, active_paths = NULL
+    WHERE id = :'job_id'::uuid AND worker_attempt = :'attempt_id'::uuid
+      AND worker_heartbeat < current_timestamp - interval '90 seconds'
+    RETURNING id, details
+), released AS (
+    DELETE FROM transfer_reservations WHERE job_id IN (SELECT id FROM stopped)
+)
+INSERT INTO job_events (job_id, recorded_at, level, message)
+SELECT id, current_timestamp, 'ERROR', details FROM stopped;
+```
+
+3. Retry from Activity after checking the failed job. Automatic takeover requires a storage layer that can fence the former attempt. The mounted filesystem and S3 connectors do not currently provide that guarantee.
+
+For maintenance, let active jobs finish before removing workers. An instance terminated mid-transfer can require the same recovery procedure.
+
+### Worker integration test
+
+The normal server suite runs against H2. The broker integration test is opt-in. Point `KOONJ_TRANSFER_IT_POSTGRES_URL` at a disposable PostgreSQL database and set `KOONJ_TRANSFER_IT_USERNAME`, `KOONJ_TRANSFER_IT_PASSWORD`, `KOONJ_TRANSFER_IT_RABBIT_PORT`, and the matching `KOONJ_TRANSFER_IT_RABBIT_USERNAME`, `KOONJ_TRANSFER_IT_RABBIT_PASSWORD`, and `KOONJ_TRANSFER_IT_RABBIT_VHOST` for a disposable local RabbitMQ broker. Run `mvn -pl koonj-server -am test`.
+
+---
+
+## Project Workspaces & Private Projects
 
 Upgrade an existing PostgreSQL installation by backing up the Koonj database,
 stopping the server, and applying the
-[project workspace migration](../deploy/migrations/project-workspaces.sql) with
+[project workspace migration](../../deploy/migrations/project-workspaces.sql) with
 `psql -v ON_ERROR_STOP=1 -f deploy/migrations/project-workspaces.sql` against that
 database before starting the new server. The migration assigns existing storage
 connections, catalog records, jobs, and integrations to **Default project**.
@@ -514,8 +750,8 @@ lineage where applicable. Resubmit any older paused jobs after upgrading.
 Reapply the migration on installations that already have projects to add the
 activity ownership column and index.
 
-For existing project installations, complete the [private-project migration](PRIVATE-PROJECTS.md)
-before restarting the API and worker. Human accounts receive private personal projects.
+For existing project installations, complete the [Upgrade to private projects](#upgrade-to-private-projects)
+procedure before restarting the API and worker. Human accounts receive private personal projects.
 Use **Projects** to create additional projects or invite a member by email.
 
 API clients can call `POST /api/v1/projects/session` to obtain their memberships,
@@ -525,7 +761,48 @@ Requests without the header use the account's personal default. FUSE uses Defaul
 UUID in the server’s `KOONJ_PROJECTS_AGENT_IDS` allowlist and use it as
 `KOONJ_AGENT_PROJECT_ID` on the mount.
 
-## Storage authentication and secret stores
+### Upgrade to private projects
+
+Back up PostgreSQL and stop the API and notification workers. Apply the existing project-workspaces migration first. Export the current memberships for review:
+
+```sql
+SELECT p.id, p.name, m.account_subject, a.display_name
+FROM project p JOIN project_membership m ON m.project_id = p.id
+JOIN project_account a ON a.subject = m.account_subject ORDER BY p.id;
+```
+
+In one `psql` session, create the temporary mapping below and insert operator-reviewed rows for at least one existing member of each occupied project. Mark a row personal only when you can confirm the user's original personal project. Keep the shared legacy project's personal flag false. Empty projects retain their IDs and data.
+
+```sql
+CREATE TEMP TABLE project_admin_mapping (
+    project_id uuid NOT NULL, subject varchar(255) NOT NULL, personal boolean NOT NULL DEFAULT false,
+    PRIMARY KEY(project_id, subject)
+);
+-- INSERT INTO project_admin_mapping VALUES ('<project UUID>', '<exact account subject>', false);
+\set ON_ERROR_STOP on
+\i deploy/migrations/private-projects.sql
+```
+
+Every unmapped personal default is provisioned during migration. Verify the following query returns zero rows before restarting services:
+
+```sql
+SELECT a.subject FROM project_account a WHERE NOT EXISTS (
+    SELECT FROM project_membership m WHERE m.project_id = a.default_project_id
+    AND m.account_subject = a.subject AND m.role = 'ADMIN'
+);
+```
+
+Set **Koonj Administrators** as the Keycloak registration default group and confirm it grants `KOONJ_ADMIN`. Configure Keycloak SMTP and email verification for new email accounts.
+
+After both the private projects and notifications migrations, apply [project-invitation-channels.sql](../../deploy/migrations/project-invitation-channels.sql) and then [project-lifecycle.sql](../../deploy/migrations/project-lifecycle.sql) before starting the upgraded server and worker. Set `KOONJ_PUBLIC_UI_URL` to the browser-accessible HTTPS UI origin on the worker.
+
+In **Projects → Email invitations**, select an enabled email channel or use **Configure email channel** to create one and select it for this project. The worker uses the channel’s SMTP relay, credentials, TLS settings and sender. Fields left blank follow the email channel’s deployment-default rules. Existing pending deliveries without a channel require a resend after selection. Previously delivered links retain their expiry.
+
+Before rollout, sign in as two test users and confirm each project rejects the other user's ID. Send an invitation to a test mailbox and accept it using the recipient's verified account.
+
+---
+
+## Storage Authentication and Secret Stores
 
 Koonj defaults to host or workload identity where available. Object storage can also use an AWS Secrets Manager reference or credentials encrypted by Koonj before PostgreSQL receives them.
 
@@ -575,9 +852,9 @@ docker compose -f docker-compose.yml \
   up -d koonj-server koonj-transfer-worker
 ```
 
-Use the Compose overlays already enabled for your stack. You can omit the telemetry overlay if you run without OpenObserve. On Docker Desktop, both containers can reach a published host port through `host.docker.internal`. If LocalStack is on a shared Docker network with Koonj, use its service DNS name on that network. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/) · [Docker Compose networking](https://docs.docker.com/compose/how-tos/networking/)
+Use the Compose overlays already enabled for your stack. You can omit the telemetry overlay if you run without OpenObserve. On Docker Desktop, both containers can reach a published host port through `host.docker.internal`. If LocalStack is on a shared Docker network with Koonj, use its service DNS name on that network ([Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/) · [Docker Compose networking](https://docs.docker.com/compose/how-tos/networking/)).
 
-In **Storage**, add the connection with these settings.
+In **Storage**, add the connection with these settings:
 
 | Field | Example |
 |---|---|
@@ -595,7 +872,7 @@ Choose **Test Connection**. A successful test enables **Save connection** for a 
 
 #### Test Amazon S3 from local Docker Compose
 
-Use temporary AWS CLI session credentials for local testing against real Amazon S3. Both the API and transfer worker need the session. If your organization uses IAM Identity Center, configure the host’s AWS CLI v2 profile once with `aws configure sso --profile koonj-dev`. The profile needs access to the bucket you want to test. [AWS CLI IAM Identity Center setup](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
+Use temporary AWS CLI session credentials for local testing against real Amazon S3. Both the API and transfer worker need the session. If your organization uses IAM Identity Center, configure the host’s AWS CLI v2 profile once with `aws configure sso --profile koonj-dev`. The profile needs access to the bucket you want to test ([AWS CLI IAM Identity Center setup](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)).
 
 In the release bundle’s `docker/` directory, set `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` in `.env` and create `docker-compose.aws-dev.yml`.
 
@@ -610,7 +887,7 @@ services:
     environment: *aws-session
 ```
 
-Sign in to the profile and check which AWS identity it uses. The following example requires `jq`. The subshell passes the three credentials to Compose without writing them to a configuration file or leaving them exported in the parent shell. [AWS CLI credential export](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
+Sign in to the profile and check which AWS identity it uses. The following example requires `jq`. The subshell passes the three credentials to Compose without writing them to a configuration file or leaving them exported in the parent shell ([AWS CLI credential export](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)).
 
 ```sh
 (
@@ -638,7 +915,7 @@ In **Storage**, select **AWS S3 → AWS workload identity**. Enter the real buck
 
 #### Attach a workload role in production
 
-On Amazon ECS, assign IAM **task roles** to the API and transfer worker tasks. On a dedicated EC2 deployment, attach an **instance profile** and ensure both containers can reach the EC2 Instance Metadata Service (IMDSv2). Keep `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` for a dedicated deployment using its own bucket. Start the production workloads without the local development credential overlay. The AWS SDK retrieves and refreshes the role’s temporary credentials. [ECS task IAM roles](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) · [EC2 role credentials for the AWS SDK for Java](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/ec2-iam-roles.html)
+On Amazon ECS, assign IAM **task roles** to the API and transfer worker tasks. On a dedicated EC2 deployment, attach an **instance profile** and ensure both containers can reach the EC2 Instance Metadata Service (IMDSv2). Keep `KOONJ_AWS_ALLOW_DEFAULT_CHAIN=true` for a dedicated deployment using its own bucket. Start the production workloads without the local development credential overlay. The AWS SDK retrieves and refreshes the role’s temporary credentials ([ECS task IAM roles](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) · [EC2 role credentials for the AWS SDK for Java](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/ec2-iam-roles.html)).
 
 #### Assume a role in a customer AWS account
 
@@ -664,7 +941,7 @@ Enable a wrapping key provider on the API and every transfer worker. Start with 
 | `KOONJ_STORAGE_LOCAL_KEYS` | Comma-separated `key-id:base64-key` pairs. Each key is 32 securely generated bytes encoded as standard Base64. Include prior versions while their envelopes or backups are retained. |
 | `KOONJ_STORAGE_SECRET_CACHE_TTL` | Maximum reuse time for resolved credentials. Defaults to `PT30S`, with a supported range of 1–300 seconds. |
 
-**AWS KMS.** Grant the API workload `kms:GenerateDataKey` on the active key and grant the API and transfer workers `kms:Decrypt` on their approved keys. Use workload identity and restrict the key policy and IAM permissions to the deployment. The KMS encryption context includes `purpose=koonj-storage-credential-v1`, project, connection ID and revision. Those values are identifiers that can appear in CloudTrail. [AWS KMS data keys](https://docs.aws.amazon.com/kms/latest/developerguide/data-keys.html) · [AWS KMS encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html)
+**AWS KMS.** Grant the API workload `kms:GenerateDataKey` on the active key and grant the API and transfer workers `kms:Decrypt` on their approved keys. Use workload identity and restrict the key policy and IAM permissions to the deployment. The KMS encryption context includes `purpose=koonj-storage-credential-v1`, project, connection ID and revision. Those values are identifiers that can appear in CloudTrail ([AWS KMS data keys](https://docs.aws.amazon.com/kms/latest/developerguide/data-keys.html) · [AWS KMS encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html)).
 
 **Local or air-gapped.** Generate each wrapping key once using a CSPRNG, for example `openssl rand -base64 32`, and save it in the deployment's protected key escrow. Inject the keyring through the restricted service environment on the API and workers. Keep it outside the database, database backups, source control and container images. Restrict access to Docker and process inspection to trusted operators. Avoid printing the resolved Compose configuration or service environment. Keep a separately protected recovery copy of the active and prior keys.
 
@@ -675,16 +952,18 @@ For SaaS, use TLS at the proxy and keep request bodies, signing headers and runt
 ### Upgrade existing storage connections
 
 1. Inventory the connection IDs, projects and providers. Prepare replacement keys, AWS roles or AWS Secrets Manager references. For connections previously using OpenBao, provision new credentials or securely recover the current ones before retiring that service. Take a protected backup and drain in-flight jobs before stopping the API and transfer workers.
-2. Apply the [project workspace migration](../deploy/migrations/project-workspaces.sql) if required. For schemas predating explicit storage authentication, apply [Phase 1](../deploy/migrations/storage-auth-phase-1.sql). Then apply [the encryption migration](../deploy/migrations/storage-auth-encryption.sql) using `psql -X -v ON_ERROR_STOP=1 -f deploy/migrations/storage-auth-encryption.sql`. In the release bundle the scripts are under `deploy/migrations`. Fresh installations using schema creation skip these upgrade scripts.
+2. Apply the [project workspace migration](../../deploy/migrations/project-workspaces.sql) if required. For schemas predating explicit storage authentication, apply [Phase 1](../../deploy/migrations/storage-auth-phase-1.sql). Then apply [the encryption migration](../../deploy/migrations/storage-auth-encryption.sql) using `psql -X -v ON_ERROR_STOP=1 -f deploy/migrations/storage-auth-encryption.sql`. In the release bundle the scripts are under `../../deploy/migrations`. Fresh installations using schema creation skip these upgrade scripts.
 3. Configure the wrapping key provider on all replicas. Remove the retired OpenBao Compose overlay from the startup command and start the new release. The encryption migration retains AWS Secrets Manager references and existing connection IDs. Previous OpenBao references and quarantined plaintext connections show **Migration required**.
 4. Edit each original connection, test the new method and save. Legacy AWS S3 connections with an explicit custom endpoint can be reclassified as **Custom S3** while keeping the bucket, endpoint and region. A successful update clears quarantined legacy values through the database guard. Check worker access and run a representative job before resuming traffic.
-5. Rotate or revoke previously stored credentials at their storage provider. Database backups, snapshots and WAL can still hold historical plaintext. Retain and restrict those copies according to your retention policy. After every active connection has migrated and quarantined values are cleared, apply [Phase 3](../deploy/migrations/storage-auth-phase-3.sql) to drop the old plaintext columns. For a retired connection whose catalog history must be retained, clear both legacy columns and set `active=false` in a maintenance transaction before applying Phase 3.
+5. Rotate or revoke previously stored credentials at their storage provider. Database backups, snapshots and WAL can still hold historical plaintext. Retain and restrict those copies according to your retention policy. After every active connection has migrated and quarantined values are cleared, apply [Phase 3](../../deploy/migrations/storage-auth-phase-3.sql) to drop the old plaintext columns. For a retired connection whose catalog history must be retained, clear both legacy columns and set `active=false` in a maintenance transaction before applying Phase 3.
 
 ### Rotate and recover
 
 - **Access key rotation.** Issue a replacement with overlapping validity. Enter both new keys while keeping the connection settings as they are and save. Koonj verifies the new keys and atomically replaces the encrypted envelope. Workers reload it after their credential-cache deadline, including during multipart transfers. Wait for that deadline and confirm representative jobs on each worker pool before revoking the previous key. For AWS Secrets Manager, publish a new current version of the same reference.
 - **Wrapping key rotation.** Add the new key to every replica before switching the active writer. Keep the previous local key in the keyring or the previous KMS ARN in the decrypt allowlist. Re-enter or replace credentials on each connection to create envelopes under the new writer key. Keep old wrapping keys available for retained backups and validate a restore before retiring them.
 - **Recovery.** Restore PostgreSQL into an isolated deployment with the original retained wrapping keys and matching key IDs. Restore KMS permissions or the escrowed local keyring separately. Test encrypted connection access and restore representative data before resuming jobs. A missing key or KMS outage causes affected connections to fail once cached credentials expire. Restore key access or enter replacement credentials under a new key. Catalog browsing and independent authentication modes remain available.
+
+---
 
 ## Configuration Reference
 
@@ -712,7 +991,7 @@ For SaaS, use TLS at the proxy and keep request bodies, signing headers and runt
 ### Notifications and alerts
 
 On an existing PostgreSQL installation using `KOONJ_DDL_AUTO=validate` or
-`none`, apply the [notification migration](../deploy/migrations/notifications.sql)
+`none`, apply the [notification migration](../../deploy/migrations/notifications.sql)
 before starting the new server. Run
 `psql -v ON_ERROR_STOP=1 -f deploy/migrations/notifications.sql` against the
 Koonj database. Hibernate applies the schema changes with `KOONJ_DDL_AUTO=update`.
@@ -730,7 +1009,7 @@ queues. After the API and RabbitMQ are running, run
 systemd unit. Without systemd, launch `java -jar lib/koonj-notification-worker.jar`
 with the worker environment exported. For development, start the broker with
 `docker compose -f deploy/docker-compose.yml --profile notifications up -d rabbitmq`
-and use the broker settings in `deploy/.env.example` when launching the worker.
+and use the broker settings in `../../deploy/.env.example` when launching the worker.
 Point the worker at the same database as the API using `KOONJ_DB_URL`,
 `KOONJ_DB_USERNAME`, and `KOONJ_DB_PASSWORD`.
 
@@ -785,9 +1064,9 @@ Settings and delivery history apply across the Koonj installation.
   request body and compare it to the hex value after `sha256=`. The
   `deliveryId` is stable across retries.
 - Slack uses an incoming webhook and Block Kit. Teams uses an incoming webhook
-  or a Power Automate webhook that accepts an Adaptive Card message envelope.
-  [Slack incoming webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/) ·
-  [Teams Workflows webhooks](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)
+  or a Power Automate webhook that accepts an Adaptive Card message envelope
+  ([Slack incoming webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/) ·
+  [Teams Workflows webhooks](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)).
 - SMTP channels inherit worker settings and can override the relay, TLS mode,
   credentials, sender, and templates. A custom relay host uses the channel's
   credentials. Templates support `{title}`, `{eventType}`, and `{summary}`.
@@ -898,6 +1177,220 @@ New registrations inherit the `KOONJ_ADMIN` realm role through the **Koonj Admin
 
 For an existing realm, add **Koonj Administrators** under **Realm settings → User registration → Default Groups** and confirm its role mapping includes `KOONJ_ADMIN`. Remove the viewer group from registration defaults if it was used for new accounts. Changing default groups affects subsequent registrations.
 
+---
+
+## MCP Server & Integration
+
+Koonj exposes a project-scoped MCP server over HTTP with Server-Sent Events. The connection uses the MCP `2024-11-05` SSE transport. An SSE stream announces a session-specific POST endpoint. The client sends JSON-RPC requests there and reads replies from the original stream ([MCP transport specification](https://modelcontextprotocol.io/specification/2024-11-05/basic/transports)).
+
+### Server & Proxy Deployment
+
+For a PostgreSQL deployment with `KOONJ_DDL_AUTO=validate` or `none`, apply the
+[PAT migration](../../deploy/migrations/user-api-keys.sql) after the project workspace
+migration and before starting the updated server.
+
+```bash
+psql -v ON_ERROR_STOP=1 -f deploy/migrations/user-api-keys.sql
+```
+
+The shipped Docker and on-premise Nginx configurations include dedicated SSE and
+message locations. When using another reverse proxy, apply the
+[MCP Nginx locations](../../deploy/nginx.conf) or equivalent rules. Serve both routes
+over HTTPS. The SSE location disables buffering, caching, compression, and access
+logging and has a 24-hour read timeout. If another gateway logs URLs, redact the
+`token` query parameter on the SSE route. Set `KOONJ_CORS_ALLOWED_ORIGINS` to the
+browser workspace origin if the API is hosted on a separate origin.
+
+For browser SSE clients that cannot set headers on the GET, `/api/v1/mcp/sse?token=<PAT>` accepts a query token. Send the PAT in the `Authorization` header on POST. Keep query strings out of proxy and application logs and prefer headers wherever possible.
+
+SSE sessions are held in memory. Route `/api/v1/mcp/sse` and
+`/api/v1/mcp/message` to the same Koonj instance, including when the rest of the API
+uses multiple replicas. A single upstream for these paths works with all supported
+clients. The server sends a heartbeat every 20 seconds and renews the session through
+client reconnection after a restart or the 24-hour session timeout. Each instance
+defaults to 512 open SSE sessions and 64 simultaneous MCP requests, configurable
+with `KOONJ_MCP_MAX_SESSIONS` and `KOONJ_MCP_MAX_CALLS`. Each PAT can open up to
+16 streams and each stream can run up to eight requests concurrently.
+
+### Generate a Personal Access Token
+
+1. Select your project in Koonj.
+2. Open **Integration → MCP & AI Assistant → Generate New Token**.
+3. Name the token and optionally choose an expiration. Copy the secret or use the populated client configuration. The API reveals the secret once at creation and stores a SHA-256 digest.
+4. Select **Test connection** to initialize a session and list the tools available to the new token.
+
+Tokens use your Koonj roles at issuance. Changes to Koonj’s role permissions and project membership apply to existing tokens. Revoke existing tokens when changing a user’s identity-provider role assignment, then issue replacements with the new roles. Revocation stops new requests immediately and the heartbeat closes existing streams within 20 seconds under normal operation. Already queued jobs continue under Koonj’s job controls.
+
+Use a private client configuration or secret store and keep PATs out of version control. Set `Authorization: Bearer <PAT>` on both HTTP endpoints. The `X-Koonj-Project` header is optional because the project is part of the token. If you send it, use the token’s project ID.
+
+### Claude Desktop
+
+Install Node.js 20 or later and use `mcp/mcp-bridge.mjs` from the extracted deployment bundle or [mcp-bridge.mjs](../../deploy/scripts/mcp/mcp-bridge.mjs) from the repository. Put this entry under `mcpServers` in `claude_desktop_config.json`. Use absolute paths to your Node executable and the script. On Windows, double backslashes in JSON paths, or use forward slashes.
+
+```json
+{
+  "mcpServers": {
+    "koonj": {
+      "command": "/absolute/path/to/node",
+      "args": [
+        "/absolute/path/to/mcp/mcp-bridge.mjs",
+        "--url",
+        "https://koonj.example.com/api/v1/mcp/sse",
+        "--project",
+        "00000000-0000-0000-0000-000000000001"
+      ],
+      "env": {
+        "KOONJ_TOKEN": "YOUR_KOONJ_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Find the file at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows. Fully quit and reopen Claude Desktop after editing it. The bridge also accepts `--token` for scripted launches. Use `KOONJ_TOKEN` to keep the secret out of process arguments ([MCP guide for Claude Desktop](https://py.sdk.modelcontextprotocol.io/get-started/real-host/)).
+
+### Cursor
+
+Save the following in your private `~/.cursor/mcp.json` or a private project-level `.cursor/mcp.json`. If your Cursor build requires a stdio server, use the Claude Desktop entry in the same file ([Cursor MCP configuration](https://cursor.com/docs/mcp)).
+
+```json
+{
+  "mcpServers": {
+    "koonj": {
+      "url": "https://koonj.example.com/api/v1/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer ${env:KOONJ_TOKEN}",
+        "X-Koonj-Project": "00000000-0000-0000-0000-000000000001"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add the following to `~/.codeium/windsurf/mcp_config.json` and refresh the MCP servers in Windsurf. The Claude Desktop entry also works as a stdio configuration.
+
+```json
+{
+  "mcpServers": {
+    "koonj": {
+      "serverUrl": "https://koonj.example.com/api/v1/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer YOUR_KOONJ_TOKEN",
+        "X-Koonj-Project": "00000000-0000-0000-0000-000000000001"
+      }
+    }
+  }
+}
+```
+
+### Custom Python agents and LangChain
+
+Install the MCP Python SDK with `python -m pip install mcp`. Set `KOONJ_MCP_URL` to the SSE URL, `KOONJ_PROJECT` to your project UUID, and `KOONJ_TOKEN` to your PAT ([MCP Python SSE client](https://py.sdk.modelcontextprotocol.io/client/transports/)).
+
+```python
+import asyncio
+import os
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
+async def main():
+    headers = {
+        "Authorization": f"Bearer {os.environ['KOONJ_TOKEN']}",
+        "X-Koonj-Project": os.environ["KOONJ_PROJECT"],
+    }
+    async with sse_client(os.environ["KOONJ_MCP_URL"], headers=headers) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            print([tool.name for tool in (await session.list_tools()).tools])
+            result = await session.call_tool("search_catalog_files", {"limit": 10})
+            print(result.content[0].text)
+            if job_id := os.environ.get("KOONJ_JOB_ID"):
+                status = await session.call_tool("get_job_status", {"jobId": job_id})
+                print(status.content[0].text)
+
+asyncio.run(main())
+```
+
+For an agent using `langchain-mcp-adapters`, configure `MultiServerMCPClient` with an explicit SSE transport ([LangChain MCP adapters](https://github.com/langchain-ai/langchain-mcp-adapters)).
+
+```python
+import asyncio
+import os
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def load_tools():
+    client = MultiServerMCPClient({
+        "koonj": {
+            "transport": "sse",
+            "url": os.environ["KOONJ_MCP_URL"],
+            "headers": {
+                "Authorization": f"Bearer {os.environ['KOONJ_TOKEN']}",
+                "X-Koonj-Project": os.environ["KOONJ_PROJECT"],
+            },
+        }
+    })
+    return await client.get_tools()
+
+async def main():
+    print([tool.name for tool in await load_tools()])
+
+asyncio.run(main())
+```
+
+### Check the connection with curl
+
+Set `KOONJ_BASE_URL` to the Koonj origin and set `KOONJ_TOKEN` and `KOONJ_PROJECT` as above. Leave the first terminal running.
+
+```sh
+curl -sS -N "$KOONJ_BASE_URL/api/v1/mcp/sse" \
+  -H 'Accept: text/event-stream' \
+  -H "Authorization: Bearer $KOONJ_TOKEN" \
+  -H "X-Koonj-Project: $KOONJ_PROJECT"
+```
+
+Copy the relative URL from the stream’s `endpoint` event into `KOONJ_MESSAGE_PATH` in a second terminal. Wait for the initialization response before sending the initialized notification. POSTs return HTTP 202 and the first terminal displays JSON-RPC replies.
+
+```sh
+mcp_post() {
+  curl -fsS "$KOONJ_BASE_URL$KOONJ_MESSAGE_PATH" \
+    -H "Authorization: Bearer $KOONJ_TOKEN" \
+    -H "X-Koonj-Project: $KOONJ_PROJECT" \
+    -H 'Content-Type: application/json' -d "$1"
+}
+
+mcp_post '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+mcp_post '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+mcp_post '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp_post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_catalog_files","arguments":{"limit":10}}}'
+```
+
+To inspect a job, set `KOONJ_JOB_ID` to a job ID you own in this project:
+
+```sh
+mcp_post "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_job_status\",\"arguments\":{\"jobId\":\"$KOONJ_JOB_ID\"}}}"
+```
+
+### Tool permissions
+
+| Tool | Required permission |
+| --- | --- |
+| `list_storage_locations`, `search_catalog_files`, `get_file_details`, `get_file_lineage` | `CATALOG_VIEW` |
+| `get_storage_status` | `STORAGE_VIEW` |
+| `queue_archive` | `TRANSFER_RUN`, plus `TRANSFER_PURGE` for `PURGE` |
+| `queue_recall`, `sync_recall_file` | `TRANSFER_RUN` |
+| `get_job_status` | `ACTIVITY_VIEW` and job ownership |
+| `control_job` | `ACTIVITY_CONTROL` and job ownership. Resume and retry also need permissions to run the original operation. |
+| `trigger_catalog_scan` | `CATALOG_OPERATE` |
+| `get_system_health` | `OBSERVABILITY_VIEW` |
+
+Search uses the project’s last-modified thresholds for `HOT`, `WARM`, and `COLD`. The response includes `archiveState` separately. Pages start at zero and contain up to 50 entries. Pass the file ID to `get_file_details` for the full path and metadata. Monitor queued jobs using the returned `jobId`. Permission denials appear as MCP tool results with `isError: true` and leave the session open.
+
+---
+
 ## Security Checklist
 
 - [ ] Change all default passwords in `.env` / `koonj.env`
@@ -958,32 +1451,3 @@ docker inspect --format='{{json .State.Health}}' <container>
 - If OpenObserve returns HTTP 401, check that `OPENOBSERVE_AUTHORIZATION`
   contains `Basic ` followed by the Base64-encoded ingestion credentials.
   Recreate `koonj-server` with both Compose files after updating `.env`.
-
-## MCP server
-
-For a PostgreSQL deployment with `KOONJ_DDL_AUTO=validate` or `none`, apply the
-[PAT migration](../deploy/migrations/user-api-keys.sql) after the project workspace
-migration and before starting the updated server.
-
-```bash
-psql -v ON_ERROR_STOP=1 -f deploy/migrations/user-api-keys.sql
-```
-
-The shipped Docker and on-premise Nginx configurations include dedicated SSE and
-message locations. When using another reverse proxy, apply the
-[MCP Nginx locations](../deploy/nginx.conf) or equivalent rules. Serve both routes
-over HTTPS. The SSE location disables buffering, caching, compression, and access
-logging and has a 24-hour read timeout. If another gateway logs URLs, redact the
-`token` query parameter on the SSE route. Set `KOONJ_CORS_ALLOWED_ORIGINS` to the
-browser workspace origin if the API is hosted on a separate origin.
-
-SSE sessions are held in memory. Route `/api/v1/mcp/sse` and
-`/api/v1/mcp/message` to the same Koonj instance, including when the rest of the API
-uses multiple replicas. A single upstream for these paths works with all supported
-clients. The server sends a heartbeat every 20 seconds and renews the session through
-client reconnection after a restart or the 24-hour session timeout. Each instance
-defaults to 512 open SSE sessions and 64 simultaneous MCP requests, configurable
-with `KOONJ_MCP_MAX_SESSIONS` and `KOONJ_MCP_MAX_CALLS`. Each PAT can open up to
-16 streams and each stream can run up to eight requests concurrently.
-
-See [MCP integration](MCP-INTEGRATION.md) for client setup and smoke tests.

@@ -1,5 +1,5 @@
 # =============================================================================
-# Koonj Server — Production Dockerfile
+# Koonj Server — Dockerfile
 # =============================================================================
 # This Dockerfile expects the pre-built JAR to be in the build context:
 #   docker build -f Dockerfile.server -t koonj-server .

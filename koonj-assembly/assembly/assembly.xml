@@ -2,32 +2,52 @@
 <assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
-    <id>deployment</id>
+    <id>koonj-deployment</id>
     <formats>
         <format>zip</format>
     </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
     <baseDirectory>${deployment.name}</baseDirectory>
 
     <fileSets>
+        <!-- Docker Compose stack & environment template -->
         <fileSet>
-            <directory>../deploy/production/docker</directory>
+            <directory>../deploy/docker</directory>
             <outputDirectory>docker</outputDirectory>
             <includes>
                 <include>.env.example</include>
                 <include>docker-compose.yml</include>
                 <include>docker-compose.otel.yml</include>
-                <include>openobserve.compose.yml</include>
+                <include>docker-compose.openobserve.yml</include>
             </includes>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+            <useDefaultExcludes>true</useDefaultExcludes>
         </fileSet>
+
+        <!-- Samba gateway configuration & entrypoint -->
         <fileSet>
             <directory>../deploy/samba</directory>
             <outputDirectory>docker/samba</outputDirectory>
             <includes>
                 <include>smb.conf</include>
+            </includes>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+            <useDefaultExcludes>true</useDefaultExcludes>
+        </fileSet>
+        <fileSet>
+            <directory>../deploy/samba</directory>
+            <outputDirectory>docker/samba</outputDirectory>
+            <includes>
                 <include>start.sh</include>
             </includes>
+            <fileMode>0755</fileMode>
             <lineEnding>unix</lineEnding>
+            <useDefaultExcludes>true</useDefaultExcludes>
         </fileSet>
+
+        <!-- Keycloak realm, DB init, and login theme -->
         <fileSet>
             <directory>../deploy/keycloak</directory>
             <outputDirectory>docker/keycloak</outputDirectory>
@@ -36,185 +56,114 @@
                 <include>koonj-realm.json</include>
                 <include>themes/**</include>
             </includes>
+            <excludes>
+                <exclude>**/.DS_Store</exclude>
+            </excludes>
+            <fileMode>0644</fileMode>
+            <useDefaultExcludes>true</useDefaultExcludes>
         </fileSet>
+
+        <!-- OpenObserve dashboards -->
         <fileSet>
-            <directory>../deploy/keycloak</directory>
-            <outputDirectory>on-premise/keycloak</outputDirectory>
+            <directory>../deploy/openobserve-dashboards</directory>
+            <outputDirectory>docker/openobserve-dashboards</outputDirectory>
             <includes>
-                <include>koonj-realm.json</include>
-                <include>themes/**</include>
+                <include>*.dashboard.json</include>
             </includes>
-        </fileSet>
-        <fileSet>
-            <directory>../deploy/production/on-premise</directory>
-            <outputDirectory>on-premise</outputDirectory>
-            <includes>
-                <include>install.sh</include>
-                <include>bin/koonj-server.sh</include>
-            </includes>
-            <fileMode>0755</fileMode>
+            <fileMode>0644</fileMode>
             <lineEnding>unix</lineEnding>
+            <useDefaultExcludes>true</useDefaultExcludes>
         </fileSet>
+
+        <!-- Deployment & operational documentation -->
         <fileSet>
-            <directory>../deploy/production/on-premise</directory>
-            <outputDirectory>on-premise</outputDirectory>
+            <directory>../docs/guide</directory>
+            <outputDirectory>docs/guide</outputDirectory>
             <includes>
-                <include>install.cmd</include>
-                <include>bin/koonj-server.cmd</include>
+                <include>**/*.md</include>
             </includes>
-            <lineEnding>dos</lineEnding>
-        </fileSet>
-        <fileSet>
-            <directory>../deploy/production/on-premise</directory>
-            <outputDirectory>on-premise</outputDirectory>
-            <includes>
-                <include>config/application-production.yml</include>
-                <include>nginx/koonj.conf</include>
-                <include>systemd/koonj-server.service</include>
-                <include>systemd/koonj-notification-worker.service</include>
-            </includes>
+            <fileMode>0644</fileMode>
             <lineEnding>unix</lineEnding>
+            <useDefaultExcludes>true</useDefaultExcludes>
         </fileSet>
     </fileSets>
 
     <files>
+        <!-- Dockerfiles for container builds -->
         <file>
-            <source>../scripts/setup-host-mount.sh</source>
+            <source>../deploy/docker/koonj-server/Dockerfile</source>
+            <outputDirectory>docker/server</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/docker/koonj-notification-worker/Dockerfile</source>
+            <outputDirectory>docker/notification-worker</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/docker/koonj-ui/Dockerfile</source>
+            <outputDirectory>docker/ui</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+        <file>
+            <source>../deploy/docker/koonj-fuse/Dockerfile</source>
+            <outputDirectory>docker/fuse</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+
+        <!-- Nginx reverse-proxy template for koonj-ui -->
+        <file>
+            <source>../deploy/docker/nginx/default.conf.template</source>
+            <outputDirectory>docker/ui</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>unix</lineEnding>
+        </file>
+
+        <!-- Host & client helper scripts -->
+        <file>
+            <source>../deploy/scripts/fuse/setup-host-mount.sh</source>
             <outputDirectory>docker</outputDirectory>
             <fileMode>0755</fileMode>
             <lineEnding>unix</lineEnding>
         </file>
         <file>
-            <source>../scripts/run-koonj-fuse.sh</source>
-            <outputDirectory>on-premise/bin</outputDirectory>
+            <source>../deploy/scripts/fuse/run-koonj-fuse.sh</source>
+            <outputDirectory>scripts/fuse</outputDirectory>
             <fileMode>0755</fileMode>
             <lineEnding>unix</lineEnding>
         </file>
         <file>
-            <source>../scripts/run-koonj-fuse.ps1</source>
-            <outputDirectory>on-premise/bin</outputDirectory>
+            <source>../deploy/scripts/fuse/run-koonj-fuse.ps1</source>
+            <outputDirectory>scripts/fuse</outputDirectory>
+            <fileMode>0644</fileMode>
             <lineEnding>dos</lineEnding>
         </file>
         <file>
-            <source>../docs/FUSE-RECALL.md</source>
-            <outputDirectory>/</outputDirectory>
-        </file>
-        <file>
-            <source>../docs/FUSE-RECALL-WINDOWS.md</source>
-            <outputDirectory>/</outputDirectory>
-        </file>
-        <file>
-            <source>../docs/FUSE-RECALL-MACOS.md</source>
-            <outputDirectory>/</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/production/docker/Dockerfile.fuse</source>
-            <outputDirectory>docker/fuse</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/migrations/project-workspaces.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/notifications.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/transfer-dispatch.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/user-api-keys.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/storage-auth-phase-1.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/storage-auth-encryption.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/migrations/storage-auth-phase-3.sql</source>
-            <outputDirectory>deploy/migrations</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../scripts/mcp-bridge.mjs</source>
-            <outputDirectory>mcp</outputDirectory>
+            <source>../deploy/scripts/mcp/mcp-bridge.mjs</source>
+            <outputDirectory>docker/mcp</outputDirectory>
             <fileMode>0755</fileMode>
             <lineEnding>unix</lineEnding>
         </file>
-        <file>
-            <source>../deploy/nginx.conf</source>
-            <outputDirectory>deploy</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../docs/MCP-INTEGRATION.md</source>
-            <outputDirectory>/</outputDirectory>
-        </file>
-        <file>
-            <source>../docs/TRANSFER-WORKERS.md</source>
-            <outputDirectory>docs</outputDirectory>
-        </file>
-        <file>
-            <source>../docs/DEPLOYMENT-GUIDE.md</source>
-            <outputDirectory>/</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/production/docker/Dockerfile.server</source>
-            <outputDirectory>docker/server</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/production/docker/Dockerfile.notification-worker</source>
-            <outputDirectory>docker/notification-worker</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/production/docker/Dockerfile.ui</source>
-            <outputDirectory>docker/ui</outputDirectory>
-        </file>
-        <file>
-            <source>../deploy/production/docker/nginx/default.conf.template</source>
-            <outputDirectory>docker/ui</outputDirectory>
-            <lineEnding>unix</lineEnding>
-        </file>
-        <file>
-            <source>../deploy/production/on-premise/config/koonj.env.example</source>
-            <outputDirectory>on-premise/config</outputDirectory>
-            <destName>koonj.env</destName>
-            <lineEnding>unix</lineEnding>
-        </file>
+
+        <!-- Keycloak theme branding assets -->
         <file>
             <source>../koonj-ui/public/img/atm-banner-16x9-clean.jpg</source>
             <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
-        </file>
-        <file>
-            <source>../koonj-ui/public/img/atm-banner-16x9-clean.jpg</source>
-            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
+            <fileMode>0644</fileMode>
         </file>
         <file>
             <source>../koonj-ui/public/img/koonj-mark.svg</source>
             <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
-        </file>
-        <file>
-            <source>../koonj-ui/public/img/koonj-mark.svg</source>
-            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
+            <fileMode>0644</fileMode>
         </file>
         <file>
             <source>../koonj-ui/public/favicon.ico</source>
             <outputDirectory>docker/keycloak/themes/koonj/login/resources/img</outputDirectory>
-        </file>
-        <file>
-            <source>../koonj-ui/public/favicon.ico</source>
-            <outputDirectory>on-premise/keycloak/themes/koonj/login/resources/img</outputDirectory>
+            <fileMode>0644</fileMode>
         </file>
     </files>
 
@@ -230,27 +179,7 @@
             <outputFileNameMapping>koonj-notification-worker.jar</outputFileNameMapping>
         </dependencySet>
         <dependencySet>
-            <outputDirectory>on-premise/lib</outputDirectory>
-            <includes>
-                <include>uk.appsthatmatter:koonj-notification-worker</include>
-            </includes>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useTransitiveDependencies>false</useTransitiveDependencies>
-            <useStrictFiltering>true</useStrictFiltering>
-            <outputFileNameMapping>koonj-notification-worker.jar</outputFileNameMapping>
-        </dependencySet>
-        <dependencySet>
             <outputDirectory>docker/server</outputDirectory>
-            <includes>
-                <include>uk.appsthatmatter:koonj-server</include>
-            </includes>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useTransitiveDependencies>false</useTransitiveDependencies>
-            <useStrictFiltering>true</useStrictFiltering>
-            <outputFileNameMapping>koonj-server.jar</outputFileNameMapping>
-        </dependencySet>
-        <dependencySet>
-            <outputDirectory>on-premise/lib</outputDirectory>
             <includes>
                 <include>uk.appsthatmatter:koonj-server</include>
             </includes>
@@ -270,27 +199,7 @@
             <outputFileNameMapping>koonj-fuse.jar</outputFileNameMapping>
         </dependencySet>
         <dependencySet>
-            <outputDirectory>on-premise/lib</outputDirectory>
-            <includes>
-                <include>uk.appsthatmatter:koonj-fuse</include>
-            </includes>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useTransitiveDependencies>false</useTransitiveDependencies>
-            <useStrictFiltering>true</useStrictFiltering>
-            <outputFileNameMapping>koonj-fuse.jar</outputFileNameMapping>
-        </dependencySet>
-        <dependencySet>
             <outputDirectory>docker/ui</outputDirectory>
-            <includes>
-                <include>uk.appsthatmatter:koonj-ui:zip:web</include>
-            </includes>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useTransitiveDependencies>false</useTransitiveDependencies>
-            <useStrictFiltering>true</useStrictFiltering>
-            <unpack>true</unpack>
-        </dependencySet>
-        <dependencySet>
-            <outputDirectory>on-premise/web</outputDirectory>
             <includes>
                 <include>uk.appsthatmatter:koonj-ui:zip:web</include>
             </includes>

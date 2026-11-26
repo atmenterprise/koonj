@@ -1,5 +1,5 @@
 # =============================================================================
-# Koonj UI — Production Dockerfile
+# Koonj UI — Dockerfile
 # =============================================================================
 # Serves the pre-built static UI assets through Nginx with reverse proxy
 # to the API server.  The Nginx config template is rendered at startup
@@ -7,9 +7,9 @@
 # =============================================================================
 FROM nginx:stable-alpine
 
-LABEL maintainer="Koonj <support@appsthatmatter.uk>"
+LABEL maintainer="Koonj <atmenterprise23@gmail.com>"
 LABEL org.opencontainers.image.title="koonj-ui"
-LABEL org.opencontainers.image.description="Koonj Data Catalog UI"
+LABEL org.opencontainers.image.description="Koonj Catalog UI"
 
 # ── Runtime dependencies ────────────────────────────────────────────────────
 RUN apk add --no-cache curl

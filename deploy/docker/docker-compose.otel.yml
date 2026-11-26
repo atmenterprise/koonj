@@ -24,7 +24,7 @@ services:
 
   openobserve:
     extends:
-      file: openobserve.compose.yml
+      file: docker-compose.openobserve.yml
       service: openobserve
     networks:
       - koonj-internal
