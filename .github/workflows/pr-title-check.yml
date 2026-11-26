@@ -15,15 +15,22 @@ name: PR Title Check
 #
 # A BREAKING CHANGE footer or a '!' after the type (e.g. feat!: …) triggers a
 # MAJOR version bump regardless of type.
+#
+# Why `pull_request` and not `pull_request_target`:
+#   This workflow only reads the PR title — it never checks out or executes code
+#   from the PR branch — so `pull_request` is correct and safe for public forks.
+#   `pull_request_target` causes "Resource not accessible by integration" errors
+#   on repos/organisations that restrict elevated token access for that event.
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - opened
       - edited
       - synchronize
       - reopened
 
+# Minimal permissions: only read PR metadata to validate the title.
 permissions:
   pull-requests: read
 
@@ -52,12 +59,12 @@ jobs:
             revert
           # Scopes are optional but encouraged, e.g. feat(server): …
           requireScope: false
-          # Disallow commit bodies in the subject line
+          # Subject must start with a lowercase letter
           subjectPattern: ^(?![A-Z]).+$
           subjectPatternError: >
             The subject "{subject}" must start with a lowercase letter.
             Example: "feat(server): add retry on 5xx responses"
           # Allow wip: titles on draft PRs only
           wip: true
-          # Validate all commits in a single-commit PR as well
+          # Do not force single-commit PRs to match — the PR title is enough
           validateSingleCommit: false

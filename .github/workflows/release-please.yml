@@ -6,10 +6,25 @@ name: Release Please
 #   - generates / updates CHANGELOG.md
 #
 # When a maintainer merges the Release PR, release-please creates the git tag
-# (e.g. v0.2.0), which then triggers the existing CD workflow (cd.yml) to
-# build the deployment ZIP, push Docker images, and create the GitHub Release.
+# (e.g. v0.2.0), which then triggers the CD workflow (cd.yml) to build the
+# deployment ZIP, push Docker images, and create the GitHub Release.
 #
-# No manual `git tag` is ever needed.
+# ── Token / permission requirement ───────────────────────────────────────────
+# release-please needs to open pull requests.  GitHub blocks GITHUB_TOKEN from
+# creating PRs by default.  You have two options (pick one):
+#
+#  OPTION A — Recommended for simplicity (no extra secret needed):
+#    Repository → Settings → Actions → General
+#    → "Allow GitHub Actions to create and approve pull requests" ✓ (enable)
+#    Then RELEASE_PLEASE_TOKEN is not required; GITHUB_TOKEN is used below.
+#
+#  OPTION B — Recommended for organisations that keep the above setting OFF:
+#    1. Create a classic PAT (or fine-grained token) with scopes:
+#         Contents: Read & Write
+#         Pull Requests: Read & Write
+#    2. Store it as a repository secret named RELEASE_PLEASE_TOKEN.
+#    The workflow automatically prefers RELEASE_PLEASE_TOKEN over GITHUB_TOKEN.
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
@@ -33,7 +48,10 @@ jobs:
         id: release
         uses: googleapis/release-please-action@v4
         with:
-          # Uses release-please-config.json + .release-please-manifest.json
-          # at the root of the repository.
+          # Prefer a dedicated PAT (Option B) so the resulting Release PR
+          # triggers other workflows (GITHUB_TOKEN-created PRs do not).
+          # Falls back to GITHUB_TOKEN when RELEASE_PLEASE_TOKEN is unset,
+          # which works once Option A is enabled in repository settings.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
