@@ -56,7 +56,7 @@ public class ProjectWebConfiguration implements WebMvcConfigurer {
                     if (!agentRoute(request)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent access is limited to file recall");
                     project = requested == null ? ProjectScope.LEGACY : requested;
                     if (!agentProjects.contains(project)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent has no access to this project");
-                    if (!repository.existsById(project)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project was not found");
+                    if (!repository.existsByIdAndDeletedAtIsNull(project)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project was not found");
                 } else {
                     if (!path.equals("/api/v1/permissions/me") && auth.getAuthorities().stream().noneMatch(
                             authority -> KoonjRoles.ALL.stream().anyMatch(role -> ("ROLE_" + role).equals(authority.getAuthority()))))

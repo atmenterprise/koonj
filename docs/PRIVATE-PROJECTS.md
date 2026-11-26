@@ -31,7 +31,7 @@ SELECT a.subject FROM project_account a WHERE NOT EXISTS (
 
 Set **Koonj Administrators** as the Keycloak registration default group and confirm it grants `KOONJ_ADMIN`. Configure Keycloak SMTP and email verification for new email accounts.
 
-After both the private projects and notifications migrations, apply [project-invitation-channels.sql](../deploy/migrations/project-invitation-channels.sql) before starting the upgraded server and worker. Set `KOONJ_PUBLIC_UI_URL` to the browser-accessible HTTPS UI origin on the worker.
+After both the private projects and notifications migrations, apply [project-invitation-channels.sql](../deploy/migrations/project-invitation-channels.sql) and then [project-lifecycle.sql](../deploy/migrations/project-lifecycle.sql) before starting the upgraded server and worker. Set `KOONJ_PUBLIC_UI_URL` to the browser-accessible HTTPS UI origin on the worker.
 
 In **Projects → Email invitations**, select an enabled email channel or use **Configure email channel** to create one and select it for this project. The worker uses the channel’s SMTP relay, credentials, TLS settings and sender. Fields left blank follow the email channel’s deployment-default rules. Existing pending deliveries without a channel require a resend after selection. Previously delivered links retain their expiry.
 

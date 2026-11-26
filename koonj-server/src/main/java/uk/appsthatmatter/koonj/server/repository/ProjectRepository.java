@@ -13,5 +13,6 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
     @Query("select p from Project p where p.id = :id")
     Optional<Project> lock(UUID id);
 
+    boolean existsByIdAndDeletedAtIsNull(UUID id);
     boolean existsByGeneratedName(String name);
 }

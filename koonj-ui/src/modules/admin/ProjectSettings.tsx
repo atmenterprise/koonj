@@ -1,15 +1,16 @@
 import { lazy, Suspense, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { projectService, type Project } from '../../api/services/projectService'
+import { Dialog } from '../../shared/ui/feedback'
 import { Badge, Button, Icon } from '../../shared/ui/primitives'
 
 const ChannelEditor = lazy(() => import('./NotificationSettings').then(module => ({ default: module.ChannelEditor })))
 
-export function ProjectSettings({ project, refreshMemberships, canConfigureChannels }: { project: Project; canConfigureChannels?: boolean; refreshMemberships: () => void }) {
+export function ProjectSettings({ project, refreshMemberships, canConfigureChannels, projectCount }: { project: Project; projectCount: number; canConfigureChannels?: boolean; refreshMemberships: () => void }) {
   const cache = useQueryClient()
   const [name, setName] = useState('')
   const [editing, setEditing] = useState(false)
-  const [creating, setCreating] = useState(false)
+  const [action, setAction] = useState<'create' | 'rename' | 'delete'>()
   const [email, setEmail] = useState('')
   const id = project.id
   const admin = project.role === 'ADMIN'
@@ -30,21 +31,54 @@ export function ProjectSettings({ project, refreshMemberships, canConfigureChann
       await Promise.all(['members', 'invitations'].map(key => cache.invalidateQueries({ queryKey: [key, id] })))
     },
   })
-  const create = useMutation({ mutationFn: projectService.create, onSuccess: () => { setName(''); refreshMemberships() } })
-  const error = settings.error ?? selectChannel.error ?? members.error ?? invites.error ?? change.error ?? create.error
+  const updateProject = useMutation({
+    mutationFn: async (operation: 'create' | 'rename' | 'delete') => {
+      if (operation === 'delete') await projectService.delete(id)
+      else if (operation === 'rename') await projectService.rename(id, name.trim())
+      else return projectService.create(name.trim())
+    },
+    onSuccess: () => { setAction(undefined); refreshMemberships() },
+  })
+  function openDialog(operation: 'create' | 'rename' | 'delete') {
+    updateProject.reset()
+    setName(operation === 'rename' ? project.name : '')
+    setAction(operation)
+  }
+  function closeDialog() {
+    if (!updateProject.isPending) setAction(undefined)
+  }
+  const dialogTitle = action === 'delete' ? 'Delete project' : action === 'rename' ? 'Rename project' : 'Create project'
+  const error = settings.error ?? selectChannel.error ?? members.error ?? invites.error ?? change.error
   const canInvite = !!selected && !selectChannel.isPending && !change.isPending
   return <>
     <header className="page-heading"><div><h1>Projects</h1><p>{project.name}</p></div>
-      <Button icon="projects" variant="primary" aria-expanded={creating} onClick={() => setCreating(!creating)}>Create project</Button>
+      <div className="row-actions">
+        {admin && <>
+          <Button onClick={() => openDialog('rename')}>Rename project</Button>
+          <Button variant="danger" disabled={projectCount <= 1}
+            title={projectCount <= 1 ? 'You must have at least one project' : undefined}
+            onClick={() => openDialog('delete')}>Delete project</Button>
+        </>}
+        <Button icon="projects" variant="primary" onClick={() => openDialog('create')}>Create project</Button>
+      </div>
     </header>
+    {action && <Dialog title={dialogTitle} onClose={closeDialog}>
+      <form onSubmit={event => { event.preventDefault(); updateProject.mutate(action) }}>
+        <div className="dialog-body">
+          {action === 'delete' ? <p>Delete <strong>{project.name}</strong>? All members will lose access and pending invitations will be revoked.</p>
+            : <label>Project name<input autoFocus required maxLength={100} value={name} disabled={updateProject.isPending}
+              onChange={event => setName(event.target.value)} /></label>}
+          {updateProject.error && <p className="ops-error" role="alert">{updateProject.error.message}</p>}
+        </div>
+        <div className="dialog-footer">
+          <Button onClick={closeDialog} disabled={updateProject.isPending}>Cancel</Button>
+          <Button type="submit" variant={action === 'delete' ? 'danger' : 'primary'}
+            disabled={updateProject.isPending || (action !== 'delete' && !name.trim())}>{dialogTitle}</Button>
+        </div>
+      </form>
+    </Dialog>}
     <div className="admin-stack">
-      {creating && <section className="panel admin-group">
-        <form className="project-form" onSubmit={e => { e.preventDefault(); create.mutate(name.trim()) }}>
-          <label>Project name<input required maxLength={100} value={name} onChange={e => setName(e.target.value)} /></label>
-          <Button type="submit" disabled={!name.trim() || create.isPending}>Create</Button>
-        </form>
-        {create.data && <p role="status">Created {create.data.name}. Select it in the project switcher.</p>}
-      </section>}
+      {updateProject.data && <p role="status">Created {updateProject.data.name}. Select it in the project switcher.</p>}
       <div className="projects-layout">
       <section className="panel admin-group project-members"><div className="panel-heading"><h2>Members</h2>
         {members.data && <Badge>{members.data.length}</Badge>}</div>

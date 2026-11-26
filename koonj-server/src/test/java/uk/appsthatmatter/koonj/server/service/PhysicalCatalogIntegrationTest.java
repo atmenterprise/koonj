@@ -176,7 +176,7 @@ class PhysicalCatalogIntegrationTest {
         assertThat(personal).isNotEqualTo(ProjectScope.LEGACY.toString());
         firstProject(pending);
         request(get("/api/v1/catalog/locations"), pending, null).andExpect(status().isForbidden());
-        request(get("/api/v1/projects/users"), operator, null).andExpect(status().isNotFound());
+        request(get("/api/v1/projects/users"), operator, null).andExpect(status().isMethodNotAllowed());
 
         var created = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"Research\"}"), admin, null).andExpect(status().isCreated()).andReturn();
@@ -275,6 +275,45 @@ class PhysicalCatalogIntegrationTest {
         request(get("/api/v1/catalog/locations"), operator, shared).andExpect(status().isForbidden());
         request(delete("/api/v1/projects/{id}/members", personal).param("subject", "oidc:project-operator"), operator, null)
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void deleteAndRenamePreserveMembershipIsolationAndSwitchTheDefault() throws Exception {
+        String owner = token("lifecycle-owner", "KOONJ_ADMIN");
+        String outsider = token("lifecycle-outsider", "KOONJ_ADMIN");
+        String personal = firstProject(owner);
+        String other = firstProject(outsider);
+        String route = "/api/v1/projects/" + personal;
+        request(delete(route), owner, null).andExpect(status().isConflict());
+        request(put(route).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Archive\"}"), outsider, null)
+                .andExpect(status().isForbidden());
+        request(delete(route), outsider, null).andExpect(status().isForbidden());
+        request(put(route).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Archive\"}"), owner, null)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Archive"))
+                .andExpect(jsonPath("$.id").value(personal));
+        jdbc.update("insert into project_membership(id,project_id,account_subject,role) values(?,?,?,?)",
+                UUID.randomUUID(), UUID.fromString(other), "oidc:" + owner, "MEMBER");
+        request(delete(route), owner, null).andExpect(status().isNoContent());
+        request(get("/api/v1/projects"), owner, null).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].defaultProjectId").value(other)).andExpect(jsonPath("$[0].role").value("MEMBER"));
+        request(get(route + "/members"), owner, null).andExpect(status().isForbidden());
+        request(delete("/api/v1/projects/" + other), outsider, null).andExpect(status().isConflict());
+    }
+
+    @Test
+    void competingDeletesLeaveOneProject() throws Exception {
+        String owner = token("concurrent-delete-owner", "KOONJ_ADMIN");
+        String personal = firstProject(owner);
+        var created = request(post("/api/v1/projects").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Other\"}"), owner, null).andExpect(status().isCreated()).andReturn();
+        String other = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var requests = List.of(personal, other).stream().<java.util.concurrent.Callable<Integer>>map(id ->
+                    () -> request(delete("/api/v1/projects/" + id), owner, null).andReturn().getResponse().getStatus()).toList();
+            var responses = pool.invokeAll(requests);
+            assertThat(List.of(responses.get(0).get(), responses.get(1).get())).containsExactlyInAnyOrder(204, 409);
+        }
+        firstProject(owner);
     }
 
     @Test

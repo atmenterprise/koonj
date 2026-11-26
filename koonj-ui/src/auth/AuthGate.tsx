@@ -48,7 +48,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             </>}
       </div>
       {auth.status === 'anonymous' && <>
-        <div className="auth-alternative">-or-</div>
+        <hr className="auth-alternative" />
         <div className="row-actions auth-actions auth-actions--social">
           <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('google'))}>Continue with Google</Button>
           <Button disabled={redirecting} onClick={() => void redirect(() => auth.loginWithProvider('github'))}>Continue with GitHub</Button>

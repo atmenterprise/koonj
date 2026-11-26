@@ -19,6 +19,8 @@ export const projectService = {
   session: async (signal?: AbortSignal) => (await apiClient.post<Project[]>('/projects/session', undefined, { signal })).data,
   list: async (signal?: AbortSignal) => (await apiClient.get<Project[]>('/projects', { signal })).data,
   create: async (name: string) => (await apiClient.post<Project>('/projects', { name })).data,
+  rename: async (id: string, name: string) => (await apiClient.put<Project>(`/projects/${id}`, { name })).data,
+  delete: async (id: string) => { await apiClient.delete(`/projects/${id}`) },
   members: async (id: string, signal?: AbortSignal) =>
     (await apiClient.get<ProjectAccount[]>(`/projects/${id}/members`, { signal })).data,
   emailSettings: async (id: string, signal?: AbortSignal) =>

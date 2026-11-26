@@ -39,6 +39,8 @@ const paths = {
   sidebar: 'M3 4h18v16H3z M9 4v16',
   maximize: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
   minimize: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',
+  billing: 'M3 5h18v14H3z M3 10h18 M7 15h4',
+  support: 'M3 12a9 9 0 1 1 18 0v5h-4v-6h4 M3 11h4v6H3z M17 17v2a2 2 0 0 1-2 2h-3',
   layers: 'm12 3 9 5-9 5-9-5z M3 12l9 5 9-5M3 16l9 5 9-5',
 } as const
 export type IconName = keyof typeof paths

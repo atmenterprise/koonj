@@ -5,6 +5,13 @@ import org.springframework.data.jpa.repository.*;
 import java.util.*;
 
 public interface ProjectInvitationRepository extends JpaRepository<ProjectInvitation, UUID> {
+    @Modifying
+    @Query("update ProjectInvitation i set i.projectName = :name where i.projectId = :projectId")
+    void renameProject(UUID projectId, String name);
+    @Modifying
+    @Query("delete from ProjectInvitation i where i.projectId = :projectId")
+    void revokeProject(UUID projectId);
+
     List<ProjectInvitation> findByProjectIdOrderByEmail(UUID id);
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<ProjectInvitation> findByProjectIdAndEmail(UUID id, String email);

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react'
 import DashboardPage from '../modules/home/DashboardPage'
 import StorageBrowserPage from '../modules/catalog/StorageBrowserPage'
 import { Topbar, themes, type Theme } from './Topbar'
@@ -27,7 +27,10 @@ const pages = [
   { path: '/projects', title: 'Projects', icon: 'projects', access: [] },
   { path: '/integration', title: 'Integration', icon: 'link', access: [] },
   { path: '/admin', title: 'Administration', shortTitle: 'Admin', icon: 'layers', access: ['OBSERVABILITY_VIEW', 'PERMISSIONS_MANAGE'] },
+  { path: '/billing', title: 'Billing', icon: 'billing', access: [] },
+  { path: '/support', title: 'Support', icon: 'support', access: [] },
 ] as const
+const supportEmail = 'atmenterprise23@gmail.com'
 const browserLocation = () => window.location.pathname + window.location.search
 function currentLocation() {
   const location = browserLocation()
@@ -108,25 +111,29 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
         navigate('/Home')
       }}>
         <span className="brand-mark" aria-hidden="true" />
-        <span className="brand-text"><strong>Koonj</strong><small>APPS THAT MATTER</small></span>
+        <span className="brand-text"><strong>Koonj</strong><small>Storage Explorer</small></span>
       </a>
       <div className="workspace-nav"><p className="nav-label">Workspace</p><nav id="main-navigation" aria-label="Main navigation">
-        {pages.filter(canView).map(item => <a key={item.path} className="nav-link" href={item.path} aria-label={item.title}
-          aria-current={page === item ? 'page' : undefined} title={collapsed ? item.title : undefined} onClick={event => {
-            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-            event.preventDefault()
-            navigate(item.path)
-          }}>
-          <Icon name={item.icon} size={19} /><span className="nav-text">
-            {'shortTitle' in item ? <><span className="nav-full-title">{item.title}</span><span className="nav-short-title">{item.shortTitle}</span></> : item.title}
-          </span>{page === item && <span className="nav-indicator" />}
-        </a>)}
+        {pages.filter(canView).map(item => <Fragment key={item.path}>
+          <a className="nav-link" href={item.path} aria-label={item.title}
+            aria-current={page === item ? 'page' : undefined} title={collapsed ? item.title : undefined} onClick={event => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+              event.preventDefault()
+              navigate(item.path)
+            }}>
+            <Icon name={item.icon} size={19} /><span className="nav-text">
+              {'shortTitle' in item ? <><span className="nav-full-title">{item.title}</span><span className="nav-short-title">{item.shortTitle}</span></> : item.title}
+            </span>{page === item && <span className="nav-indicator" />}
+          </a>
+          {item.path === '/integration' && <hr className="sidebar-divider" />}
+        </Fragment>)}
       </nav></div>
       <Button className="icon-button sidebar-toggle" icon="sidebar" variant="quiet" aria-expanded={!collapsed}
         aria-controls="main-navigation" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => {
           localStorage.setItem('koonj-sidebar', collapsed ? 'expanded' : 'collapsed')
           setCollapsed(!collapsed)
         }} />
+      <footer className="sidebar-footer">© 2026 Apps that Matter</footer>
     </aside>
     <div className="app-body">
       <Topbar title={page.title} pages={pages.filter(canView)} navigate={navigate} theme={theme}
@@ -140,7 +147,7 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
           : page.path === '/integration' ? <Suspense fallback={<LoadingRows label="Loading integrations" />}>
             <IntegrationPage section={params.get('section')} navigate={navigate} projectId={project.id} />
           </Suspense>
-          : page.path === '/projects' ? <ProjectSettings canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />
+          : page.path === '/projects' ? <ProjectSettings projectCount={projects.length} canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />
           : page.path === '/admin' ? <Suspense fallback={<LoadingRows label="Loading administration" />}>
             <AdminPage section={params.get('section')} navigate={navigate} />
           </Suspense>
@@ -150,10 +157,19 @@ export default function Console({ project, projects, onProjectSwitch, refreshMem
           : page.path === '/storage' ? <Suspense fallback={<LoadingRows label="Loading storage status" />}>
             <StorageStatusPage />
           </Suspense>
-          : user?.roles.length ? <DashboardPage navigate={navigate} />
-          : <ProjectSettings canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />}
+          : page.path === '/billing' ? <>
+            <div className="page-heading"><h1>Billing</h1></div>
+            <section className="panel admin-group">
+              <div className="panel-heading"><h2>Free</h2></div>
+            </section>
+          </> : page.path === '/support' ? <>
+            <div className="page-heading"><h1>Support</h1></div>
+            <section className="panel admin-group">
+              <a className="support-email" href={`mailto:${supportEmail}`}>{supportEmail}</a>
+            </section>
+          </> : user?.roles.length ? <DashboardPage navigate={navigate} />
+          : <ProjectSettings projectCount={projects.length} canConfigureChannels={hasRole('KOONJ_ADMIN')} project={project} refreshMemberships={refreshMemberships} />}
       </main>
-      <footer className="app-footer"><span>© 2026 Apps that Matter</span><span>Version 1.0</span></footer>
     </div>
     <NotificationPopup navigate={canViewActivity ? navigate : undefined} />
   </div>

@@ -16,6 +16,7 @@ import uk.appsthatmatter.koonj.server.repository.ProjectAccountRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectMembershipRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectRepository;
 import uk.appsthatmatter.koonj.server.security.ProjectScope;
+import uk.appsthatmatter.koonj.notification.ProjectInvitationRepository;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -26,7 +27,11 @@ public class ProjectService implements ApplicationRunner {
     private final ProjectRepository projects;
     private final ProjectAccountRepository accounts;
     private final ProjectMembershipRepository memberships;
-    public ProjectService(ProjectRepository projects, ProjectAccountRepository accounts, ProjectMembershipRepository memberships) {
+    private final ProjectInvitationRepository invitations;
+
+    public ProjectService(ProjectRepository projects, ProjectAccountRepository accounts, ProjectMembershipRepository memberships,
+                          ProjectInvitationRepository invitations) {
+        this.invitations = invitations;
         this.projects = projects;
         this.accounts = accounts;
         this.memberships = memberships;
@@ -45,7 +50,7 @@ public class ProjectService implements ApplicationRunner {
     public record ProjectView(UUID id, String name, Role role, UUID defaultProjectId) {
         static ProjectView from(ProjectMembership member) {
             var project = member.getProject();
-            return new ProjectView(project.getId(), project.getName(), member.getRole(), member.getAccount().getDefaultProject().getId());
+            return new ProjectView(project.getId(), project.getName(), member.getRole(), member.getAccount().effectiveDefaultId());
         }
     }
     public record AccountView(String subject, String displayName, String email, Role role, boolean personalOwner) {}
@@ -59,7 +64,7 @@ public class ProjectService implements ApplicationRunner {
 
     ProjectAccount provision(Authentication auth) {
         var account = register(auth);
-        if (account.getDefaultProject() == null) {
+        if (account.effectiveDefaultId() == null) {
             // Serialize generated-name selection across instances, including migrated accounts.
             projects.lock(ProjectScope.LEGACY).orElseThrow();
             var random = java.util.concurrent.ThreadLocalRandom.current();
@@ -77,7 +82,7 @@ public class ProjectService implements ApplicationRunner {
 
     @Transactional
     public UUID authorize(Authentication auth, UUID requested) {
-        if (requested == null) return provision(auth).getDefaultProject().getId();
+        if (requested == null) return provision(auth).effectiveDefaultId();
         member(auth, requested);
         return requested;
     }
@@ -104,6 +109,41 @@ public class ProjectService implements ApplicationRunner {
         return ProjectView.from(memberships.save(new ProjectMembership(project, account, Role.ADMIN)));
     }
 
+    @Transactional
+    public ProjectView rename(Authentication auth, UUID id, String name) {
+        var membership = admin(auth, id);
+        var project = membership.getProject();
+        project.rename(name);
+        invitations.renameProject(id, project.getName());
+        return ProjectView.from(membership);
+    }
+
+    @Transactional
+    public void delete(Authentication auth, UUID id) {
+        projects.lock(ProjectScope.LEGACY).orElseThrow();
+        var project = admin(auth, id).getProject();
+        var members = memberships.findByProjectIdOrderByAccountDisplayNameAscAccountSubjectAsc(id);
+        for (var member : members) {
+            prepareRemoval(member);
+            memberships.delete(member);
+        }
+        invitations.revokeProject(id);
+        project.markDeleted();
+    }
+
+    private void prepareRemoval(ProjectMembership member) {
+        UUID id = member.getProject().getId();
+        var account = accounts.lock(member.getAccount().getSubject()).orElseThrow();
+        var next = memberships.findByAccountSubjectOrderByProjectNameAscProjectIdAsc(account.getSubject()).stream()
+                .map(m -> m.getProject().getId()).filter(other -> !other.equals(id)).findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Each member must have another project before losing access to this one"));
+        if (id.equals(account.effectiveDefaultId())) {
+            account.setDefaultProject(null);
+            account.setFallbackProjectId(next);
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<AccountView> members(Authentication auth, UUID id) {
         member(auth, id);
@@ -116,12 +156,14 @@ public class ProjectService implements ApplicationRunner {
 
     @Transactional
     public void remove(Authentication auth, UUID id, String subject) {
+        projects.lock(ProjectScope.LEGACY).orElseThrow();
         admin(auth, id);
         memberships.findByProjectIdAndAccountSubject(id, subject).ifPresent(m -> {
             var personal = m.getAccount().getDefaultProject();
             if ((personal != null && personal.getId().equals(id)) ||
                     (m.getRole() == Role.ADMIN && memberships.countByProjectIdAndRole(id, Role.ADMIN) == 1))
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "This project requires its administrator");
+            prepareRemoval(m);
             memberships.delete(m);
         });
     }

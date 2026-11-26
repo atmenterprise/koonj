@@ -3,6 +3,7 @@ package uk.appsthatmatter.koonj.server.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import java.util.UUID;
+import java.time.Instant;
 
 @Entity
 @Getter
@@ -13,6 +14,15 @@ public class Project {
     @Column(unique = true, length = 100) private String generatedName;
 
     @Setter private UUID invitationChannelId;
+    private Instant deletedAt;
+
+    public void rename(String name) {
+        this.name = name.strip();
+    }
+
+    public void markDeleted() {
+        deletedAt = Instant.now();
+    }
 
     public Project(UUID id, String name) {
         this.id = id;

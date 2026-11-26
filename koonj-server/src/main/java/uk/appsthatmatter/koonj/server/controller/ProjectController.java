@@ -38,6 +38,15 @@ public class ProjectController {
         return projects.create(auth, request.name());
     }
 
+    @PutMapping("/{id}")
+    public ProjectView rename(Authentication auth, @PathVariable UUID id, @Valid @RequestBody ProjectRequest request) {
+        return projects.rename(auth, id, request.name());
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(Authentication auth, @PathVariable UUID id) { projects.delete(auth, id); }
+
     @GetMapping("/{id}/members")
     public List<AccountView> members(Authentication auth, @PathVariable UUID id) { return projects.members(auth, id); }
 

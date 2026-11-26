@@ -10,6 +10,7 @@ import uk.appsthatmatter.koonj.notification.*;
 import uk.appsthatmatter.koonj.server.entity.ProjectMembership;
 import uk.appsthatmatter.koonj.server.repository.ProjectMembershipRepository;
 import uk.appsthatmatter.koonj.server.repository.ProjectRepository;
+import uk.appsthatmatter.koonj.server.security.ProjectScope;
 import java.time.Instant;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
@@ -82,6 +83,7 @@ public class ProjectInvitations {
     public UUID accept(Authentication auth, String token) {
         if (!(auth instanceof JwtAuthenticationToken jwt) || !Boolean.TRUE.equals(jwt.getToken().getClaims().get("email_verified")))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "A verified email is required");
+        projectRows.lock(ProjectScope.LEGACY).orElseThrow();
         var account = projects.provision(auth);
         String digest = ProjectInvitation.digest(token);
         // Use the same project-then-invitation lock order as revoke and resend.
