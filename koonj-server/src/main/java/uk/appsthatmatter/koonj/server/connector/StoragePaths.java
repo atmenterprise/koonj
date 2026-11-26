@@ -23,9 +23,21 @@ public final class StoragePaths {
     }
 
     public static String selection(String input) {
-        String path = input.replaceFirst("^/+", "").replaceFirst("/+$", "");
+        String path = trimSlashes(input);
         requireSafe(path);
         return path;
+    }
+
+    public static String trimSlashes(String path) {
+        int start = 0;
+        while (start < path.length() && path.charAt(start) == '/') start++;
+        return trimTrailingSlashes(path.substring(start));
+    }
+
+    public static String trimTrailingSlashes(String path) {
+        int end = path.length();
+        while (end > 0 && path.charAt(end - 1) == '/') end--;
+        return path.substring(0, end);
     }
 
     public static void requireSafe(String path) {

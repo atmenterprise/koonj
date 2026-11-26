@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import uk.appsthatmatter.koonj.server.connector.LocalStorageConnector;
 import uk.appsthatmatter.koonj.server.connector.StorageConnectorFactory;
+import uk.appsthatmatter.koonj.server.connector.StoragePaths;
 import uk.appsthatmatter.koonj.server.entity.StorageConnection;
 import uk.appsthatmatter.koonj.server.entity.TransferJob;
 import uk.appsthatmatter.koonj.server.entity.TransferReservation;
@@ -65,7 +66,7 @@ final class TransferReservations {
             if (pair.length != 2 || !pair[0].strip().startsWith("/") || !pair[1].strip().matches("[a-z0-9-]{1,40}")) {
                 throw new IllegalArgumentException("Mount pools must use /path=pool pairs separated by semicolons");
             }
-            pools.put(pair[0].strip().replaceFirst("/+$", ""), pair[1].strip());
+            pools.put(StoragePaths.trimTrailingSlashes(pair[0].strip()), pair[1].strip());
         }
         this.mountPools = Map.copyOf(pools);
     }
@@ -223,7 +224,7 @@ final class TransferReservations {
         }
         int port = uri.getPort();
         if (port == -1) port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
-        return host + ":" + port + uri.getPath().replaceFirst("/+$", "");
+        return host + ":" + port + StoragePaths.trimTrailingSlashes(uri.getPath());
     }
 
     static String digest(String value) {
@@ -241,7 +242,7 @@ final class TransferReservations {
 
     private record Location(String namespace, String root, boolean caseInsensitive, boolean mounted) {
         Scope scope(String path, boolean subtree) {
-            String full = (root + "/" + path).replaceAll("^/+|/+$", "");
+            String full = StoragePaths.trimSlashes(root + "/" + path);
             if (caseInsensitive) full = java.text.Normalizer.normalize(full, java.text.Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
             return new Scope(namespace, full, subtree);
         }

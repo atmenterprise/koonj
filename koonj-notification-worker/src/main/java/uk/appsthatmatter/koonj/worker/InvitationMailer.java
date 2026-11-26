@@ -28,7 +28,9 @@ class InvitationMailer {
         this.invitations = invitations;
         this.transport = transport;
         this.channels = channels;
-        this.ui = ui.replaceAll("/+$", "");
+        int end = ui.length();
+        while (end > 0 && ui.charAt(end - 1) == '/') end--;
+        this.ui = ui.substring(0, end);
         this.maxAttempts = maxAttempts;
         this.delay = delay;
     }
