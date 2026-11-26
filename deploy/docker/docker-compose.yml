@@ -94,7 +94,7 @@ services:
   koonj-server:
     build:
       context: ./server
-      dockerfile: koonj-server/Dockerfile
+      dockerfile: Dockerfile
     image: &koonj-server-image koonj-server:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -217,7 +217,7 @@ services:
   koonj-notification-worker:
     build:
       context: ./notification-worker
-      dockerfile: koonj-notification-worker/Dockerfile
+      dockerfile: Dockerfile
     image: koonj-notification-worker:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -264,7 +264,7 @@ services:
   koonj-ui:
     build:
       context: ./ui
-      dockerfile: koonj-ui/Dockerfile
+      dockerfile: Dockerfile
     image: koonj-ui:${KOONJ_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -294,7 +294,7 @@ services:
     restart: unless-stopped
     build:
       context: ./fuse
-      dockerfile: koonj-fuse/Dockerfile
+      dockerfile: Dockerfile
     image: koonj-fuse:${KOONJ_VERSION:-latest}
     depends_on:
       koonj-server:
