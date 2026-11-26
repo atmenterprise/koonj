@@ -27,9 +27,11 @@ name: Release Please
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
-  push:
-    branches:
-      - main
+  # Disabled — uncomment the block below and remove workflow_dispatch to re-enable.
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch: {}
 
 permissions:
   contents: write
